@@ -135,6 +135,11 @@ def parser() -> argparse.ArgumentParser:
     mark = sub.add_parser("mark-stage", help="record a stage checkpoint as done")
     mark.add_argument("--run", required=True, help="run directory")
     mark.add_argument("--stage", required=True)
+    roll = sub.add_parser(
+        "rollback", help="re-open a stage AND all later stages (cascade — "
+                         "later artifacts may embed the rolled-back outputs)")
+    roll.add_argument("--run", required=True)
+    roll.add_argument("--stage", required=True)
     status = sub.add_parser(
         "status", help="print resume point + staleness (exit 5 when stale)")
     status.add_argument("--run", required=True)
@@ -199,6 +204,11 @@ def _lifecycle_cmd(args: argparse.Namespace) -> int:
             lifecycle.Pointers(_state_dir_for(run_dir)).set_latest_completed(state.run_id)
             print(f"latest_completed -> {state.run_id}")
         print(f"stage {args.stage}: done; next: {state.next_stage() or '(complete)'}")
+        return 0
+    if args.command == "rollback":
+        reopened = state.rollback(args.stage)
+        state.save(run_dir)
+        print(f"re-opened: {', '.join(reopened)}; next: {state.next_stage()}")
         return 0
     if args.command == "status":
         stale = state.staleness()

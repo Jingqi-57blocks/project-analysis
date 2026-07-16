@@ -111,6 +111,18 @@ class RunState:
                 return stage
         return ""  # run complete
 
+    def rollback(self, stage: str) -> list[str]:
+        """Re-open a stage AND every later stage (their artifacts may embed the
+        rolled-back stage's outputs — the stale-count lesson: regenerating
+        stage 1 without cascading left a superseded figure in a stage-2
+        artifact). Returns the stages re-opened."""
+        if stage not in self.stages:
+            raise ValueError(f"unknown stage {stage!r} (stages: {STAGES})")
+        reopened = STAGES[STAGES.index(stage):]
+        for name in reopened:
+            self.stages[name] = "pending"
+        return reopened
+
     def staleness(self) -> list[str]:
         """Names exactly which repos moved and which are dirty (empty = fresh)."""
         problems: list[str] = []

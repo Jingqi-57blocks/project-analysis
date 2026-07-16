@@ -61,6 +61,24 @@ def test_staleness_names_moved_repos(tmp_path, target, synthetic_repo):
     assert any(target.repo_id in p for p in problems)
 
 
+def test_rollback_cascades_to_later_stages(tmp_path, target, capsys):
+    spec = TargetSpec(repos=[target])
+    state = RunState.create("rid-r", "proj-1", spec, when=WHEN)
+    for stage in lifecycle.STAGES:
+        state.mark(stage)
+    reopened = state.rollback("findings")
+    assert reopened == ["findings", "map", "overview"]
+    assert state.next_stage() == "findings"
+    assert state.stages["discovery"] == "done" and state.stages["signals"] == "done"
+    with pytest.raises(ValueError):
+        state.rollback("nonsense")
+    # CLI surface round-trips through run-state.json.
+    state.save(tmp_path)
+    assert main(["rollback", "--run", str(tmp_path), "--stage", "map"]) == 0
+    assert "re-opened: map, overview" in capsys.readouterr().out
+    assert RunState.load(tmp_path).next_stage() == "map"
+
+
 def test_pointers_accept_rules(tmp_path, target):
     spec = TargetSpec(repos=[target])
     pointers = Pointers(tmp_path / "state" / "proj-1")
