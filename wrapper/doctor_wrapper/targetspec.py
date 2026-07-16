@@ -215,9 +215,13 @@ class TargetSpec:
             raise ValueError("TargetSpec 'integration_candidates' must be a list")
         candidates: list[IntegrationCandidate] = []
         candidate_ids: set[str] = set()
-        allowed_kinds = {
-            "import", "client_init", "outbound_endpoint", "config", "env",
-            "oauth_provider", "ci_resource",
+        # Atomic kinds may be combined with "+" (a candidate observed several
+        # ways: "dependency+import+client_init"); "dependency-only" is the
+        # label for candidates whose sole signal is a dependency declaration
+        # (57B-11 / plan §17.7).
+        atomic_kinds = {
+            "dependency", "import", "client_init", "outbound_endpoint",
+            "config", "env", "oauth_provider", "ci_resource",
         }
         for i, c in enumerate(raw_candidates):
             if not isinstance(c, dict):
@@ -236,10 +240,12 @@ class TargetSpec:
                 raise ValueError(
                     f"integration_candidates[{i}]: unknown repo_id {c['repo_id']!r}"
                 )
-            if c["signal_kind"] not in allowed_kinds:
+            kind = c["signal_kind"]
+            if kind != "dependency-only" and (
+                not kind or not set(kind.split("+")) <= atomic_kinds
+            ):
                 raise ValueError(
-                    f"integration_candidates[{i}].signal_kind unsupported: "
-                    f"{c['signal_kind']!r}"
+                    f"integration_candidates[{i}].signal_kind unsupported: {kind!r}"
                 )
             evidence = c.get("evidence", [])
             if not isinstance(evidence, list) or not all(isinstance(x, str) for x in evidence):

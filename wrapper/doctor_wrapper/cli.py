@@ -91,8 +91,11 @@ def _family_groups(repos: list) -> dict[str, list]:
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="project-doctor-wrapper")
-    result.add_argument("--targets", required=True, help="TargetSpec JSON from discovery")
-    result.add_argument("--out", required=True, help="run signals directory")
+    result.add_argument("--targets", help="TargetSpec JSON from discovery "
+                                          "(required for run/sweep)")
+    result.add_argument("--out", required=True,
+                        help="output directory (signals dir for run/sweep; "
+                             "run dir for discover)")
     result.add_argument("--scan-date", default=date.today().isoformat())
     result.add_argument(
         "--since", default=None,
@@ -113,7 +116,29 @@ def parser() -> argparse.ArgumentParser:
                      help="explicitly authorize a network-capable tool")
     sweep = sub.add_parser("sweep", help="run all applicable validated tools")
     sweep.add_argument("--include-network", action="store_true")
+    disc = sub.add_parser(
+        "discover", help="produce the stage-1 run checkpoint "
+                         "(targets.json + discovery-report.json)")
+    disc.add_argument("--workspace", required=True,
+                      help="target workspace root to inventory")
+    disc.add_argument("--exclude", default="",
+                      help="comma-separated repo basenames to exclude "
+                           "(disclosed in the report)")
     return result
+
+
+def _discover(args: argparse.Namespace) -> int:
+    from .discovery import emit
+    exclude = [x.strip() for x in args.exclude.split(",") if x.strip()]
+    spec, report = emit.discover(args.workspace, exclude_names=exclude)
+    targets_path, report_path = emit.write_stage1(args.out, spec, report)
+    print(f"{len(spec.repos)} target repo(s), "
+          f"{len(spec.integration_candidates)} integration candidate(s)")
+    for line in report["not_targeted"]:
+        print(f"not targeted: {line}")
+    print(f"wrote {targets_path}")
+    print(f"wrote {report_path}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -123,6 +148,12 @@ def main(argv: list[str] | None = None) -> int:
             # Registry guards read this when deciding whether a dependency
             # host outside the default registries is explicitly approved.
             os.environ["PROJECT_DOCTOR_ALLOW_HOSTS"] = args.allow_hosts
+        if args.command == "discover":
+            return _discover(args)
+        if not args.targets:
+            print("wrapper input error: --targets is required for run/sweep",
+                  file=sys.stderr)
+            return 2
         spec = TargetSpec.load(args.targets)
         # $WORKSPACE relativization needs a workspace root; derive it from the
         # targets so sanitized artifacts never embed absolute machine paths
