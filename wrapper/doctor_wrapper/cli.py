@@ -132,6 +132,17 @@ def parser() -> argparse.ArgumentParser:
                          help="skill base directory (owns state/ and output/)")
     new_run.add_argument("--language", default="zh-CN", choices=["en", "zh-CN"])
     new_run.add_argument("--exclude", default="")
+    drill = sub.add_parser(
+        "new-drilldown", help="mint a drill-down run from a completed overview "
+                              "run (--from-run → current pointer → refuse)")
+    drill.add_argument("--skill-root", required=True)
+    drill.add_argument("--module", required=True, help="module-id from the map")
+    drill.add_argument("--from-run", default="",
+                       help="explicit source overview run id")
+    drill.add_argument("--language", default="",
+                       help="report language (default: the source run's)")
+    drill.add_argument("--project", default="",
+                       help="project-id (needed only when output/ has several)")
     mark = sub.add_parser("mark-stage", help="record a stage checkpoint as done")
     mark.add_argument("--run", required=True, help="run directory")
     mark.add_argument("--stage", required=True)
@@ -193,6 +204,80 @@ def _new_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _new_drilldown(args: argparse.Namespace) -> int:
+    from . import lifecycle
+    root = Path(args.skill_root).expanduser().resolve()
+    projects = sorted(p for p in (root / "output").iterdir() if p.is_dir()) \
+        if (root / "output").is_dir() else []
+    if args.project:
+        projects = [p for p in projects if p.name == args.project]
+    if len(projects) != 1:
+        print("wrapper input error: pass --project "
+              f"(found {len(projects)} project dirs under output/)", file=sys.stderr)
+        return 2
+    project_dir = projects[0]
+    overview_root = project_dir / "overview"
+
+    def completed_runs() -> list[str]:
+        found = []
+        for run_dir in sorted(overview_root.iterdir()) if overview_root.is_dir() else []:
+            try:
+                if lifecycle.RunState.load(run_dir).next_stage() == "":
+                    found.append(run_dir.name)
+            except (OSError, ValueError, KeyError):
+                continue
+        return found
+
+    # Resolution: --from-run → current pointer → refuse (never implicit).
+    source_id = args.from_run
+    if not source_id:
+        source_id = lifecycle.Pointers(root / "state" / project_dir.name).read().get("current")
+    if not source_id:
+        print("drill-down refused: no --from-run given and no run has been "
+              "ACCEPTED as `current`. Completed overview runs: "
+              + (", ".join(completed_runs()) or "(none)")
+              + ". Accept one (`accept --run <dir>`) or pass --from-run explicitly.",
+              file=sys.stderr)
+        return 2
+    source_dir = overview_root / source_id
+    if not (source_dir / lifecycle.RunState.FILENAME).is_file():
+        print(f"wrapper input error: overview run {source_id!r} not found; "
+              f"completed runs: {', '.join(completed_runs()) or '(none)'}",
+              file=sys.stderr)
+        return 2
+    source = lifecycle.RunState.load(source_dir)
+    if source.next_stage() != "":
+        print(f"drill-down refused: source run {source_id} is incomplete "
+              f"(next stage: {source.next_stage()})", file=sys.stderr)
+        return 2
+    stale = source.staleness()
+    if stale:
+        print("drill-down refused: source overview run is STALE — run a new "
+              "overview. Moved repos:", file=sys.stderr)
+        for line in stale:
+            print(f"  {line}", file=sys.stderr)
+        return 5
+
+    drill_root = project_dir / "drilldown"
+    heads = [f"{r['repo_id']}:{r['head']}:{r['dirty_detail']}" for r in source.provenance]
+    run_id = lifecycle.mint_run_id(
+        heads + [f"module:{args.module}"], args.language or source.language,
+        exists=lambda rid: (drill_root / rid).exists())
+    run_dir = drill_root / run_id
+    run_dir.mkdir(parents=True)
+    state = lifecycle.RunState.create_drilldown(
+        run_id, source, args.module, language=args.language or None)
+    state.mark("resolve")
+    state.save(run_dir)
+    (run_dir / "source_overview_run").write_text(
+        f"{source.run_id}\n{source_dir}\n", "utf-8")
+    print(f"run: {run_dir}")
+    print(f"module: {args.module} | language: {state.language} | "
+          f"source: {source.run_id} (inspection_only: {state.inspection_only})")
+    print(f"next stage: {state.next_stage()}")
+    return 0
+
+
 def _lifecycle_cmd(args: argparse.Namespace) -> int:
     from . import lifecycle
     run_dir = Path(args.run).expanduser().resolve()
@@ -233,6 +318,8 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["PROJECT_DOCTOR_ALLOW_HOSTS"] = args.allow_hosts
         if args.command == "new-run":
             return _new_run(args)
+        if args.command == "new-drilldown":
+            return _new_drilldown(args)
         if args.command in ("mark-stage", "rollback", "status", "accept"):
             return _lifecycle_cmd(args)
         if not args.out:

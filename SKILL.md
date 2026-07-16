@@ -224,7 +224,20 @@ Target wall-clock is 10–15 minutes; quality is the gate, not the clock.
 
 ## Module drill-down
 
-Resolve the source run (see Invocation), then produce two documents from the templates:
+Mint the drill-down run with the wrapper (it enforces resolution, staleness, and
+linkage — never create the directory by hand):
+
+```
+"${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-doctor-wrapper" new-drilldown \
+    --skill-root "${CLAUDE_SKILL_DIR}" --module <module-id> [--from-run <run-id>]
+```
+
+Resolution is `--from-run` → `current` pointer → refusal listing completed runs;
+a stale source (any repo moved/dirtied since the overview) exits 5 naming the
+drift — run a new overview instead. The minted run lives in
+`output/<project-id>/drilldown/<run-id>/` with a `source_overview_run` link and
+stages `resolve → prd → health` (same `mark-stage`/`rollback`/audit-before-mark
+discipline as overviews). Then produce two documents from the templates:
 - `prd.md` (`templates/module-prd.md`) — PM-facing; sections included **where
   applicable**: UI entry points (verbatim labels), roles, flows, rules/states,
   notifications/integrations, open questions. Readable standalone.

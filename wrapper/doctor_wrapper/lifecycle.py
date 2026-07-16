@@ -29,6 +29,7 @@ from . import gitinfo
 from .targetspec import TargetSpec
 
 STAGES = ["discovery", "signals", "findings", "map", "overview"]
+DRILLDOWN_STAGES = ["resolve", "prd", "health"]
 
 
 def mint_run_id(heads: list[str], language: str, *, when: datetime | None = None,
@@ -60,6 +61,7 @@ class RunState:
     analyzed_at: str = ""
     inspection_only: bool = False
     stages: dict = field(default_factory=lambda: {s: "pending" for s in STAGES})
+    stage_order: list = field(default_factory=list)  # persisted; sort_keys loses dict order
     provenance: list = field(default_factory=list)  # {repo_id, path, head, dirty_detail}
     analysis_identity: dict = field(default_factory=dict)
 
@@ -68,17 +70,39 @@ class RunState:
     @classmethod
     def create(cls, run_id: str, project_id: str, spec: TargetSpec, *,
                language: str = "en", analysis_identity: dict | None = None,
-               when: datetime | None = None) -> "RunState":
+               when: datetime | None = None,
+               stage_names: list[str] | None = None) -> "RunState":
         when = when or datetime.now(timezone.utc)
         dirty = any(r.git.dirty_detail != "no" or not r.git.is_git for r in spec.repos)
         return cls(
             run_id=run_id, project_id=project_id, language=language,
             analyzed_at=when.isoformat(timespec="seconds"),
             inspection_only=dirty,
+            stages={s: "pending" for s in (stage_names or STAGES)},
+            stage_order=list(stage_names or STAGES),
             provenance=[{"repo_id": r.repo_id, "path": r.path,
                          "head": r.git.head, "dirty_detail": r.git.dirty_detail}
                         for r in spec.repos],
             analysis_identity=analysis_identity or {},
+        )
+
+    @classmethod
+    def create_drilldown(cls, run_id: str, source: "RunState", module: str, *,
+                         language: str | None = None,
+                         when: datetime | None = None) -> "RunState":
+        """A drill-down run inherits the SOURCE overview run's provenance and
+        inspection-only status; its stages are resolve -> prd -> health."""
+        when = when or datetime.now(timezone.utc)
+        return cls(
+            run_id=run_id, project_id=source.project_id,
+            language=language or source.language,
+            analyzed_at=when.isoformat(timespec="seconds"),
+            inspection_only=source.inspection_only,
+            stages={s: "pending" for s in DRILLDOWN_STAGES},
+            stage_order=list(DRILLDOWN_STAGES),
+            provenance=list(source.provenance),
+            analysis_identity={"module": module,
+                               "source_overview_run": source.run_id},
         )
 
     @classmethod
@@ -94,6 +118,7 @@ class RunState:
             "run_id": self.run_id, "project_id": self.project_id,
             "language": self.language, "analyzed_at": self.analyzed_at,
             "inspection_only": self.inspection_only, "stages": self.stages,
+            "stage_order": self.ordered_stages(),
             "provenance": self.provenance,
             "analysis_identity": self.analysis_identity,
         }
@@ -105,8 +130,19 @@ class RunState:
             raise ValueError(f"unknown stage {stage!r} (stages: {STAGES})")
         self.stages[stage] = "done"
 
+    def ordered_stages(self) -> list[str]:
+        """The run's own stage sequence (overview and drill-down runs differ).
+        Older run-state files lack the persisted order — recover it from the
+        known stage sets."""
+        if self.stage_order:
+            return list(self.stage_order)
+        for known in (STAGES, DRILLDOWN_STAGES):
+            if set(self.stages) == set(known):
+                return list(known)
+        return list(self.stages)
+
     def next_stage(self) -> str:
-        for stage in STAGES:
+        for stage in self.ordered_stages():
             if self.stages.get(stage) != "done":
                 return stage
         return ""  # run complete
@@ -116,9 +152,10 @@ class RunState:
         rolled-back stage's outputs — the stale-count lesson: regenerating
         stage 1 without cascading left a superseded figure in a stage-2
         artifact). Returns the stages re-opened."""
-        if stage not in self.stages:
-            raise ValueError(f"unknown stage {stage!r} (stages: {STAGES})")
-        reopened = STAGES[STAGES.index(stage):]
+        order = self.ordered_stages()
+        if stage not in order:
+            raise ValueError(f"unknown stage {stage!r} (stages: {order})")
+        reopened = order[order.index(stage):]
         for name in reopened:
             self.stages[name] = "pending"
         return reopened
