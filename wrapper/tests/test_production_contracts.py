@@ -195,3 +195,20 @@ def test_go_view_matches_internal_packages_on_module_boundaries(tmp_path, target
     view = parsers.go_list_view(target, stream, "")
     assert "internal_packages: 2" in view
     assert "example.com/foo-tools" in view.split("external_imports:\n", 1)[1]
+
+
+def test_jscpd_view_extracts_ranked_cross_file_clone_pairs(target):
+    stdout = (
+        "Clone found (javascript)\n"
+        " - a/x.js [10:1 - 25:4] (15 lines, 90 tokens)\n"
+        "   b/y.js [40:1 - 55:4]\n"
+        "Clone found (javascript)\n"
+        " - c/z.js [1:1 - 6:2] (5 lines, 30 tokens)\n"
+        "   c/z.js [80:1 - 85:2]\n"
+        "Found 2 clones.\n"
+    )
+    view = parsers.jscpd_view(target, stdout, "")
+    # cross-file pair present with span + both endpoints; same-file pair excluded
+    assert "15\ta/x.js:10-25\tb/y.js:40-55" in view
+    assert "c/z.js:1-6\tc/z.js" not in view.split("cross-file", 1)[1].split("summary", 1)[0]
+    assert "1 same-file" in view

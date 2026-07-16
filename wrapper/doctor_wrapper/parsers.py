@@ -68,13 +68,53 @@ def lizard_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
     return "\n".join(out)
 
 
+_CLONE_HEAD = re.compile(r"Clone found \(([^)]+)\)")
+_CLONE_A = re.compile(r"^\s*-\s+(\S.*?)\s+\[(\d+):\d+\s*-\s*(\d+):\d+\]\s*\((\d+)\s*lines")
+_CLONE_B = re.compile(r"^\s{2,}(\S.*?)\s+\[(\d+):\d+\s*-\s*(\d+):\d+\]\s*$")
+
+
+def _parse_clone_pairs(stdout: str) -> list[dict]:
+    """Console clone blocks -> structured pairs (both sides, line span)."""
+    pairs: list[dict] = []
+    lines = stdout.splitlines()
+    fmt = ""
+    for i, line in enumerate(lines):
+        head = _CLONE_HEAD.search(line)
+        if head:
+            fmt = head.group(1)
+            continue
+        a = _CLONE_A.match(line)
+        if not a:
+            continue
+        b = _CLONE_B.match(lines[i + 1]) if i + 1 < len(lines) else None
+        if not b:
+            continue
+        pairs.append({
+            "format": fmt, "span": int(a.group(4)),
+            "a_file": a.group(1), "a_from": int(a.group(2)), "a_to": int(a.group(3)),
+            "b_file": b.group(1), "b_from": int(b.group(2)), "b_to": int(b.group(3)),
+        })
+    return pairs
+
+
 def jscpd_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
     formats = Counter(re.findall(r"Clone found \(([^)]+)\)", stdout))
     summary = [line.strip() for line in stdout.splitlines()
                if re.search(r"Found \d+ clones|duplicated lines|duplication", line, re.I)]
+    pairs = _parse_clone_pairs(stdout)
+    # Cross-FILE clones are the change-friction signal (a fix in one file must be
+    # mirrored in another); same-file clones are lower value. Rank by span.
+    cross = [p for p in pairs if p["a_file"] != p["b_file"]]
+    cross.sort(key=lambda p: -p["span"])
     out = ["### clone formats"]
     out += [f"{name}\t{count}" for name, count in sorted(formats.items(), key=lambda x: (-x[1], x[0]))]
-    out += ["", "### summary", *summary[-30:]]
+    out += ["", f"### cross-file clone pairs (top {min(len(cross), 60)} of {len(cross)}; "
+                f"lines\ta_file:a_from-a_to\tb_file:b_from-b_to)"]
+    for p in cross[:60]:
+        out.append(f"{p['span']}\t{p['a_file']}:{p['a_from']}-{p['a_to']}\t"
+                   f"{p['b_file']}:{p['b_from']}-{p['b_to']}")
+    out += ["", f"### summary ({len(pairs)} total pairs, "
+                f"{len(pairs) - len(cross)} same-file)", *summary[-30:]]
     if stderr.strip():
         out += ["", "### stderr", *stderr.splitlines()[:30]]
     return "\n".join(out)
