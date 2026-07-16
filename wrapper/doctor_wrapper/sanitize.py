@@ -49,8 +49,10 @@ _UNQUOTED = re.compile(
 _SCHEME = re.compile(
     r"((?<![A-Za-z0-9_])(?:Bearer|Basic)\s+)([A-Za-z0-9._~+/=-]+)", re.IGNORECASE
 )
-# Credentials embedded in URLs (git remotes, registries): https://user:token@host
-_URL_CRED = re.compile(r"(://)([^/@\s:]+):([^/@\s]+)@")
+# Credentials embedded in URLs (git remotes, registries). The ENTIRE userinfo is
+# redacted: tokens routinely travel in the username position with no password
+# (https://ghp_xxx@github.com), so keeping the username would keep the secret.
+_URL_CRED = re.compile(r"(://)[^/@\s]+(?::[^/@\s]*)?@")
 
 
 def _unquoted_sub(m: re.Match) -> str:
@@ -63,7 +65,7 @@ def redact(text: str) -> str:
     text = _SCHEME.sub(r"\1" + REDACTED, text)
     text = _QUOTED.sub(lambda m: m.group(1) + m.group(2) + REDACTED + m.group(2), text)
     text = _UNQUOTED.sub(_unquoted_sub, text)
-    text = _URL_CRED.sub(r"\1\2:" + REDACTED + "@", text)
+    text = _URL_CRED.sub(r"\1" + REDACTED + "@", text)
     return text
 
 

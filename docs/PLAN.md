@@ -237,3 +237,12 @@ in Linear as "Additions (plan v3.4)").
    PyDriller (primary history; plain git + `--full-history` fallback), go list -deps
    -json (package level sufficient), osv-scanner + npm/yarn outdated (PM-aware, corepack
    guards, yarn execution vectors refused). knip DROPPED; code-maat REJECTED.
+9. **Invocation command (decided during 57B-9):** `/project-doctor`, not `/doctor`.
+   The name `/doctor` is taken by Claude Code's bundled doctor skill (installation
+   health check); personal/project skills CAN override bundled skills, but shadowing a
+   diagnostic command is deliberately avoided. Skill directory/frontmatter name:
+   `project-doctor`; §3's `/doctor` grammar is read with this substitution (57B-9's
+   Linear acceptance is amended accordingly). Run-id format (also 57B-9):
+   `YYYYMMDDThhmmssZ-<6-hex input digest>` (ordered repo HEADs, dirty markers,
+   language) — labels for recognizability; uniqueness comes from never reusing an
+   existing run directory (first free `-N` suffix on collision).

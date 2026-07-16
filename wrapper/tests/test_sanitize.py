@@ -16,6 +16,8 @@ MUST_REDACT = [
     ("MYSQL_ROOT_PASSWORD: rootpw", "rootpw"),
     ('authToken="xyz789"', "xyz789"),                     # camelCase compound
     ("https://user:ghp_tok3n@github.com/x.git", "ghp_tok3n"),  # URL credential
+    ("https://ghp_tok3n@github.com/x.git", "ghp_tok3n"),  # token in USERNAME position
+    ("https://user:ghp_tok3n@github.com/x.git", "user"),  # whole userinfo goes
 ]
 
 MUST_NOT_TOUCH = [

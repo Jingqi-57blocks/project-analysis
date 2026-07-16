@@ -13,9 +13,12 @@ explicitly disclosed reduced coverage.
 
 ## Status
 
-**Phase 0 — toolchain spike complete** (committed baseline, awaiting user sign-off).
-See `spike/` for evidence and `tools/README.md` for the validated toolchain (Phase 0
-exit deliverable).
+**Phase 1 in progress.** Phase 0 (toolchain spike) is signed off — see `spike/` for
+evidence and `tools/README.md` for the validated toolchain. The tool wrapper (57B-10)
+is done and live-sweep validated; the skill scaffold (SKILL.md, templates, state/output
+layout — 57B-9) is built and pending sign-off. Next: discovery (57B-11), lenses,
+synthesis, lifecycle. The skill command is `/project-doctor` (`/doctor` is a Claude
+Code built-in).
 
 ## Design
 
@@ -45,10 +48,11 @@ definitions, the templates, and the tool wrapper. Everything under `spike/`, `be
 ## Python environment
 
 Project Doctor does not require global Python packages. From `wrapper/`, run
-`python3 -m doctor_wrapper.bootstrap --dev`; it creates the gitignored
-`wrapper/.venv` and installs the wrapper, PyDriller, and test dependencies there.
-Run the CLI as `.venv/bin/project-doctor-wrapper` and tests as
-`.venv/bin/python -m pytest`. See `wrapper/README.md` for details.
+`python3 -m doctor_wrapper.bootstrap`; it creates the gitignored `wrapper/.venv` and
+installs the wrapper and the PyDriller history lane there — this is all a doctor run
+needs. Developers working on the wrapper itself add `--dev` to also install test
+dependencies, then run tests as `.venv/bin/python -m pytest`. The CLI is
+`.venv/bin/project-doctor-wrapper`. See `wrapper/README.md` for details.
 
 ## Tracking
 
