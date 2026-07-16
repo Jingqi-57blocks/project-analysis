@@ -134,38 +134,67 @@ def validate_depcruise(text: str, _exit: int) -> str:
         else "expected an object with a modules list"
 
 
-def depcruise_stats(text: str) -> tuple[int, int, int, int, list[str]]:
+def _is_internal_spec(module: str) -> bool:
+    """A relative/alias import that SHOULD resolve inside the repo. External
+    npm specifiers (bare/scoped package names) are not internal — their
+    non-resolution under `--do-not-follow node_modules` is a classification
+    limitation, not a broken internal graph."""
+    if not module:
+        return False
+    if module.startswith((".", "/")):
+        return True
+    # Common tsconfig path-alias roots for in-repo imports.
+    first = module.split("/", 1)[0]
+    return first in {"src", "app", "lib", "@", "@src", "@app"} or module.startswith("~/")
+
+
+def depcruise_stats(text: str):
+    """Returns (modules, edges, unresolved, circular, externals,
+    internal_edges, internal_unresolved)."""
     data = _json(text)
     modules = data.get("modules", [])
     edges = unresolved = circular = 0
+    internal_edges = internal_unresolved = 0
     externals: set[str] = set()
     for module in modules:
         for dep in module.get("dependencies", []):
             edges += 1
+            spec = str(dep.get("module", ""))
+            internal = _is_internal_spec(spec)
+            if internal:
+                internal_edges += 1
             if dep.get("couldNotResolve"):
                 unresolved += 1
+                if internal:
+                    internal_unresolved += 1
             if dep.get("circular"):
                 circular += 1
             if any(str(kind).startswith("npm") for kind in dep.get("dependencyTypes", [])):
-                externals.add(str(dep.get("module", "")))
-    return len(modules), edges, unresolved, circular, sorted(x for x in externals if x)
+                externals.add(spec)
+    return (len(modules), edges, unresolved, circular,
+            sorted(x for x in externals if x), internal_edges, internal_unresolved)
 
 
 def depcruise_degraded(_target: RepoTarget, combined: str, _exit: int) -> str:
     # stdout is placed before the sentinel by the executor.
     stdout = combined.split("\n### STDERR ###\n", 1)[0]
     try:
-        _, edges, unresolved, _, _ = depcruise_stats(stdout)
+        _, _, _, _, _, internal_edges, internal_unresolved = depcruise_stats(stdout)
     except Exception:
         return ""
-    if edges and unresolved / edges > 0.15:
-        return f"dependency coverage partial: {unresolved}/{edges} edges unresolved (>15%)"
+    # Coverage is measured over INTERNAL edges only — unresolved external npm
+    # subpaths (antd/es/*, @dnd-kit/*) are a known limit of the safe
+    # `--no-config`/`--do-not-follow` run, not a hole in the coupling graph.
+    if internal_edges and internal_unresolved / internal_edges > 0.15:
+        return ("dependency coverage partial: "
+                f"{internal_unresolved}/{internal_edges} INTERNAL edges unresolved (>15%)")
     return ""
 
 
 def depcruise_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
     target = _target
-    modules, edges, unresolved, circular, externals = depcruise_stats(stdout)
+    (modules, edges, unresolved, circular, externals,
+     internal_edges, internal_unresolved) = depcruise_stats(stdout)
     production: list[str] = []
     dev_test: list[str] = []
     unclassified: list[str] = []
@@ -188,6 +217,9 @@ def depcruise_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
             unclassified.append(value)
     out = [
         f"modules: {modules}", f"edges: {edges}", f"unresolved_edges: {unresolved}",
+        f"internal_edges: {internal_edges}",
+        f"internal_unresolved_edges: {internal_unresolved} "
+        f"(coupling-graph coverage; external npm subpaths excluded)",
         f"circular_edges: {circular}", "", "external_imports_production:", *production,
         "", "external_imports_dev_test:", *dev_test,
         "", "external_imports_unclassified:", *unclassified,

@@ -53,9 +53,10 @@ def test_staticcheck_compile_failure_is_partial(target):
 
 
 def test_depcruise_unresolved_over_15_percent_is_partial(target):
+    # internal (relative) edges — the coupling graph the gate measures
     data = {"modules": [{"source": "a", "dependencies": [
-        {"module": "b", "couldNotResolve": True},
-        {"module": "c", "couldNotResolve": False},
+        {"module": "./b", "couldNotResolve": True},
+        {"module": "./c", "couldNotResolve": False},
     ]}]}
     td = dependency_cruiser(target)
     assert ">15%" in td.check_degraded(target, json.dumps(data), 0)
@@ -212,3 +213,29 @@ def test_jscpd_view_extracts_ranked_cross_file_clone_pairs(target):
     assert "15\ta/x.js:10-25\tb/y.js:40-55" in view
     assert "c/z.js:1-6\tc/z.js" not in view.split("cross-file", 1)[1].split("summary", 1)[0]
     assert "1 same-file" in view
+
+
+def test_depcruise_partial_keys_on_internal_edges_not_external_subpaths(target):
+    # 20 external npm subpaths unresolved (antd/es/*) + a healthy internal graph
+    # (10 resolved, 1 unresolved = 9%): overall 21/31 = 68% but internal 9% —
+    # the gate must key on internal only, and the view must expose that number.
+    deps = [{"module": f"antd/es/c{i}", "couldNotResolve": True,
+             "dependencyTypes": ["npm"]} for i in range(20)]
+    deps += [{"module": f"./m{i}", "couldNotResolve": False} for i in range(10)]
+    deps += [{"module": "./missing", "couldNotResolve": True}]
+    data = {"modules": [{"source": "a", "dependencies": deps}]}
+    text = json.dumps(data)
+    td = dependency_cruiser(target)
+    verdict = td.check_degraded(target, text, 0)
+    assert verdict == "", f"external subpaths inflated the gate: {verdict!r}"
+    view = parsers.depcruise_view(target, text, "")
+    assert "internal_edges: 11" in view
+    assert "internal_unresolved_edges: 1" in view
+
+
+def test_depcruise_partial_still_fires_on_broken_internal_graph(target):
+    deps = [{"module": f"./m{i}", "couldNotResolve": True} for i in range(9)]
+    deps += [{"module": "./ok", "couldNotResolve": False}]
+    data = {"modules": [{"source": "a", "dependencies": deps}]}
+    verdict = dependency_cruiser(target).check_degraded(target, json.dumps(data), 0)
+    assert "INTERNAL edges unresolved" in verdict and "9/10" in verdict
