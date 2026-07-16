@@ -15,6 +15,15 @@ context):**
 - **No absolute machine paths anywhere** in either document: refer to the
   workspace by its basename label, repos by name, files by repo-relative
   citations.
+- **Run language governs EVERY output of this stage (default `zh-CN`) — the
+  project map included, not just the overview.** All interpretive prose
+  (readings, "reading" columns, migration narrative, notes, section intros) is
+  written in the run language; only UI labels, code identifiers, citations,
+  module-ids, and the fixed status vocabulary (`observed`/`inferred`/
+  `unresolved`/`user-confirmed`, `included`/`excluded`,
+  `complete`/`partial`/`failed`/`skipped`, priorities) stay verbatim English.
+  A structured table whose cells are identifiers/citations is fine; the moment
+  you write a sentence or a human-readable "reading", it is in the run language.
 - **Verify before you write:** any count, cap, status, or per-repo attribution
   you state must be re-checked against `discovery-report.json` /
   `run-summary.json` at writing time — do not repeat another document's
