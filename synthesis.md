@@ -57,11 +57,22 @@ context):**
    user-confirmed`. `user-confirmed` ONLY from `confirmed_facts.md` records
    (cite the record). UI→API links need both sides cited to be `observed`.
 5. **Disposition EVERY integration candidate** from the discovery report:
-   `included | unresolved | excluded`, each with evidence. Completeness is
-   mechanical: rows out = candidates in (group multiple same-system
-   candidates into one row listing its candidate values). `dependency-only`
-   signals are at most `unresolved`, never `included`, with the limitation
-   stated. No candidate is silently dropped.
+   `included | unresolved | excluded`, each with evidence. The statuses answer
+   "does THIS codebase actively integrate with that system?" — never "did we
+   analyze the external system's own source" (nobody analyzes a cloud
+   provider's source; that is already covered by the standing disclaimer):
+   - `included` — repo evidence shows active integration: client
+     initialization, outbound endpoint calls in code, or config that binds the
+     system into a live path. Whether it is live in PRODUCTION stays unknowable
+     (disclaimer) — that does not demote it to unresolved.
+   - `unresolved` — signals exist but active use is not evidenced:
+     dependency-only/lockfile-only, env names without call sites, orphaned
+     config.
+   - `excluded` — not an external integration at all (frameworks/utility
+     libraries, CI base images, doc/noise URLs, the project's own hosts).
+   Completeness is mechanical: rows out = candidates in (group same-system
+   candidates into one row listing its candidate values). No candidate is
+   silently dropped.
 
 ## Step 5 — assign findings to final module IDs
 
