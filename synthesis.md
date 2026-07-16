@@ -74,6 +74,36 @@ context):**
    candidates into one row listing its candidate values). No candidate is
    silently dropped.
 
+## Step 4.5 — dedup systemic findings and rank for change-friction
+
+Before ranking problems, two rules that keep the top of `overview.md` honest
+about what makes change hard (the product's core question), not just what is
+easiest to flag:
+
+1. **Merge same-root-cause findings across repos into ONE systemic problem.**
+   Nine per-repo "no test coverage" findings are one finding — "no automated
+   test suite anywhere" — with per-repo evidence rows beneath it, ranked once.
+   Do not let a single root cause occupy N of the top slots. The same applies
+   to shared-infra duplication, config drift, etc.
+
+2. **Rank by change-friction, not just severity.** A problem's rank rises with
+   its **blast radius** — how much of the system a typical change to it
+   disturbs. Concrete signals to weigh ABOVE a localized safety-net gap:
+   - route-liveness ledger (`discovery-report.json:route_liveness`): a
+     still-live legacy backend in a parallel rewrite means every change to
+     that domain risks two codebases;
+   - cross-repo clone PAIRS (jscpd views, `### cross-file clone pairs`) and
+     `cross_dir_coupling` (history views): a fix that must be mirrored in N
+     places;
+   - shared persistence + dependency hubs/cycles (project_map, go-list/
+     depcruise internal edges): a change whose effects leak across modules;
+   - churn × complexity × ownership concentration: where the next change is
+     both likely and hard.
+   A missing test is a real problem, but it makes change *risky*, not *hard*;
+   rank the "hard to change safely" cluster so a reader sees the ripple story
+   near the top. Every rank still rests on cited evidence — this reorders by
+   impact, it does not invent or inflate.
+
 ## Step 5 — assign findings to final module IDs
 
 Re-key every finding's `affected_modules` to the finalized IDs (alias table

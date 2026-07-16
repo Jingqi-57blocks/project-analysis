@@ -45,6 +45,22 @@ claims}}
 |---|---|---|---|---|
 | {{table_or_store}} | {{module_ids}} | {{module_ids}} | {{observed/inferred/unresolved}} | {{citations}} |
 
+## Backend liveness (which routes the frontend actually calls)
+
+From `discovery-report.json:route_liveness` (present only for a UI + backend
+workspace). The **call ledger** is the reliable signal — it answers which
+backend the frontend actually uses; the per-route rows are best-effort (leaf
+routes lack their router mount prefix, so `no-direct-path-match` is NOT an
+orphan list and nothing here is "dead").
+
+| backend | UI-called routes | distinct UI call paths (ledger) | reading |
+|---|---|---|---|
+| `{{repo}}` | {{ui_called_count}} | {{ledger_path_count_for_its_base}} | {{one line — e.g. "still a live backend: N UI paths" or "carries the bulk of traffic"}} |
+
+{{when a parallel rewrite exists: state plainly which domains still route to
+the legacy backend vs the successor, citing the ledger — this is the migration
+picture. Caveat mount-prefix limits; never call the legacy service dead.}}
+
 ## Co-change coupling (history signal)
 
 | module pair | shared commits (window) | interpretation | evidence |

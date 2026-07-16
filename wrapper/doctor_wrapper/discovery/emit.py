@@ -21,7 +21,8 @@ from pathlib import Path
 
 from ..sanitize import redact
 from ..targetspec import RepoTarget, TargetSpec, stable_repo_id
-from . import candidates, generated, inventory, modules, pm, provenance, stacks
+from . import (candidates, generated, inventory, liveness, modules, pm,
+               provenance, stacks)
 
 
 def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
@@ -154,6 +155,33 @@ def discover(workspace_root: str | Path,
         admit(path, stable_repo_id(str(path)))
 
     spec = TargetSpec(repos=repo_targets, integration_candidates=all_candidates)
+
+    # Route liveness: a frontend (Node/TS repo with a src/ SPA layout, no route
+    # registrations of its own) joined against the backend route tables.
+    def _tier2(repo_id: str) -> list:
+        r = next((x for x in repo_reports if x["repo_id"] == repo_id), None)
+        return r["tier2_exclusions"]["dirs"] if r else []
+    backends, frontends = [], []
+    for t in repo_targets:
+        has_routes = any(_produce_has_routes(r) for r in repo_reports
+                         if r["repo_id"] == t.repo_id)
+        stacks_l = {s.lower() for s in t.stacks}
+        if has_routes:
+            backends.append((t.repo_id, t.path, _tier2(t.repo_id)))
+        elif stacks_l & {"ts", "tsx", "js"} and (Path(t.path) / "src").is_dir():
+            frontends.append(t)
+    liveness_report = None
+    if backends and len(frontends) == 1:
+        rep = liveness.liveness(frontends[0].path, backends)
+        liveness_report = {
+            "frontend": frontends[0].repo_id,
+            "calls_by_base": rep.calls_by_base(),
+            "notes": rep.notes,
+            "rows": [{"repo_id": r.repo_id, "method": r.method, "path": r.path,
+                      "route_evidence": r.route_evidence, "status": r.status,
+                      "caller_evidence": r.caller_evidence} for r in rep.rows],
+        }
+
     report = {
         "project_id": inv.project_id,
         "workspace_root": inv.workspace_root,
@@ -161,8 +189,13 @@ def discover(workspace_root: str | Path,
         "not_targeted": sorted(disclosed),
         "reduced_coverage_targets": sorted(reduced),
         "integration_candidate_count": len(all_candidates),
+        "route_liveness": liveness_report,
     }
     return spec, report
+
+
+def _produce_has_routes(repo_report: dict) -> bool:
+    return bool(repo_report.get("module_signals", {}).get("routes"))
 
 
 def write_stage1(run_dir: str | Path, spec: TargetSpec, report: dict) -> tuple[Path, Path]:
