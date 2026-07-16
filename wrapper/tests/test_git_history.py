@@ -60,3 +60,18 @@ def test_history_emits_rename_ownership_and_bulk_guard(tmp_path):
     assert any(x["file"] == "new.js" and "dominant_commit_share" in x for x in result["ownership"])
     assert result["bulk_changesets_excluded_from_coupling"] == 1
     assert result["history_completeness"]["total_commits_head"] == 4
+
+
+def test_cross_dir_coupling_survives_top_n_truncation(tmp_path):
+    repo = tmp_path / "cross"; repo.mkdir(); _git(repo, "init", "-q", "-b", "main")
+    (repo / "api").mkdir(); (repo / "ui").mkdir()
+    # 3 commits touching an api file AND a ui file together -> cross-dir pair.
+    for i in range(3):
+        (repo / "api" / "svc.go").write_text(f"a{i}\n")
+        (repo / "ui" / "page.tsx").write_text(f"u{i}\n")
+        _commit(repo, f"cross {i}")
+    result = analyze(str(repo), "2000-01-01", top=20, min_shared=2, bulk_limit=50)
+    pairs = result["cross_dir_coupling"]
+    assert any({p["file_a"], p["file_b"]} == {"api/svc.go", "ui/page.tsx"} for p in pairs)
+    # a same-dir-only pair must NOT appear in the cross-dir list
+    assert all(p["file_a"].split("/")[0] != p["file_b"].split("/")[0] for p in pairs)

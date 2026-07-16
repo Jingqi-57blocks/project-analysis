@@ -428,6 +428,10 @@ def history_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
     out += ["", "coupling:"]
     out += [f"{x['coupling_pct']}\t{x['shared_commits']}\t{x['file_a']}\t{x['file_b']}"
             for x in data.get("coupling", [])]
+    out += ["", "cross_dir_coupling (change-friction: pairs spanning different "
+            "top-level areas — ripple signal):"]
+    out += [f"{x['coupling_pct']}\t{x['shared_commits']}\t{x['file_a']}\t{x['file_b']}"
+            for x in data.get("cross_dir_coupling", [])] or ["(none above min-shared)"]
     out += ["", "ownership:"]
     out += [f"{x['distinct_committers']}\t{x['dominant_commit_share']}\t"
             f"{x['dominant_churn_share']}\t{x['file']}" for x in data.get("ownership", [])]

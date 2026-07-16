@@ -213,6 +213,15 @@ def analyze(repo: str, since: str, top: int, min_shared: int, bulk_limit: int) -
                          "revs_a": commits_by_file[a], "revs_b": commits_by_file[b],
                          "coupling_pct": degree})
     coupling.sort(key=lambda x: (-x["coupling_pct"], -x["shared_commits"], x["file_a"], x["file_b"]))
+
+    def _top_dir(path: str) -> str:
+        parts = path.split("/")
+        return "/".join(parts[:2]) if len(parts) > 2 else (parts[0] if parts else path)
+
+    # Cross-directory pairs are the change-friction / ripple signal (a change in
+    # one area co-changes with another). They lose to intra-dir pairs in the
+    # global top-N, so they are kept as a separate ranked list.
+    cross_dir_coupling = [c for c in coupling if _top_dir(c["file_a"]) != _top_dir(c["file_b"])]
     ownership = []
     for row in churn:
         path = row["file"]
@@ -238,6 +247,7 @@ def analyze(repo: str, since: str, top: int, min_shared: int, bulk_limit: int) -
         "bulk_changesets_excluded_from_coupling": bulk_excluded,
         "uncertain_name_matches": resolver.uncertain_name_matches,
         "rename_aliases": aliases, "churn": churn[:top], "coupling": coupling[:top],
+        "cross_dir_coupling": cross_dir_coupling[:top],
         "ownership": ownership[:top],
     }
 
