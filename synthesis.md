@@ -65,7 +65,9 @@ Re-key every finding's `affected_modules` to the finalized IDs (alias table
 maps old candidate IDs). A finding whose module dissolved attaches to the
 nearest enclosing module and says so in limitations.
 
-## Step 6 — write `overview.md` (template: templates/overview.md)
+## Step 6 — write `overview.md` then `pm-overview.md`
+
+### 6a. `overview.md` (template: templates/overview.md)
 
 - Executive summary: restates the highest-priority cited findings — nothing
   new, nothing uncited.
@@ -82,6 +84,22 @@ nearest enclosing module and says so in limitations.
 - Header: full provenance block from the discovery report (run-level +
   per-repo), the standing scope disclaimer, and — when any target was
   dirty/non-git — the inspection-only block.
+
+- Table of contents: generate it LAST, one anchor link per `##` section, matching
+  the final document exactly.
+- Run language governs both documents (default `zh-CN`): prose in the run
+  language; UI labels, code identifiers, citations, and status vocabulary
+  (`observed`/`inferred`/`unresolved`, `included`/`excluded`,
+  `complete`/`partial`/`failed`/`skipped`, priorities) stay verbatim.
+
+### 6b. `pm-overview.md` (template: templates/overview-pm.md)
+
+The non-technical companion, written AFTER overview.md and derived from it:
+business language only — no tool names, no metrics, no code identifiers except
+verbatim UI labels and parenthesized module IDs. Same facts, same citation
+discipline (link to overview.md problem numbers / project_map.md rows rather
+than re-arguing evidence). Nothing may appear here that overview.md does not
+support.
 
 ## After writing
 

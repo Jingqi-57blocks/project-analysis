@@ -130,7 +130,7 @@ def parser() -> argparse.ArgumentParser:
     new_run.add_argument("--workspace", required=True)
     new_run.add_argument("--skill-root", required=True,
                          help="skill base directory (owns state/ and output/)")
-    new_run.add_argument("--language", default="en", choices=["en", "zh-CN"])
+    new_run.add_argument("--language", default="zh-CN", choices=["en", "zh-CN"])
     new_run.add_argument("--exclude", default="")
     mark = sub.add_parser("mark-stage", help="record a stage checkpoint as done")
     mark.add_argument("--run", required=True, help="run directory")

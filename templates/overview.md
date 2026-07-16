@@ -7,6 +7,11 @@
 > is live in production; and it is not a comprehensive security or license audit.
 > Findings labeled `status unresolved` need human confirmation.
 
+## Contents
+
+{{table_of_contents — one line per `##` section below, in order, as markdown anchor
+links; generate it LAST so it matches the final document exactly}}
+
 <!-- ONLY when any target was dirty or non-git, add this second blockquote: -->
 > **Inspection-only run:** one or more targets were dirty worktrees (or non-git folders)
 > at analysis time. Citations use `repo@WORKTREE:`/`repo@NON-GIT:` forms, this run cannot

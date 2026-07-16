@@ -104,6 +104,14 @@ def test_pointers_accept_rules(tmp_path, target):
     assert pointers.read()["current"] == "rid-2"  # unchanged
 
 
+def test_new_run_default_language_is_zh_cn(tmp_path, synthetic_repo, capsys):
+    code = main(["new-run", "--workspace", str(synthetic_repo.parent),
+                 "--skill-root", str(tmp_path / "skill")])
+    assert code == 0
+    run_dir = capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1]
+    assert RunState.load(run_dir).language == "zh-CN"
+
+
 def test_cli_full_lifecycle_flow(tmp_path, target, synthetic_repo, capsys):
     skill_root = tmp_path / "skill"
     code = main(["new-run", "--workspace", str(synthetic_repo.parent),

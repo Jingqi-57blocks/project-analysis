@@ -29,9 +29,11 @@ first-class confidence.
 
 - `path` defaults to the current working directory; it is the **target workspace root**
   under which repositories are discovered.
-- One language per run, default `en`. Reports are written in the run language, but real
-  UI labels, code identifiers, and error strings are ALWAYS quoted verbatim from source —
-  never translated.
+- One language per run, default `zh-CN` (owner decision 2026-07-16; `--language en`
+  opts out). Reports are written in the run language, but real UI labels, code
+  identifiers, and error strings are ALWAYS quoted verbatim from source — never
+  translated. Intermediate artifacts (lens findings, signals) may remain English;
+  the RUN language governs the delivered reports.
 - `/project-doctor module` resolves its source overview as: `--from-run <run-id>` if
   given → otherwise the project's `current` pointer → otherwise **refuse**, listing the
   project's completed runs. A run other than `current` may be accepted later ONLY if it
@@ -207,11 +209,14 @@ anchored):
    integration candidate (`included | unresolved | excluded`, evidence each, none
    silently dropped).
 5. **Assign findings** to finalized module IDs (`synthesis.md` step 5).
-6. **Write `overview.md`** (template: `templates/overview.md`; rules: `synthesis.md`
-   step 6): executive summary, Mermaid topology, top problems by priority, module
-   health table, lens coverage (per-lens aggregate + per-signal detail),
-   external-systems disposition table, assumptions & open questions. Synthesis
-   reorganizes cited material — it never creates new uncited claims.
+6. **Write `overview.md` AND `pm-overview.md`** (templates: `templates/overview.md`,
+   `templates/overview-pm.md`; rules: `synthesis.md` step 6): overview.md opens with a
+   table of contents and carries the executive summary, Mermaid topology, top problems
+   by priority, module health table, lens coverage (per-lens aggregate + per-signal
+   detail), external-systems disposition table, assumptions & open questions;
+   pm-overview.md is the non-technical companion for PMs — business language only,
+   same facts, same citations discipline. Synthesis reorganizes cited material — it
+   never creates new uncited claims.
 7. **Offer acceptance** (sets the `current` pointer on the user's yes). Skip the offer
    for inspection-only runs.
 

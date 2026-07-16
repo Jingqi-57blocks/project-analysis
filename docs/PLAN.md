@@ -237,7 +237,14 @@ in Linear as "Additions (plan v3.4)").
    PyDriller (primary history; plain git + `--full-history` fallback), go list -deps
    -json (package level sufficient), osv-scanner + npm/yarn outdated (PM-aware, corepack
    guards, yarn execution vectors refused). knip DROPPED; code-maat REJECTED.
-9. **Invocation command (decided during 57B-9):** `/project-doctor`, not `/doctor`.
+9. **Report language & PM companion (owner decision 2026-07-16, supersedes §3's
+   `en` default):** default run language is **zh-CN** (`--language en` opts out);
+   UI labels/identifiers/citations/status vocabulary stay verbatim; intermediate
+   artifacts (lens findings) may remain English. `overview.md` opens with a table
+   of contents. The overview stage additionally produces **`pm-overview.md`** — a
+   non-technical, business-language companion for PMs derived strictly from
+   overview.md (same facts, linked citations, no new claims).
+10. **Invocation command (decided during 57B-9):** `/project-doctor`, not `/doctor`.
    The name `/doctor` is taken by Claude Code's bundled doctor skill (installation
    health check); personal/project skills CAN override bundled skills, but shadowing a
    diagnostic command is deliberately avoided. Skill directory/frontmatter name:
