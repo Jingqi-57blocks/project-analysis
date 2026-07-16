@@ -32,9 +32,13 @@ context):**
   becomes either a re-run of this stage or a recorded defect — so check your
   own tables before finishing: disposition counts must sum to the candidate
   total, and every mermaid edge must be backed by relationship-table rows
-  (aggregating module rows into repo-level edges is allowed ONLY when the
-  diagram's labels state the grouping; an edge with no table backing is an
-  invented claim).
+  (aggregating module rows into repo-level edges — or splitting one module
+  row into per-implementation nodes — is allowed ONLY when the diagram's
+  labels state the grouping; an edge with no table backing is an invented
+  claim). ONE exception: module→external-system boundary edges may be drawn
+  without relationship rows when each maps to integration-candidate/
+  disposition evidence and carries an explicit label (`included` systems
+  solid, anything else `unresolved`).
 
 ## Step 4 — finalize `project_map.md` (template: templates/project_map.md)
 
