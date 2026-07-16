@@ -245,7 +245,7 @@ observed code, surface the conflict in the report — never silently prefer eith
 ```
 SKILL.md            this file
 lenses/             lens prompt definitions (analysis dimensions)
-templates/          overview, project_map, module_candidates, module-prd, module-health
+templates/          overview, overview-pm, project_map, module_candidates, module-prd, module-health
 wrapper/            Python tool-execution wrapper (see wrapper/README.md)
 state/<project-id>/     pointers.json, confirmed_facts.md   (runtime, per target)
 output/<project-id>/    overview/<run-id>/, drilldown/<run-id>/   (runtime, per target)
