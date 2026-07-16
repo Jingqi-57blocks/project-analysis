@@ -42,8 +42,10 @@ WCP-derived evidence throughout (repo names, vuln/outdated counts, architecture,
 **sanitized public toolchain doc is a Phase 3 release deliverable**, derived from it. The only
 **ship-candidate** artifacts are the generic, evidence-free ones: `SKILL.md`, the lens
 definitions, the templates, and the tool wrapper. Everything under `spike/`, `benchmark/`, and
-`tools/README.md` stays local until deliberately scrubbed for release. This repo currently has
-**no git remote by design**, so nothing leaves this machine unless it is deliberately pushed.
+`tools/README.md` stays in this repository until deliberately scrubbed for release. The repo is
+hosted on a **private remote at the owner's direction** (added 2026-07-16); because the tracked
+tree contains WCP-derived evidence, this repository must **never be made public as-is** —
+publishing happens only via the scrubbed Phase-3 release artifacts.
 
 ## Python environment
 

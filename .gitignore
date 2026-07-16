@@ -2,7 +2,9 @@ node_modules/
 .venv*/
 *.egg-info/
 __pycache__/
+.pytest_cache/
 .DS_Store
+.claude/
 
 # runtime state and analysis output — per-target data never enters the skill repo
 state/*
