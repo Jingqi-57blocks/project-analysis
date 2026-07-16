@@ -1,0 +1,43 @@
+{
+  "integration_candidates": [
+    {
+      "candidate_id": "import-1",
+      "evidence": [
+        "src/client.ts:3"
+      ],
+      "repo_id": "api-11112222",
+      "signal_kind": "import",
+      "value": "example.invalid/sdk"
+    }
+  ],
+  "produced_at": "2026-07-16T00:00:00Z",
+  "produced_by": "generic-fixture/1",
+  "repos": [
+    {
+      "analysis_roots": [
+        "src"
+      ],
+      "git": {
+        "branch": "main",
+        "commit_count": 5,
+        "dirty_detail": "no",
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "oldest_commit_date": "2024-01-01",
+        "shallow": false
+      },
+      "path": "/tmp/generic-workspace/api",
+      "pm": {
+        "evidence": "packageManager field declares yarn",
+        "lockfile": "yarn.lock",
+        "name": "yarn"
+      },
+      "repo_id": "api-11112222",
+      "stacks": [
+        "typescript"
+      ],
+      "tier2_exclusions": [
+        "generated"
+      ]
+    }
+  ]
+}

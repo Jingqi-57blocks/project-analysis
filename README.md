@@ -42,6 +42,14 @@ definitions, the templates, and the tool wrapper. Everything under `spike/`, `be
 `tools/README.md` stays local until deliberately scrubbed for release. This repo currently has
 **no git remote by design**, so nothing leaves this machine unless it is deliberately pushed.
 
+## Python environment
+
+Project Doctor does not require global Python packages. From `wrapper/`, run
+`python3 -m doctor_wrapper.bootstrap --dev`; it creates the gitignored
+`wrapper/.venv` and installs the wrapper, PyDriller, and test dependencies there.
+Run the CLI as `.venv/bin/project-doctor-wrapper` and tests as
+`.venv/bin/python -m pytest`. See `wrapper/README.md` for details.
+
 ## Tracking
 
 Linear: team `57blocks-Project-Doctor`, project **Project Doctor v1**

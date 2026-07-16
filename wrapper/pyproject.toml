@@ -1,0 +1,24 @@
+[project]
+name = "doctor-wrapper"
+version = "0.1.0"
+description = "Project Doctor tool-execution wrapper (stdlib core; pydriller only in the git_history lane)"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["doctor_wrapper*"]
+
+[project.scripts]
+project-doctor-wrapper = "doctor_wrapper.cli:main"
+
+[project.optional-dependencies]
+history = ["pydriller==2.10"]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
