@@ -26,6 +26,15 @@ explicitly disclosed reduced coverage.
   manifests — it never interprets findings or scores reports.
 - Zero target-project literals outside `benchmark/` and `spike/` (fixture areas).
 
+## Privacy & packaging
+
+`spike/` and (future) `benchmark/` contain **private target-project evidence** — real author
+names and emails, internal architecture, dependency versions, and vulnerability details from the
+WCP repositories. They are **local development fixtures only** and must **NEVER** be included when
+the skill is packaged or published: ship only the generic wrapper and `tools/README.md`, never the
+evidence directories. This repo currently has **no git remote by design**, so nothing leaves this
+machine unless it is deliberately pushed.
+
 ## Tracking
 
 Linear: team `57blocks-Project-Doctor`, project **Project Doctor v1**
