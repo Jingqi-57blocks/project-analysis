@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[2]
-PROSE_FILES = [SKILL_ROOT / "SKILL.md"] \
+PROSE_FILES = [SKILL_ROOT / "SKILL.md", SKILL_ROOT / "synthesis.md"] \
     + sorted((SKILL_ROOT / "templates").glob("*.md")) \
     + sorted((SKILL_ROOT / "lenses").glob("*.md"))
 

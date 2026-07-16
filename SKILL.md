@@ -177,15 +177,17 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
 3. **Run tools once** through the wrapper (signals + per-signal manifests; network lanes
    only with explicit authorization). Grouped lens agents analyze the bounded views and
    return findings in the shared shape against candidate module IDs.
-4. **Finalize `project_map.md`** from all signals: UI→API links, endpoint→persistence,
-   imports, scheduler/notification links, shared DB tables, co-change. Modules carry
-   evidence + confidence, classified `business | platform | shared-infra | unresolved`;
-   relationships labeled `observed | inferred | unresolved | user-confirmed`.
-5. **Assign findings** to finalized module IDs.
-6. **Write `overview.md`** (template: `templates/overview.md`): executive summary,
-   project map with Mermaid topology, top problems by priority, module health table,
-   lens coverage (per-lens aggregate + per-signal detail), external-systems evidence
-   table, assumptions & open questions.
+4. **Finalize `project_map.md`** — follow `synthesis.md` step 4: module formation from
+   candidates, classification, stable IDs + aliases, relationship labels
+   (`observed | inferred | unresolved | user-confirmed`), and the disposition of EVERY
+   integration candidate (`included | unresolved | excluded`, evidence each, none
+   silently dropped).
+5. **Assign findings** to finalized module IDs (`synthesis.md` step 5).
+6. **Write `overview.md`** (template: `templates/overview.md`; rules: `synthesis.md`
+   step 6): executive summary, Mermaid topology, top problems by priority, module
+   health table, lens coverage (per-lens aggregate + per-signal detail),
+   external-systems disposition table, assumptions & open questions. Synthesis
+   reorganizes cited material — it never creates new uncited claims.
 7. **Offer acceptance** (sets the `current` pointer on the user's yes). Skip the offer
    for inspection-only runs.
 
