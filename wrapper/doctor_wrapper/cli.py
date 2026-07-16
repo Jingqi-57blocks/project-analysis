@@ -233,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["PROJECT_DOCTOR_ALLOW_HOSTS"] = args.allow_hosts
         if args.command == "new-run":
             return _new_run(args)
-        if args.command in ("mark-stage", "status", "accept"):
+        if args.command in ("mark-stage", "rollback", "status", "accept"):
             return _lifecycle_cmd(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",

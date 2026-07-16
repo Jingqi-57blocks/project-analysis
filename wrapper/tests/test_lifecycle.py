@@ -72,7 +72,9 @@ def test_rollback_cascades_to_later_stages(tmp_path, target, capsys):
     assert state.stages["discovery"] == "done" and state.stages["signals"] == "done"
     with pytest.raises(ValueError):
         state.rollback("nonsense")
-    # CLI surface round-trips through run-state.json.
+    # CLI surface round-trips through run-state.json (from a fully-done state).
+    for stage in lifecycle.STAGES:
+        state.mark(stage)
     state.save(tmp_path)
     assert main(["rollback", "--run", str(tmp_path), "--stage", "map"]) == 0
     assert "re-opened: map, overview" in capsys.readouterr().out
