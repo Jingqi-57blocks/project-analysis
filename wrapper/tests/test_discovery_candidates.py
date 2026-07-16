@@ -54,12 +54,38 @@ def test_env_names_only_never_values(tmp_path):
     _write(tmp_path / ".env.example", "PAYMENT_API_KEY=super-secret-value\n")
     _write(tmp_path / "cfg.go", 'package c\nfunc f() string { return os.Getenv("QUEUE_URL") }\n')
     _write(tmp_path / "cfg.js", "const x = process.env.WEBHOOK_TARGET;\n")
+    _write(tmp_path / "vite.ts", "const api = import.meta.env.VITE_MAIN_API;\n")
     report = generate(tmp_path, "r-1")
     values = {c.value for c in report.candidates}
-    assert {"PAYMENT_API_KEY", "QUEUE_URL", "WEBHOOK_TARGET"} <= values
+    assert {"PAYMENT_API_KEY", "QUEUE_URL", "WEBHOOK_TARGET", "VITE_MAIN_API"} <= values
     dumped = " ".join(e for c in report.candidates for e in c.evidence) + \
         " ".join(values)
     assert "super-secret-value" not in dumped
+
+
+def test_tracked_env_file_yields_names_and_endpoint_hosts(tmp_path):
+    import subprocess
+    _write(tmp_path / ".env.production",
+           "MAIN_API=https://api.internal.example.co/base\n"
+           "API_TOKEN=tok_secretvalue123\n")
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "-c", "user.email=t@t",
+                    "-c", "user.name=t", "add", "-A"], check=True)
+    report = generate(tmp_path, "r-1")
+    by_value = {c.value: c for c in report.candidates}
+    assert "MAIN_API" in by_value and "API_TOKEN" in by_value      # names
+    assert by_value["api.internal.example.co"].signal_kind == "config"  # host from value
+    dumped = " ".join(c.value for c in report.candidates) + \
+        " ".join(e for c in report.candidates for e in c.evidence)
+    assert "tok_secretvalue123" not in dumped                      # values never
+
+
+def test_untracked_env_file_yields_names_but_no_hosts(tmp_path):
+    _write(tmp_path / ".env", "LOCAL_API=https://staging.hidden.example.co/x\n")
+    report = generate(tmp_path, "r-1")  # no git repo -> nothing tracked
+    values = {c.value for c in report.candidates}
+    assert "LOCAL_API" in values
+    assert "staging.hidden.example.co" not in values
 
 
 def test_ci_resources_from_pipelines(tmp_path):

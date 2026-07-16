@@ -37,8 +37,9 @@ _CLIENT_INIT = re.compile(
 _URL = re.compile(r"https?://([\w.-]+\.[A-Za-z]{2,})(?::\d+)?(/[\w./#?&=%-]*)?")
 _OAUTH_HINT = re.compile(r"oauth|/authorize\b|openid-configuration|\.well-known", re.I)
 _ENV_JS = re.compile(r"process\.env\.([A-Z][A-Z0-9_]{2,})")
+_ENV_VITE = re.compile(r"import\.meta\.env\.([A-Z][A-Z0-9_]{2,})")
 _ENV_GO = re.compile(r'os\.Getenv\(\s*"([A-Z][A-Z0-9_]{2,})"\s*\)')
-_ENV_FILE_LINE = re.compile(r"^([A-Z][A-Z0-9_]{2,})\s*=")
+_ENV_FILE_LINE = re.compile(r"^([A-Z][A-Z0-9_]{2,})\s*=(.*)$")
 _CI_RESOURCE = re.compile(r"^\s*-?\s*(?:image|uses|pipe)\s*:\s*['\"]?([\w./@:-]+)", re.M)
 _CI_FILES = ("bitbucket-pipelines.yml", ".gitlab-ci.yml", "Jenkinsfile",
              "azure-pipelines.yml")
@@ -137,15 +138,42 @@ def _read(path: Path) -> str:
         return ""
 
 
+def _tracked_env_files(root: Path) -> set[str]:
+    """Repo-relative paths of git-TRACKED .env* files (committed config)."""
+    import subprocess
+
+    from .. import gitinfo
+    try:
+        proc = subprocess.run(
+            gitinfo.git_command(root, "ls-files", ".env*", "**/.env*"),
+            env=gitinfo.safe_git_env(), capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if proc.returncode != 0:
+        return set()
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+
+
 def _line_of(text: str, index: int) -> int:
     return text.count("\n", 0, index) + 1
 
 
-def _scan_env_example(collect: _Collector, rel: str, text: str) -> None:
+def _scan_env_file(collect: _Collector, rel: str, text: str, *,
+                   tracked: bool) -> None:
+    """Env files yield variable NAMES always (policy: names only). Endpoint
+    HOSTS are additionally derived from values ONLY for git-TRACKED env files
+    (committed config, e.g. .env.production) — hosts, never full values."""
     for i, line in enumerate(text.splitlines(), 1):
         m = _ENV_FILE_LINE.match(line.strip())
-        if m:  # NAMES only — the value side never enters a candidate
-            collect.add(m.group(1), "env", f"{rel}:{i}")
+        if not m:
+            continue
+        collect.add(m.group(1), "env", f"{rel}:{i}")
+        if tracked:
+            for url_match in _URL.finditer(m.group(2)):
+                host = url_match.group(1).lower()
+                if host not in _NOISE_HOSTS and not host.endswith(".invalid"):
+                    collect.add(host, "config", f"{rel}:{i}")
 
 
 def _scan_source(collect: _Collector, rel: str, text: str, *, go: bool) -> None:
@@ -162,7 +190,7 @@ def _scan_source(collect: _Collector, rel: str, text: str, *, go: bool) -> None:
             segments = [s for s in re.split(r"[/@.-]", key) if len(s) >= 3]
             if any(s.lower() in line for s in segments):
                 collect.add(key, "client_init", f"{rel}:{line_no}")
-    for pattern in (_ENV_JS, _ENV_GO):
+    for pattern in (_ENV_JS, _ENV_VITE, _ENV_GO):
         for m in pattern.finditer(text):
             collect.add(m.group(1), "env", f"{rel}:{_line_of(text, m.start())}")
 
@@ -196,11 +224,12 @@ def generate(repo_path: str | Path, repo_id: str,
     for module in (go_requires or []):
         collect.add(_package_key(module, go=True), "dependency", "go.mod")
 
+    tracked_env = _tracked_env_files(root)
     for path in _iter_files(root, set(tier2_exclusions or []), notes):
         rel = path.relative_to(root).as_posix()
 
-        if path.name.startswith(".env") and ("example" in path.name or "sample" in path.name):
-            _scan_env_example(collect, rel, _read(path))
+        if path.name.startswith(".env"):
+            _scan_env_file(collect, rel, _read(path), tracked=rel in tracked_env)
             continue
 
         is_ci = path.name in _CI_FILES or "/.github/workflows/" in f"/{rel}"
