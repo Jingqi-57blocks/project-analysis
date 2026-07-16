@@ -93,7 +93,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="project-doctor-wrapper")
     result.add_argument("--targets", help="TargetSpec JSON from discovery "
                                           "(required for run/sweep)")
-    result.add_argument("--out", required=True,
+    result.add_argument("--out",
                         help="output directory (signals dir for run/sweep; "
                              "run dir for discover)")
     result.add_argument("--scan-date", default=date.today().isoformat())
@@ -124,6 +124,24 @@ def parser() -> argparse.ArgumentParser:
     disc.add_argument("--exclude", default="",
                       help="comma-separated repo basenames to exclude "
                            "(disclosed in the report)")
+    new_run = sub.add_parser(
+        "new-run", help="mint a run dir under <skill-root>/output and run "
+                        "discovery into it (stage 1 done)")
+    new_run.add_argument("--workspace", required=True)
+    new_run.add_argument("--skill-root", required=True,
+                         help="skill base directory (owns state/ and output/)")
+    new_run.add_argument("--language", default="en", choices=["en", "zh-CN"])
+    new_run.add_argument("--exclude", default="")
+    mark = sub.add_parser("mark-stage", help="record a stage checkpoint as done")
+    mark.add_argument("--run", required=True, help="run directory")
+    mark.add_argument("--stage", required=True)
+    status = sub.add_parser(
+        "status", help="print resume point + staleness (exit 5 when stale)")
+    status.add_argument("--run", required=True)
+    accept = sub.add_parser(
+        "accept", help="set the project's `current` pointer (explicit user "
+                       "acceptance only)")
+    accept.add_argument("--run", required=True)
     return result
 
 
@@ -141,6 +159,61 @@ def _discover(args: argparse.Namespace) -> int:
     return 0
 
 
+def _state_dir_for(run_dir: Path) -> Path:
+    """<skill-root>/output/<project-id>/overview/<run-id> -> <skill-root>/state/<project-id>."""
+    project_dir = run_dir.parent.parent
+    return project_dir.parent.parent / "state" / project_dir.name
+
+
+def _new_run(args: argparse.Namespace) -> int:
+    from . import lifecycle
+    from .discovery import emit
+    exclude = [x.strip() for x in args.exclude.split(",") if x.strip()]
+    spec, report = emit.discover(args.workspace, exclude_names=exclude)
+    overview_root = (Path(args.skill_root).expanduser().resolve()
+                     / "output" / report["project_id"] / "overview")
+    run_id = lifecycle.mint_run_id(
+        [f"{r.repo_id}:{r.git.head}:{r.git.dirty_detail}" for r in spec.repos],
+        args.language, exists=lambda rid: (overview_root / rid).exists())
+    run_dir = overview_root / run_id
+    emit.write_stage1(run_dir, spec, report)
+    state = lifecycle.RunState.create(
+        run_id, report["project_id"], spec, language=args.language,
+        analysis_identity={"wrapper": "project-doctor-wrapper"})
+    state.mark("discovery")
+    state.save(run_dir)
+    print(f"run: {run_dir}")
+    print(f"inspection_only: {state.inspection_only}")
+    print(f"next stage: {state.next_stage()}")
+    return 0
+
+
+def _lifecycle_cmd(args: argparse.Namespace) -> int:
+    from . import lifecycle
+    run_dir = Path(args.run).expanduser().resolve()
+    state = lifecycle.RunState.load(run_dir)
+    if args.command == "mark-stage":
+        state.mark(args.stage)
+        state.save(run_dir)
+        if args.stage == "overview":
+            lifecycle.Pointers(_state_dir_for(run_dir)).set_latest_completed(state.run_id)
+            print(f"latest_completed -> {state.run_id}")
+        print(f"stage {args.stage}: done; next: {state.next_stage() or '(complete)'}")
+        return 0
+    if args.command == "status":
+        stale = state.staleness()
+        print(f"run: {state.run_id} (inspection_only: {state.inspection_only})")
+        print(f"next stage: {state.next_stage() or '(complete)'}")
+        for line in stale:
+            print(f"stale: {line}")
+        return 5 if stale else 0
+    if args.command == "accept":
+        lifecycle.Pointers(_state_dir_for(run_dir)).accept(state)
+        print(f"current -> {state.run_id}")
+        return 0
+    raise AssertionError(args.command)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -148,6 +221,14 @@ def main(argv: list[str] | None = None) -> int:
             # Registry guards read this when deciding whether a dependency
             # host outside the default registries is explicitly approved.
             os.environ["PROJECT_DOCTOR_ALLOW_HOSTS"] = args.allow_hosts
+        if args.command == "new-run":
+            return _new_run(args)
+        if args.command in ("mark-stage", "status", "accept"):
+            return _lifecycle_cmd(args)
+        if not args.out:
+            print("wrapper input error: --out is required for this command",
+                  file=sys.stderr)
+            return 2
         if args.command == "discover":
             return _discover(args)
         if not args.targets:

@@ -156,6 +156,25 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
   (`repo@NON-GIT:path:line`), results are never cached or reused. Git is required for
   full provenance.
 
+## Run lifecycle commands (wrapper-managed checkpoints)
+
+Every stage of a run is a **resumable checkpoint** recorded in the run
+directory's `run-state.json` (stages: discovery → signals → findings → map →
+overview). Drive it with the wrapper CLI (all paths absolute, skill-dir
+anchored):
+
+- `new-run --workspace <target> --skill-root <skill-dir> [--language ...]
+  [--exclude ...]` — mints the run directory, runs discovery into it
+  (stage 1 done), reports `inspection_only` and the next stage.
+- `status --run <run-dir>` — prints the resume point and staleness (exit 5 +
+  a per-repo `old -> new` list when the workspace moved). **Fresh + incomplete
+  → resume from the printed next stage instead of starting over; stale → mint
+  a new run, never refresh the old one.**
+- `mark-stage --run <run-dir> --stage <name>` — record a finished stage
+  (marking `overview` also sets the project's `latest_completed` pointer).
+- `accept --run <run-dir>` — sets `current`; run ONLY on the user's explicit
+  acceptance. Refuses inspection-only or incomplete runs.
+
 ## Overview workflow (fixed order)
 
 0. **Preflight.** If `lenses/` is missing or empty, STOP after inventory and report that
