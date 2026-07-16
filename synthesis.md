@@ -30,8 +30,11 @@ context):**
 - **These documents are pipeline output and will be frozen when the stage is
   marked done.** Nobody hand-edits them afterward: anything you leave wrong
   becomes either a re-run of this stage or a recorded defect — so check your
-  own tables (disposition counts must sum to the candidate total; mermaid
-  edges must match the relationship table exactly) before finishing.
+  own tables before finishing: disposition counts must sum to the candidate
+  total, and every mermaid edge must be backed by relationship-table rows
+  (aggregating module rows into repo-level edges is allowed ONLY when the
+  diagram's labels state the grouping; an edge with no table backing is an
+  invented claim).
 
 ## Step 4 — finalize `project_map.md` (template: templates/project_map.md)
 
