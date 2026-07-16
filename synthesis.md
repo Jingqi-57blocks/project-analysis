@@ -10,6 +10,29 @@ claims.** If, while synthesizing, you notice something no lens reported, you
 may add it ONLY with a full citation and `lens: open-lens` attribution; if
 you cannot cite it, it becomes an assumptions/open-questions entry instead.
 
+**Hard output rules (self-contained — you may not have any other rule file in
+context):**
+- **No absolute machine paths anywhere** in either document: refer to the
+  workspace by its basename label, repos by name, files by repo-relative
+  citations.
+- **Verify before you write:** any count, cap, status, or per-repo attribution
+  you state must be re-checked against `discovery-report.json` /
+  `run-summary.json` at writing time — do not repeat another document's
+  paraphrase of a number when the source artifact is available.
+- **`ui→api` edges need a call-site check:** before writing the evidence for a
+  frontend→backend edge, read the actual frontend call site and the config
+  that binds its base URL; `observed` requires both sides cited, and evidence
+  must name the RIGHT binding (env var / config key), not a plausible one.
+- **Derive "Referenced but NOT analyzed"** from the evidence, not just from
+  operator exclusions: any configured endpoint/base URL whose serving source
+  is not among the analyzed repos belongs in that section as
+  `status unresolved`.
+- **These documents are pipeline output and will be frozen when the stage is
+  marked done.** Nobody hand-edits them afterward: anything you leave wrong
+  becomes either a re-run of this stage or a recorded defect — so check your
+  own tables (disposition counts must sum to the candidate total; mermaid
+  edges must match the relationship table exactly) before finishing.
+
 ## Step 4 — finalize `project_map.md` (template: templates/project_map.md)
 
 1. **Form modules from candidates.** Merge/split the preliminary candidates

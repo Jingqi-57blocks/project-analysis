@@ -172,6 +172,11 @@ anchored):
   a new run, never refresh the old one.**
 - `mark-stage --run <run-dir> --stage <name>` — record a finished stage
   (marking `overview` also sets the project's `latest_completed` pointer).
+  **Verify BEFORE marking, never edit after:** stage outputs are audited
+  before their stage is marked done; corrections are made by re-running the
+  generating stage (roll it back to pending), never by hand-editing its
+  artifacts. Once `overview` is marked done the run's documents are frozen —
+  defects found later are recorded (audit notes / next run), not patched in.
 - `accept --run <run-dir>` — sets `current`; run ONLY on the user's explicit
   acceptance. Refuses inspection-only or incomplete runs.
 
