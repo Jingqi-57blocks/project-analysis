@@ -13,8 +13,9 @@ explicitly disclosed reduced coverage.
 
 ## Status
 
-**Phase 0 — toolchain spike** (in progress). See `spike/` for evidence and
-`tools/README.md` for the validated toolchain (Phase 0 exit deliverable).
+**Phase 0 — toolchain spike complete** (committed baseline, awaiting user sign-off).
+See `spike/` for evidence and `tools/README.md` for the validated toolchain (Phase 0
+exit deliverable).
 
 ## Design
 
@@ -31,9 +32,15 @@ explicitly disclosed reduced coverage.
 `spike/` and (future) `benchmark/` contain **private target-project evidence** — real author
 names and emails, internal architecture, dependency versions, and vulnerability details from the
 WCP repositories. They are **local development fixtures only** and must **NEVER** be included when
-the skill is packaged or published: ship only the generic wrapper and `tools/README.md`, never the
-evidence directories. This repo currently has **no git remote by design**, so nothing leaves this
-machine unless it is deliberately pushed.
+the skill is packaged or published.
+
+**`tools/README.md` is ALSO private-until-scrubbed**, not a ship candidate: it embeds
+WCP-derived evidence throughout (repo names, vuln/outdated counts, architecture, file names). A
+**sanitized public toolchain doc is a Phase 3 release deliverable**, derived from it. The only
+**ship-candidate** artifacts are the generic, evidence-free ones: `SKILL.md`, the lens
+definitions, the templates, and the tool wrapper. Everything under `spike/`, `benchmark/`, and
+`tools/README.md` stays local until deliberately scrubbed for release. This repo currently has
+**no git remote by design**, so nothing leaves this machine unless it is deliberately pushed.
 
 ## Tracking
 
