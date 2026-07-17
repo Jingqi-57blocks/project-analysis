@@ -21,6 +21,12 @@ from typing import Callable, Iterable
 
 RULES_DIR = Path(__file__).resolve().parents[1] / "rules"
 
+# ast-grep is DELIBERATELY unpinned (brew formula; brew cannot pin a version —
+# tools/README §1). Reproducibility for the scan() lanes therefore rests on the
+# RUNTIME version check: each scan()-derived signal records the version below was
+# validated against and discloses drift. Keep in sync with tools/README.
+VALIDATED_VERSION = "0.44.1"
+
 
 @dataclass
 class Match:
@@ -31,12 +37,87 @@ class Match:
     vars: dict[str, str] = field(default_factory=dict)  # metavar -> unquoted text
 
 
+@dataclass(frozen=True)
+class Probe:
+    """Resolved ast-grep identity for one run: its ``--version`` string and the
+    binary path scan() would invoke. ``version`` is None only when ast-grep is
+    unavailable (absent, or unable to report a version)."""
+    version: str | None                # full --version first line, e.g. "ast-grep 0.44.1"
+    path: str | None                   # resolved binary path
+
+    @property
+    def available(self) -> bool:
+        return self.version is not None
+
+    @property
+    def drift(self) -> str:
+        """Disclosed drift vs the validated version (never a hard failure —
+        ast-grep is unpinned by design). Mirrors the executor path's wording."""
+        if self.version and VALIDATED_VERSION not in self.version:
+            return f"validated {VALIDATED_VERSION}, found {self.version}"
+        return ""
+
+    def provenance(self) -> dict:
+        """Signal-entry provenance using the executor path's field names
+        (``tool_version`` / ``version_drift``) plus the resolved binary path, so
+        downstream consumers read ast-grep's version uniformly with every other
+        analyzer (57B-37)."""
+        return {
+            "tool": "ast-grep",
+            "tool_version": self.version or "(not installed)",
+            "tool_path": self.path or "",
+            "version_drift": self.drift,
+        }
+
+
 def binary() -> str | None:
     return shutil.which("ast-grep") or shutil.which("sg")
 
 
 def available() -> bool:
     return binary() is not None
+
+
+_PROBE_CACHE: dict[str | None, Probe] = {}
+
+
+def probe(*, run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> Probe:
+    """Version-probe the resolved ast-grep ONCE per run (cached on the resolved
+    binary path), so ``ast-grep --version`` is not spawned per scan() call. The
+    scan() lanes call this to record which ast-grep produced their signals."""
+    exe = binary()
+    if exe not in _PROBE_CACHE:
+        _PROBE_CACHE[exe] = _do_probe(exe, run)
+    return _PROBE_CACHE[exe]
+
+
+def _do_probe(exe: str | None,
+              run: Callable[..., subprocess.CompletedProcess]) -> Probe:
+    """Any failure to obtain a version (absent, spawn error, non-zero exit)
+    fails closed to unavailable — an unversionable binary cannot anchor
+    reproducibility, so it is recorded as not installed rather than guessed."""
+    if not exe:
+        return Probe(version=None, path=None)
+    try:
+        out = run([exe, "--version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return Probe(version=None, path=None)
+    if out.returncode != 0:
+        return Probe(version=None, path=None)
+    lines = (out.stdout or out.stderr or "").strip().splitlines()
+    return Probe(version=lines[0] if lines else "(unknown)", path=exe)
+
+
+def unavailable_provenance() -> dict:
+    """Provenance shape for a signal produced without ast-grep (fallback or
+    skipped) — records the version as unavailable while the lane keeps its own
+    fallback/skip disclosure."""
+    return Probe(version=None, path=None).provenance()
+
+
+def _reset_probe_cache() -> None:
+    """Test hook: clear the per-run version cache."""
+    _PROBE_CACHE.clear()
 
 
 def rule_path(name: str) -> Path:

@@ -54,6 +54,16 @@ def test_every_bucket_is_on_the_ladder():
         assert set(buckets) <= set(tables.ACCESS_TYPES)
 
 
+def test_signal_records_astgrep_version_and_path():
+    # The ORM/table scan()-derived signal carries the resolved ast-grep version
+    # and path, matching the actual per-run probe (57B-37).
+    d = tables.generate(str(FIXDB), "db-fix").to_dict()
+    p = astgrep.probe()
+    assert d["tool"] == "ast-grep"
+    assert d["tool_version"] == p.version and d["tool_path"] == p.path
+    assert d["version_drift"] == p.drift
+
+
 @pytest.mark.skipif(not _HAS_SQLGLOT, reason="sqlglot not installed")
 def test_sqlglot_read_write_join_and_explicit_coverage():
     ev = tables.generate(str(FIXDB), "db-fix")

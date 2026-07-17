@@ -50,6 +50,9 @@ class TableEvidence:
     registry_coverage: dict = field(default_factory=dict)
     sql_coverage: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
+    # ast-grep version/path/drift for this scan()-derived signal (57B-37). The
+    # SQL sub-lane (SQLGlot) records its own coverage under ``sql_coverage``.
+    astgrep: dict = field(default_factory=astgrep.unavailable_provenance)
 
     def to_dict(self) -> dict:
         # Distinct tables are deduped by name HERE, before any downstream view cap,
@@ -63,6 +66,7 @@ class TableEvidence:
             "registry_coverage": self.registry_coverage,
             "sql_coverage": self.sql_coverage,
             "notes": self.notes,
+            **self.astgrep,
         }
 
 
@@ -243,13 +247,15 @@ def generate(repo_path: str | Path, repo_id: str, *,
     ddl_kept = {d for d in tier2 if _DDL_EXEMPT.search(d)}
     scan_tier2 = tier2 - ddl_kept
     root = Path(repo_path).expanduser().resolve()
+    provenance = astgrep.probe().provenance()
     if not astgrep.available():
         return TableEvidence(
             available=False,
             notes=["ast-grep unavailable: ORM table declarations NOT extracted "
                    "(fail-closed)"],
             sql_coverage=_sql_coverage(root, defaultdict(lambda: defaultdict(list)),
-                                       scan_tier2, sql_dialect))
+                                       scan_tier2, sql_dialect),
+            astgrep=provenance)
     matches = astgrep.scan(repo_path, [astgrep.RULES_DIR / _RULE])
     tables, unresolved, registry, referenced = _classify_astgrep(matches, scan_tier2)
     sql_coverage = _sql_coverage(root, tables, scan_tier2, sql_dialect)
@@ -278,4 +284,4 @@ def generate(repo_path: str | Path, repo_id: str, *,
         tables={name: {a: ev for a, ev in buckets.items()}
                 for name, buckets in tables.items()},
         unresolved=unresolved, registry_coverage=registry_coverage,
-        sql_coverage=sql_coverage, notes=notes)
+        sql_coverage=sql_coverage, notes=notes, astgrep=provenance)

@@ -10,8 +10,28 @@ FIX = astgrep.RULES_DIR / "fixtures" / "access"
 
 def test_fail_closed_without_astgrep(monkeypatch):
     monkeypatch.setattr(astgrep, "binary", lambda: None)
+    astgrep._reset_probe_cache()
     am = access_model.generate(str(FIX), "acc")
     assert not am.available and any("SKIPPED" in n for n in am.notes)
+    d = am.to_dict()                                    # version recorded as unavailable
+    assert d["tool_version"] == "(not installed)" and d["version_drift"] == ""
+
+
+def test_signal_records_astgrep_version_and_drift(monkeypatch):
+    # version/path on a clean run, and drift disclosed on a mismatch — both flow
+    # onto the scan()-derived signal entry with the executor path's field names.
+    ok = astgrep.Probe(version="ast-grep 0.44.1", path="/opt/x/ast-grep")
+    monkeypatch.setattr(astgrep, "binary", lambda: ok.path)
+    monkeypatch.setattr(astgrep, "scan", lambda *a, **k: [])
+    monkeypatch.setattr(astgrep, "probe", lambda **k: ok)
+    d = access_model.generate(str(FIX), "acc").to_dict()
+    assert d["tool"] == "ast-grep" and d["tool_version"] == "ast-grep 0.44.1"
+    assert d["tool_path"] == "/opt/x/ast-grep" and d["version_drift"] == ""
+
+    drifted = astgrep.Probe(version="ast-grep 9.9.9", path="/opt/x/ast-grep")
+    monkeypatch.setattr(astgrep, "probe", lambda **k: drifted)
+    d2 = access_model.generate(str(FIX), "acc").to_dict()
+    assert d2["version_drift"] == "validated 0.44.1, found ast-grep 9.9.9"
 
 
 @pytest.mark.skipif(not astgrep.available(), reason="ast-grep not installed")

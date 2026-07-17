@@ -63,6 +63,10 @@ class LivenessReport:
     rows: list = field(default_factory=list)
     ui_calls: list = field(default_factory=list)   # CallHit (disclosed raw)
     notes: list = field(default_factory=list)
+    # ast-grep version/path/drift for the route-registration scan (57B-37). When
+    # ast-grep is absent, routes come from the disclosed regex fallback below and
+    # this records the version as unavailable.
+    astgrep: dict = field(default_factory=astgrep.unavailable_provenance)
 
     def calls_by_base(self) -> dict:
         """The reliable migration ledger: how many distinct paths the frontend
@@ -239,6 +243,7 @@ def liveness(frontend_repo, backends: list[tuple],
         "match heuristic: version-prefix-tolerant, param wildcards, route is a "
         "prefix of the call, at least one concrete segment must agree.",
     ])
+    report.astgrep = astgrep.probe().provenance()
     if backends and not astgrep.available():
         report.notes.append(
             "ROUTE EXTRACTION FALLBACK: ast-grep unavailable — route registrations "

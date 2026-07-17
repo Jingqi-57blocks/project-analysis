@@ -68,6 +68,18 @@ def test_discover_emits_valid_targetspec_with_candidates(tmp_path):
     assert audit["provenance"]["is_git"] is False
 
 
+def test_scan_derived_signals_record_astgrep_version(tmp_path):
+    # Every ast-grep scan()-derived signal in the discovery report carries the
+    # runtime version/path/drift, using the executor path's field names (57B-37).
+    ws = _workspace(tmp_path)
+    _, report = emit.discover(ws)
+    for repo in report["repos"]:
+        for key in ("integration_evidence", "table_evidence", "access_model"):
+            sig = repo[key]
+            assert sig["tool"] == "ast-grep"
+            assert {"tool_version", "tool_path", "version_drift"} <= set(sig)
+
+
 def test_stage1_checkpoint_roundtrip_and_no_secret_values(tmp_path):
     ws = _workspace(tmp_path)
     run_dir = tmp_path / "run"

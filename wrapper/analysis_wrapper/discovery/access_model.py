@@ -39,6 +39,8 @@ class AccessModel:
     contextual_identity: dict = field(default_factory=dict)
     policy_artifacts: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # ast-grep version/path/drift for this scan()-derived signal (57B-37).
+    astgrep: dict = field(default_factory=astgrep.unavailable_provenance)
 
     def to_dict(self) -> dict:
         return {
@@ -51,6 +53,7 @@ class AccessModel:
             "contextual_identity": self.contextual_identity,
             "policy_artifacts": self.policy_artifacts,
             "notes": self.notes,
+            **self.astgrep,
         }
 
 
@@ -101,10 +104,12 @@ def _find_policy_files(root: Path, tier2: set[str]) -> tuple[list[dict], bool]:
 def generate(repo_path: str | Path, repo_id: str, *,
              tier2_exclusions: list[str] | None = None) -> AccessModel:
     tier2 = set(tier2_exclusions or [])
+    provenance = astgrep.probe().provenance()
     if not astgrep.available():
         return AccessModel(
             available=False,
-            notes=["ast-grep unavailable: access-model view SKIPPED (fail-closed)"])
+            notes=["ast-grep unavailable: access-model view SKIPPED (fail-closed)"],
+            astgrep=provenance)
     root = Path(repo_path).expanduser().resolve()
     matches = [m for m in astgrep.scan(repo_path, [astgrep.RULES_DIR / _RULE])
                if not (PurePosixPath(m.file).parts and PurePosixPath(m.file).parts[0] in tier2)]
@@ -144,4 +149,4 @@ def generate(repo_path: str | Path, repo_id: str, *,
         route_guards=_bucket(matches, {"route-guard-tsx"}),
         contextual_identity=_bucket(matches, {"identity-check-go", "identity-check-ts"}),
         policy_artifacts=policy_artifacts,
-        notes=notes)
+        notes=notes, astgrep=provenance)

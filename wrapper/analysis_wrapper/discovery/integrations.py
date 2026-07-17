@@ -57,6 +57,8 @@ class IntegrationEvidence:
     host_fragments: list[dict] = field(default_factory=list)
     integration_packages: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # ast-grep version/path/drift for this scan()-derived signal (57B-37).
+    astgrep: dict = field(default_factory=astgrep.unavailable_provenance)
 
     def to_dict(self) -> dict:
         return {
@@ -64,6 +66,7 @@ class IntegrationEvidence:
             "host_fragments": self.host_fragments,
             "integration_packages": self.integration_packages,
             "notes": self.notes,
+            **self.astgrep,
         }
 
 
@@ -84,11 +87,13 @@ def _excluded(rel: str, tier2: set[str]) -> bool:
 def generate(repo_path: str | Path, repo_id: str, *,
              tier2_exclusions: list[str] | None = None) -> IntegrationEvidence:
     tier2 = set(tier2_exclusions or [])
+    provenance = astgrep.probe().provenance()
     if not astgrep.available():
         return IntegrationEvidence(
             available=False,
             notes=["ast-grep unavailable: assembled-URL / integration-package "
-                   "evidence SKIPPED (fail-closed — install ast-grep to enable)"])
+                   "evidence SKIPPED (fail-closed — install ast-grep to enable)"],
+            astgrep=provenance)
 
     rules_dir = astgrep.RULES_DIR
     host_matches = astgrep.scan(repo_path, [rules_dir / _HOST_RULE])
@@ -139,4 +144,5 @@ def generate(repo_path: str | Path, repo_id: str, *,
         "candidates only — evidence of code that CAN talk to a service, never "
         "proof one is active; table/column naming evidence is in the DB extractor.",
     ]
-    return IntegrationEvidence(True, host_fragments, integration_packages, notes)
+    return IntegrationEvidence(True, host_fragments, integration_packages, notes,
+                               astgrep=provenance)

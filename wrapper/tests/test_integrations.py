@@ -19,9 +19,34 @@ def test_host_fragment_filter_drops_files_and_identifiers():
 
 def test_unavailable_astgrep_is_fail_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(astgrep, "binary", lambda: None)
+    astgrep._reset_probe_cache()
     ev = integrations.generate(str(tmp_path), "widget")
     assert not ev.available and not ev.host_fragments and not ev.integration_packages
     assert any("SKIPPED" in n for n in ev.notes)
+    d = ev.to_dict()                                    # version recorded as unavailable
+    assert d["tool_version"] == "(not installed)" and d["version_drift"] == ""
+
+
+def test_signal_records_astgrep_version_and_path(monkeypatch, tmp_path):
+    # The scan()-derived signal carries the version/path/drift of the ast-grep
+    # that produced it, using the executor path's field names (57B-37).
+    fake = astgrep.Probe(version="ast-grep 0.44.1", path="/opt/x/ast-grep")
+    monkeypatch.setattr(astgrep, "binary", lambda: fake.path)
+    monkeypatch.setattr(astgrep, "probe", lambda **k: fake)
+    monkeypatch.setattr(astgrep, "scan", lambda *a, **k: [])
+    d = integrations.generate(str(tmp_path), "widget").to_dict()
+    assert d["tool"] == "ast-grep"
+    assert d["tool_version"] == "ast-grep 0.44.1" and d["tool_path"] == "/opt/x/ast-grep"
+    assert d["version_drift"] == ""
+
+
+def test_version_drift_flows_into_signal_entry(monkeypatch, tmp_path):
+    drifted = astgrep.Probe(version="ast-grep 9.9.9", path="/opt/x/ast-grep")
+    monkeypatch.setattr(astgrep, "binary", lambda: drifted.path)
+    monkeypatch.setattr(astgrep, "probe", lambda **k: drifted)
+    monkeypatch.setattr(astgrep, "scan", lambda *a, **k: [])
+    d = integrations.generate(str(tmp_path), "widget").to_dict()
+    assert d["version_drift"] == "validated 0.44.1, found ast-grep 9.9.9"
 
 
 @pytest.mark.skipif(not astgrep.available(), reason="ast-grep not installed")

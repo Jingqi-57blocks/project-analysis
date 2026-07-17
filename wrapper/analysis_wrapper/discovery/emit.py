@@ -215,6 +215,7 @@ def discover(workspace_root: str | Path,
             "rows": [{"repo_id": r.repo_id, "method": r.method, "path": r.path,
                       "route_evidence": r.route_evidence, "status": r.status,
                       "caller_evidence": r.caller_evidence} for r in rep.rows],
+            **rep.astgrep,   # ast-grep version/path/drift for the route scan (57B-37)
         }
 
     report = {

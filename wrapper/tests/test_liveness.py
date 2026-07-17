@@ -1,5 +1,6 @@
 """Route liveness join — matching, classification, honest no-caller status."""
 
+from analysis_wrapper import astgrep
 from analysis_wrapper.discovery import liveness
 from analysis_wrapper.discovery.liveness import _matches, _norm_segments
 
@@ -72,13 +73,27 @@ def test_astgrep_fallback_note_disclosed(tmp_path, monkeypatch):
     be = tmp_path / "svc"
     _write(be / "main.go", 'package main\nfunc r(){ e.GET("/v2/thing", h) }\n')
     monkeypatch.setattr("analysis_wrapper.astgrep.binary", lambda: None)
+    astgrep._reset_probe_cache()
     report = liveness.liveness(None, [("svc-1", str(be), [])])
     assert any("ROUTE EXTRACTION FALLBACK" in n for n in report.notes)
     assert any(r.path == "/v2/thing" for r in report.rows)  # regex rows still flow
+    # Fallback disclosure is kept AND the version is recorded as unavailable.
+    assert report.astgrep["tool_version"] == "(not installed)"
+    assert report.astgrep["version_drift"] == ""
 
 
 def test_no_fallback_note_when_astgrep_present():
-    if not __import__("analysis_wrapper.astgrep", fromlist=["available"]).available():
+    if not astgrep.available():
         return  # environment without ast-grep: covered by the fallback test above
     report = liveness.liveness(None, [])
     assert not any("FALLBACK" in n for n in report.notes)
+
+
+def test_liveness_report_records_astgrep_version():
+    if not astgrep.available():
+        return  # unavailable case is covered by the fallback test above
+    report = liveness.liveness(None, [])
+    p = astgrep.probe()
+    assert report.astgrep["tool"] == "ast-grep"
+    assert report.astgrep["tool_version"] == p.version
+    assert report.astgrep["tool_path"] == p.path
