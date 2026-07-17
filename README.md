@@ -1,4 +1,4 @@
-# Project Doctor
+# Project Analysis
 
 A general-purpose Claude Code skill that examines a codebase (single- or multi-repo
 workspace) with zero required setup and produces:
@@ -20,7 +20,7 @@ built and live-sweep validated. The v3.5 overview restructure is applied: `overv
 is the PM-primary document (nine sections, readable in ~10 minutes),
 `technical-overview.md` is its full-detail companion, and `project-map.md` is the
 reusable topology. The Phase-1 exit run is pending. The skill command is
-`/project-doctor` (`/doctor` is a Claude Code built-in).
+`/project-analysis` (see [Skill registration](#skill-registration)).
 
 ## Design
 
@@ -49,16 +49,28 @@ hosted on a **private remote at the owner's direction** (added 2026-07-16); beca
 tree contains WCP-derived evidence, this repository must **never be made public as-is** —
 publishing happens only via the scrubbed Phase-3 release artifacts.
 
+## Skill registration
+
+Claude Code discovers skills by directory name under `~/.claude/skills/<name>/SKILL.md`;
+the invocation command is the directory name. Register one symlink:
+
+```
+ln -s /path/to/project-analysis ~/.claude/skills/project-analysis
+```
+
+That registers the `/project-analysis` command.
+
 ## Python environment
 
-Project Doctor does not require global Python packages. From `wrapper/`, run
-`python3 -m doctor_wrapper.bootstrap`; it creates the gitignored `wrapper/.venv` and
-installs the wrapper and the PyDriller history lane there — this is all a doctor run
+Project Analysis does not require global Python packages. From `wrapper/`, run
+`python3 -m analysis_wrapper.bootstrap`; it creates the gitignored `wrapper/.venv` and
+installs the wrapper and the PyDriller history lane there — this is all an analysis run
 needs. Developers working on the wrapper itself add `--dev` to also install test
 dependencies, then run tests as `.venv/bin/python -m pytest`. The CLI is
-`.venv/bin/project-doctor-wrapper`. See `wrapper/README.md` for details.
+`.venv/bin/project-analysis-wrapper`. See `wrapper/README.md` for details.
 
 ## Tracking
 
-Linear: team `57blocks-Project-Doctor`, project **Project Doctor v1**
+Linear: team `57blocks-Project-Analysis`, project **Project Analysis**
 (issues 57B-5 … 57B-20, four phase milestones with user review at each exit).
+The team key stays `57B` and existing `57B-*` issue identifiers are unchanged.

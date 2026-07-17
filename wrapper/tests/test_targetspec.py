@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from doctor_wrapper.targetspec import (
+from analysis_wrapper.targetspec import (
     GitProvenance,
     IntegrationCandidate,
     PackageManager,

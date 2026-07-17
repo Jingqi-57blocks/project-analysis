@@ -1,7 +1,7 @@
 import subprocess
 
-from doctor_wrapper.git_history.identity import IdentityResolver, is_bot
-from doctor_wrapper.git_history.worker import analyze
+from analysis_wrapper.git_history.identity import IdentityResolver, is_bot
+from analysis_wrapper.git_history.worker import analyze
 
 
 def _git(repo, *args, name="A", email="a@example.invalid"):

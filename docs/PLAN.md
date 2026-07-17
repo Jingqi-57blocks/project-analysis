@@ -1,5 +1,7 @@
 # Project Doctor — Canonical Plan (v3.4)
 
+> **Rename note (57B-33, 2026-07-17):** the product was renamed to **Project Analysis**; this historical plan keeps its original "Project Doctor" name unchanged as a preserved record.
+
 **Status:** canonical. v3.2 base (2026-07-16, reviewer-approved for Phase 0) plus the
 v3.4 amendments (§16) and execution decisions (§17). Linear project **Project Doctor v1**
 (team `57blocks-Project-Doctor`, issues 57B-5…57B-21) tracks execution against this plan.

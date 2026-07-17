@@ -2,8 +2,8 @@
 
 import pytest
 
-from doctor_wrapper import astgrep
-from doctor_wrapper.discovery import access_model
+from analysis_wrapper import astgrep
+from analysis_wrapper.discovery import access_model
 
 FIX = astgrep.RULES_DIR / "fixtures" / "access"
 

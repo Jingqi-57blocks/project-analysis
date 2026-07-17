@@ -36,7 +36,7 @@ def safe_git_env() -> dict[str, str]:
 
 
 def git_command(repo: str | Path, *args: str) -> list[str]:
-    requested = os.environ.get("PROJECT_DOCTOR_GIT_BINARY") or shutil.which("git") or ""
+    requested = os.environ.get("PROJECT_ANALYSIS_GIT_BINARY") or shutil.which("git") or ""
     binary = Path(requested).expanduser().resolve() if requested else None
     root = Path(repo).expanduser().resolve()
     if binary is None or not binary.is_file():

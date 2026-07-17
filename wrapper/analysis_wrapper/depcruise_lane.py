@@ -1,13 +1,13 @@
-"""Dependency-cruiser lane — the doctor-owned JS/TS coupling-graph signal.
+"""Dependency-cruiser lane — the analyzer-owned JS/TS coupling-graph signal.
 
 Split out of registry so the alias-resolution + config-generation machinery
 (TS targets only) lives with the tool it configures, and registry stays lean.
-The binary is the pinned doctor env (``node_env``), never a global depcruise and
+The binary is the pinned analyzer env (``node_env``), never a global depcruise and
 never one resolved from a target.
 
 Resolution strategy (item 2): for a TS target the prepare step runs the Node
 helper (official TypeScript compiler API + static vite-alias AST extraction) and
-writes a doctor-owned depcruise config UNDER THE RUN OUTPUT DIR that wires the
+writes an analyzer-owned depcruise config UNDER THE RUN OUTPUT DIR that wires the
 resolved aliases into a generated tsconfig. ``argv`` then switches to
 ``--config <that file>``. Without a prepared config (plain JS, or the resolver
 was unavailable) ``argv`` keeps the safe ``--no-config`` scan, and the >15%
@@ -44,7 +44,7 @@ def _ts_support_guard(target: RepoTarget) -> str:
     if not info.available:
         return f"dependency signal unavailable: {info.reason}"
     if not (info.supports_ts and info.supports_tsx):
-        return ("dependency signal unavailable: doctor node_tools env lacks "
+        return ("dependency signal unavailable: analyzer node_tools env lacks "
                 "TypeScript/.tsx support (fail-closed for a TS target)")
     return ""
 
@@ -112,7 +112,7 @@ def dependency_cruiser(target: RepoTarget) -> ToolDef:
         guards=[_ts_support_guard],
         prepare=_prepare, annotate=_annotate,
         extra_notes="; ".join(x for x in (
-            "coupling graph via the doctor-owned pinned depcruise+typescript env "
+            "coupling graph via the analyzer-owned pinned depcruise+typescript env "
             "(node_tools) — never a global or target-resolved binary",
             notes) if x),
     )

@@ -1,7 +1,7 @@
 [project]
-name = "doctor-wrapper"
+name = "analysis-wrapper"
 version = "0.1.0"
-description = "Project Doctor tool-execution wrapper (stdlib core; pydriller only in the git_history lane)"
+description = "Project Analysis tool-execution wrapper (stdlib core; pydriller only in the git_history lane)"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -10,10 +10,10 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["doctor_wrapper*"]
+include = ["analysis_wrapper*"]
 
 [project.scripts]
-project-doctor-wrapper = "doctor_wrapper.cli:main"
+project-analysis-wrapper = "analysis_wrapper.cli:main"
 
 [project.optional-dependencies]
 history = ["pydriller==2.10"]

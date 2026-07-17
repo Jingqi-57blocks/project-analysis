@@ -15,7 +15,7 @@ from pathlib import Path
 from ..targetspec import stable_repo_id
 
 # Never descend into these (vendored/generated trees can embed dependency
-# repos); mirrors the wrapper's Tier-1 exclusions plus the doctor's own
+# repos); mirrors the wrapper's Tier-1 exclusions plus the analyzer's own
 # runtime directories in case the workspace overlaps a skill checkout.
 PRUNE_DIRS = frozenset(
     {"node_modules", "vendor", "dist", "build", "coverage", "state", "output"}

@@ -4,9 +4,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from doctor_wrapper import lifecycle
-from doctor_wrapper.cli import main
-from doctor_wrapper.lifecycle import DRILLDOWN_STAGES, Pointers, RunState
+from analysis_wrapper import lifecycle
+from analysis_wrapper.cli import main
+from analysis_wrapper.lifecycle import DRILLDOWN_STAGES, Pointers, RunState
 
 
 def _overview(tmp_path, target, capsys, *, complete=True):

@@ -118,7 +118,7 @@ class IntegrationCandidate:
 class TargetSpec:
     repos: list[RepoTarget]
     integration_candidates: list[IntegrationCandidate] = field(default_factory=list)
-    produced_by: str = ""        # discovery identity, e.g. "doctor-discovery/0.1.0"
+    produced_by: str = ""        # discovery identity, e.g. "analysis-discovery/0.1.0"
     produced_at: str = ""        # ISO timestamp (recorded, never generated here)
 
     def repo(self, repo_id: str) -> RepoTarget:

@@ -2,7 +2,7 @@
 
 import json
 
-from doctor_wrapper.discovery.stacks import detect
+from analysis_wrapper.discovery.stacks import detect
 
 
 def _write(path, content=""):

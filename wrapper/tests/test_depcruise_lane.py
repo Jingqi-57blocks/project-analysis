@@ -3,12 +3,12 @@
 import json
 from pathlib import Path
 
-from doctor_wrapper import node_env, parsers
-from doctor_wrapper.depcruise_lane import dependency_cruiser
-from doctor_wrapper.targetspec import RepoTarget
+from analysis_wrapper import node_env, parsers
+from analysis_wrapper.depcruise_lane import dependency_cruiser
+from analysis_wrapper.targetspec import RepoTarget
 
 
-def test_binary_is_the_doctor_env_never_global(target):
+def test_binary_is_the_analyzer_env_never_global(target):
     td = dependency_cruiser(target)
     assert td.binary.replace("\\", "/").endswith("node_tools/node_modules/.bin/depcruise")
 
@@ -29,7 +29,7 @@ def test_ts_guard_unavailable_when_env_lacks_ts(monkeypatch, target):
 def test_ts_guard_unavailable_when_env_absent(monkeypatch, target):
     target.stacks = ["ts"]
     monkeypatch.setattr(node_env, "probe", lambda *a, **k: node_env.NodeToolInfo(
-        available=False, reason="doctor node_tools env not installed"))
+        available=False, reason="analyzer node_tools env not installed"))
     assert "unavailable" in dependency_cruiser(target).check_guards(target)
 
 

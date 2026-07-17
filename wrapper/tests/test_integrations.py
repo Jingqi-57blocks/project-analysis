@@ -2,8 +2,8 @@
 
 import pytest
 
-from doctor_wrapper import astgrep
-from doctor_wrapper.discovery import integrations
+from analysis_wrapper import astgrep
+from analysis_wrapper.discovery import integrations
 
 
 def test_host_fragment_filter_drops_files_and_identifiers():

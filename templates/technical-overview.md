@@ -32,7 +32,7 @@ links; generate it LAST so it matches the final document exactly}}
 ## Run provenance
 
 - **Run:** `{{run_id}}` · analyzed at {{analyzed_at_utc}} · language `{{language}}`
-- **Doctor:** version {{doctor_version}} · wrapper {{wrapper_version}} · model `{{model_id}}`
+- **Project Analysis:** version {{analysis_version}} · wrapper {{wrapper_version}} · model `{{model_id}}`
 - **Workspace:** `{{workspace_label — basename/logical name ONLY; absolute machine paths
   must never appear in persisted reports}}` → project-id `{{project_id}}`
 

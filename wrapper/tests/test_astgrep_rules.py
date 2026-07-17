@@ -6,7 +6,7 @@ disclosed negatives (mounts, non-route calls, local compute) do NOT match."""
 
 import pytest
 
-from doctor_wrapper import astgrep
+from analysis_wrapper import astgrep
 
 FIX = astgrep.RULES_DIR / "fixtures"
 pytestmark = pytest.mark.skipif(not astgrep.available(), reason="ast-grep not installed")

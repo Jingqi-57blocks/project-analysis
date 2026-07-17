@@ -3,10 +3,10 @@
 import json
 import subprocess
 
-from doctor_wrapper.cli import main
-from doctor_wrapper.discovery import emit
-from doctor_wrapper.discovery.modules import extract
-from doctor_wrapper.targetspec import TargetSpec
+from analysis_wrapper.cli import main
+from analysis_wrapper.discovery import emit
+from analysis_wrapper.discovery.modules import extract
+from analysis_wrapper.targetspec import TargetSpec
 
 
 def _write(path, content):

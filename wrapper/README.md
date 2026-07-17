@@ -1,4 +1,4 @@
-# Project Doctor wrapper
+# Project Analysis wrapper
 
 The wrapper executes the allowlisted Phase-0 toolchain from a discovery-produced
 `TargetSpec`. It invokes tools, classifies their execution status, writes provenance
@@ -10,15 +10,15 @@ to create the environment; all packages are installed into `wrapper/.venv`.
 
 ```bash
 cd wrapper
-python3 -m doctor_wrapper.bootstrap          # runtime + PyDriller
-python3 -m doctor_wrapper.bootstrap --dev    # also install pytest
+python3 -m analysis_wrapper.bootstrap          # runtime + PyDriller
+python3 -m analysis_wrapper.bootstrap --dev    # also install pytest
 
 # One tool against one stable repository ID (the output path must be new)
-.venv/bin/project-doctor-wrapper --targets targets.json --out output/run/signals \
+.venv/bin/project-analysis-wrapper --targets targets.json --out output/run/signals \
   run --repo api-11112222 --tool scc
 
 # All applicable local tools; add --include-network only with explicit approval
-.venv/bin/project-doctor-wrapper --targets targets.json --out output/run/signals sweep
+.venv/bin/project-analysis-wrapper --targets targets.json --out output/run/signals sweep
 
 # Tests also use the isolated interpreter; shell activation is unnecessary
 .venv/bin/python -m pytest
@@ -46,14 +46,14 @@ manifest excludes volatile fields and supports byte-for-byte deterministic compa
 
 PyDriller is primary for history analysis and bootstrap installs the pinned 2.10
 release into the virtual environment. If the wrapper is deliberately run outside
-that environment, set `PROJECT_DOCTOR_PYDRILLER_PYTHON` to an isolated Python
+that environment, set `PROJECT_ANALYSIS_PYDRILLER_PYTHON` to an isolated Python
 containing PyDriller 2.10; otherwise the lane uses the disclosed plain-Git fallback
 and reports `partial`. Commit traversal and per-file modification data come from
 PyDriller; the co-change / ownership / author-roster / sampling AGGREGATION on top
-of it is a tested, thin doctor-owned layer (`git_history/worker.py`,
+of it is a tested, thin analyzer-owned layer (`git_history/worker.py`,
 `git_history/identity.py`) — not a re-implementation of history parsing.
 
-## Doctor-owned Node toolchain, ast-grep, and SQLGlot
+## Analyzer-owned Node toolchain, ast-grep, and SQLGlot
 
 `bootstrap` (the one approved network step) additionally sets up a pinned,
 lockfile-frozen Node toolchain under `node_tools/` via pnpm —
@@ -68,7 +68,7 @@ preparation step: `node_helpers/resolve-ts-config.mjs` reads tsconfig
 (baseUrl/paths/references) with the official TypeScript compiler API and
 statically extracts vite `resolve.alias` from the config AST (literal mappings
 only; dynamic ones reported unresolved — target config is never executed), and
-`resolvers/ts_aliases.py` writes a doctor-owned depcruise + tsconfig config
+`resolvers/ts_aliases.py` writes an analyzer-owned depcruise + tsconfig config
 UNDER THE RUN OUTPUT DIR. The manifest records depcruise + typescript versions,
 the config inputs used, and BOTH total and internal edge-resolution metrics; the
 bounded view lists distinct dependency-cycle member files.
@@ -95,7 +95,7 @@ on failure.
 
 The offline Go lane records GOOS/GOARCH/CGO_ENABLED and build-tag scope in every
 manifest; a cold cache / missing dep / load failure fails loudly. Warm the module
-cache first under approval: `python3 -m doctor_wrapper.bootstrap --warm-go <repo>`
+cache first under approval: `python3 -m analysis_wrapper.bootstrap --warm-go <repo>`
 (`go list -deps -json` with network allowed, still `-mod=readonly`). The
 git-history co-change pass takes an optional `--coupling-sample-cap` (0 = no cap,
 unchanged; when exceeded, an evenly-spaced, disclosed sample is used).

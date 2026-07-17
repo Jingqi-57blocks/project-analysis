@@ -2,7 +2,7 @@
 
 import json
 
-from doctor_wrapper.discovery.pm import identify
+from analysis_wrapper.discovery.pm import identify
 
 
 def test_package_manager_field_wins_over_conflicting_lockfiles(tmp_path):

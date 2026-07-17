@@ -49,7 +49,7 @@ GO_ENV_NOTE = ("OFFLINE-FIRST: GOPROXY=off/GOSUMDB=off — no network destinatio
                "contacted; -mod=readonly, local toolchain, workspaces off. A cold "
                "module cache / missing dep / load failure fails LOUDLY (never a clean "
                "no-findings result): warm the cache under approval "
-               "(`python3 -m doctor_wrapper.bootstrap --warm-go <repo>`) and rerun")
+               "(`python3 -m analysis_wrapper.bootstrap --warm-go <repo>`) and rerun")
 
 # Build settings the offline Go lane analyzes under, recorded in every manifest
 # so the analyzed universe is explicit: the LOCAL toolchain's GOOS/GOARCH/CGO and
@@ -136,7 +136,7 @@ _BENIGN_NPMRC_KEYS = {
 
 
 def _approved_hosts() -> set[str]:
-    extra = os.environ.get("PROJECT_DOCTOR_ALLOW_HOSTS", "")
+    extra = os.environ.get("PROJECT_ANALYSIS_ALLOW_HOSTS", "")
     return REGISTRY_HOSTS | {h.strip().lower() for h in extra.split(",") if h.strip()}
 
 
@@ -433,22 +433,22 @@ def outdated(target: RepoTarget) -> ToolDef:
 def git_history(target: RepoTarget, since: str | None = None,
                 coupling_sample_cap: int = 0) -> ToolDef:
     since = since or (date.today() - timedelta(days=730)).isoformat()
-    requested = os.environ.get("PROJECT_DOCTOR_PYDRILLER_PYTHON", "")
+    requested = os.environ.get("PROJECT_ANALYSIS_PYDRILLER_PYTHON", "")
     binary = requested if requested and Path(requested).is_file() else sys.executable
     package_root = str(Path(__file__).resolve().parents[1])
     git_binary = str(Path(shutil.which("git") or "git").resolve())
     return ToolDef(
         name="git-history", binary=binary, validated_version="pydriller 2.10",
-        version_argv=[binary, "-m", "doctor_wrapper.git_history.worker", "--version"],
+        version_argv=[binary, "-m", "analysis_wrapper.git_history.worker", "--version"],
         normal_exits=frozenset({0}),
         # coupling-sample-cap 0 = no cap (default: unchanged behavior).
-        argv_builder=lambda _t: [binary, "-m", "doctor_wrapper.git_history.worker",
+        argv_builder=lambda _t: [binary, "-m", "analysis_wrapper.git_history.worker",
                                  "--repo", target.path, "--since", since,
                                  "--top", "20", "--min-shared", "5", "--bulk-limit", "50",
                                  "--coupling-sample-cap", str(coupling_sample_cap)],
         env={
             "PYTHONPATH": package_root,
-            "PROJECT_DOCTOR_GIT_BINARY": git_binary,
+            "PROJECT_ANALYSIS_GIT_BINARY": git_binary,
             "GIT_PYTHON_GIT_EXECUTABLE": git_binary,
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,

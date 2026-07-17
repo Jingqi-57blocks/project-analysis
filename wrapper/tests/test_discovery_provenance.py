@@ -2,7 +2,7 @@
 
 import subprocess
 
-from doctor_wrapper.discovery.provenance import git_provenance, repo_provenance
+from analysis_wrapper.discovery.provenance import git_provenance, repo_provenance
 
 
 def _git(repo, *args):

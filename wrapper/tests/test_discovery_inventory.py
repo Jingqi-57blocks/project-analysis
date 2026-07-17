@@ -4,8 +4,8 @@ import subprocess
 
 import pytest
 
-from doctor_wrapper.discovery.inventory import MAX_DEPTH, Inventory, find_repos
-from doctor_wrapper.targetspec import stable_repo_id
+from analysis_wrapper.discovery.inventory import MAX_DEPTH, Inventory, find_repos
+from analysis_wrapper.targetspec import stable_repo_id
 
 
 def _init_repo(path):

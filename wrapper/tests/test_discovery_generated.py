@@ -1,6 +1,6 @@
 """57B-11 S4: Tier-2 exclusions are derived per repo, evidence-backed."""
 
-from doctor_wrapper.discovery.generated import derive
+from analysis_wrapper.discovery.generated import derive
 
 
 def _write(path, content=""):

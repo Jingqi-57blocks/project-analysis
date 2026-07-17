@@ -58,7 +58,7 @@ def test_skill_frontmatter_names_the_command():
     match = re.match(r"^---\n(.*?)\n---\n", text, re.S)
     assert match, "SKILL.md must start with YAML frontmatter"
     fields = dict(line.split(":", 1) for line in match.group(1).splitlines() if ":" in line)
-    assert fields["name"].strip() == "project-doctor"
+    assert fields["name"].strip() == "project-analysis"
     assert len(fields["description"].strip()) > 40
 
 

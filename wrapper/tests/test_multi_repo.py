@@ -1,7 +1,7 @@
-from doctor_wrapper import gitinfo
-from doctor_wrapper.executor import run_tool
-from doctor_wrapper.status import Status
-from doctor_wrapper.targetspec import GitProvenance, RepoTarget, stable_repo_id
+from analysis_wrapper import gitinfo
+from analysis_wrapper.executor import run_tool
+from analysis_wrapper.status import Status
+from analysis_wrapper.targetspec import GitProvenance, RepoTarget, stable_repo_id
 
 from test_executor import bash_tool
 

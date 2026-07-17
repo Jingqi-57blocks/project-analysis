@@ -1,6 +1,6 @@
 """Deployable-unit signal view (item 13) — locate + parse-as-data, domain-neutral."""
 
-from doctor_wrapper.discovery import deploy_units
+from analysis_wrapper.discovery import deploy_units
 
 
 def _write(path, content=""):

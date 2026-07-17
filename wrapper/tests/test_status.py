@@ -1,4 +1,4 @@
-from doctor_wrapper.status import Status, aggregate, severity, wrapper_exit_code
+from analysis_wrapper.status import Status, aggregate, severity, wrapper_exit_code
 
 
 def test_severity_order_is_failed_partial_skipped_complete():

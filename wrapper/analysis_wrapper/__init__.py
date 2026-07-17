@@ -1,4 +1,4 @@
-"""doctor_wrapper — the Project Doctor tool-execution wrapper (Linear 57B-10).
+"""analysis_wrapper — the Project Analysis tool-execution wrapper (Linear 57B-10).
 
 One component, separate concerns:
   status     — the authoritative signal-status contract and aggregation

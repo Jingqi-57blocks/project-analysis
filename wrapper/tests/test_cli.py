@@ -3,10 +3,10 @@ import os
 import argparse
 from pathlib import Path
 
-from doctor_wrapper.cli import _sweep, main
-from doctor_wrapper.status import Status
-from doctor_wrapper.targetspec import TargetSpec
-from doctor_wrapper.tooldefs import ToolDef
+from analysis_wrapper.cli import _sweep, main
+from analysis_wrapper.status import Status
+from analysis_wrapper.targetspec import TargetSpec
+from analysis_wrapper.tooldefs import ToolDef
 
 
 def _fake_scc(tmp_path: Path, body: str) -> Path:
@@ -83,8 +83,8 @@ def test_sweep_records_unauthorized_network_lanes_as_skipped(monkeypatch, tmp_pa
         version_argv=["bash", "--version"],
         argv_builder=lambda _target: ["bash", "-c", "echo should-not-run"],
     )
-    monkeypatch.setattr("doctor_wrapper.cli.local_tools", lambda _target: [])
-    monkeypatch.setattr("doctor_wrapper.cli.network_tools", lambda _target: [definition])
+    monkeypatch.setattr("analysis_wrapper.cli.local_tools", lambda _target: [])
+    monkeypatch.setattr("analysis_wrapper.cli.network_tools", lambda _target: [definition])
     args = argparse.Namespace(since="2024-01-01", include_network=False,
                               scan_date="2026-07-16")
     results = _sweep(args, TargetSpec([target]), tmp_path / "signals")

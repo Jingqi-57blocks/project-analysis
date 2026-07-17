@@ -1,10 +1,10 @@
-"""TS alias resolver → doctor-owned depcruise config generation (item 2)."""
+"""TS alias resolver → analyzer-owned depcruise config generation (item 2)."""
 
 import json
 import subprocess
 
-from doctor_wrapper.resolvers import ts_aliases
-from doctor_wrapper.targetspec import RepoTarget
+from analysis_wrapper.resolvers import ts_aliases
+from analysis_wrapper.targetspec import RepoTarget
 
 
 def _target(tmp_path):
@@ -14,7 +14,7 @@ def _target(tmp_path):
     return RepoTarget(repo_id="widget-ui", path=str(repo), stacks=["ts"]), repo
 
 
-def test_resolver_generates_doctor_tsconfig_and_depcruise_config(tmp_path):
+def test_resolver_generates_analysis_tsconfig_and_depcruise_config(tmp_path):
     target, repo = _target(tmp_path)
     out = tmp_path / "out"
     out.mkdir()
@@ -33,14 +33,14 @@ def test_resolver_generates_doctor_tsconfig_and_depcruise_config(tmp_path):
         run=run, node="/usr/bin/node")
 
     assert res.config_path and res.config_path.exists()
-    doctor_ts = json.loads((out / "tsconfig-doctor-widget-ui.json").read_text())
-    assert doctor_ts["extends"].endswith("tsconfig.app.json")
-    assert doctor_ts["compilerOptions"]["baseUrl"] == str(repo)
-    paths = doctor_ts["compilerOptions"]["paths"]
+    analysis_ts = json.loads((out / "tsconfig-analysis-widget-ui.json").read_text())
+    assert analysis_ts["extends"].endswith("tsconfig.app.json")
+    assert analysis_ts["compilerOptions"]["baseUrl"] == str(repo)
+    paths = analysis_ts["compilerOptions"]["paths"]
     assert paths["src/*"] == ["src/*"]          # prefix alias, relative to baseUrl
     assert paths["gadget"] == ["lib/gadget"]    # exact alias ($ stripped)
     cfg = json.loads(res.config_path.read_text())
-    assert cfg["options"]["tsConfig"]["fileName"].endswith("tsconfig-doctor-widget-ui.json")
+    assert cfg["options"]["tsConfig"]["fileName"].endswith("tsconfig-analysis-widget-ui.json")
     assert "alias" not in cfg["options"]["enhancedResolveOptions"]  # depcruise rejects it
     assert "2 alias(es) resolved, 1 unresolved" in res.notes
     assert res.reads == ["tsconfig.app.json"]

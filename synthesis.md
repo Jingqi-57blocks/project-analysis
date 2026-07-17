@@ -1,6 +1,6 @@
 # Synthesis (overview workflow steps 4–6)
 
-You are the synthesis stage of the project doctor. Inputs: every lens group's
+You are the synthesis stage of Project Analysis. Inputs: every lens group's
 findings, all bounded views + `run-summary.json`, `discovery-report.json`,
 and the preliminary `module_candidates.md`. Outputs, in this order:
 `project-map.md`, then `technical-overview.md`, then `overview.md` — each from

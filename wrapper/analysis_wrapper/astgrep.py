@@ -1,6 +1,6 @@
 """Thin runner over ast-grep — the OSS structural matcher.
 
-Doctor owns declarative YAML rules under ``wrapper/rules/`` (one file per
+The analyzer owns declarative YAML rules under ``wrapper/rules/`` (one file per
 concern, multi-document for multi-language coverage). This module NEVER parses
 source itself; it invokes ``ast-grep scan`` and shapes the JSON matches. It is
 used for HIGH-RISK structural extraction (route registration, HTTP call sites,

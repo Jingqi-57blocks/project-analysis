@@ -1,4 +1,4 @@
-"""TS alias resolution → a doctor-owned dependency-cruiser config (item 2).
+"""TS alias resolution → an analyzer-owned dependency-cruiser config (item 2).
 
 Invokes the Node helper (official TypeScript compiler API; reads tsconfig
 baseUrl/paths/references + static vite aliases — never executes target config),
@@ -7,7 +7,7 @@ that wires the resolved aliases into enhancedResolveOptions plus the tsConfig.
 The generated config is what lets internal `src/*`/relative edges resolve, so the
 coupling graph is no longer badly undercounted on Vite/TS repos.
 
-When node, the helper, or the doctor TypeScript lib is unavailable, resolution
+When node, the helper, or the analyzer TypeScript lib is unavailable, resolution
 degrades to a disclosed note and depcruise falls back to its safe `--no-config`
 scan; the >15% internal-unresolved degrader then still reports partial coverage.
 """
@@ -70,7 +70,7 @@ def resolve_and_generate(
     if vite:
         argv += ["--vite", vite]
     env = dict(os.environ)
-    env["DOCTOR_TS_LIB"] = str(node_env.typescript_lib())
+    env["ANALYSIS_TS_LIB"] = str(node_env.typescript_lib())
     try:
         proc = run(argv, capture_output=True, text=True, timeout=120, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -93,7 +93,7 @@ def resolve_and_generate(
 
     # depcruise resolves tsconfig `paths` natively but rejects an enhanced-resolve
     # `alias` map, so BOTH tsconfig paths and static vite aliases are fed through
-    # one doctor-owned tsconfig: it EXTENDS the target (inheriting include/options),
+    # one analyzer-owned tsconfig: it EXTENDS the target (inheriting include/options),
     # pins baseUrl explicitly, and replaces `paths` with the merged, resolvable set.
     merged_paths: dict[str, list[str]] = {}
     for key, abs_target in aliases.items():
@@ -107,13 +107,13 @@ def resolve_and_generate(
             merged_paths[f"{key}/*"] = [f"{rel}/*"]
             merged_paths.setdefault(key, [rel])
 
-    doctor_tsconfig = {
+    analysis_tsconfig = {
         "extends": str(root / tsconfig),
         "compilerOptions": {"baseUrl": base_url, "paths": merged_paths},
     }
-    tsconfig_path = Path(out) / f"tsconfig-doctor-{target.repo_id}.json"
+    tsconfig_path = Path(out) / f"tsconfig-analysis-{target.repo_id}.json"
     tsconfig_path.write_text(
-        json.dumps(doctor_tsconfig, indent=2, sort_keys=True) + "\n", "utf-8")
+        json.dumps(analysis_tsconfig, indent=2, sort_keys=True) + "\n", "utf-8")
 
     config = {
         "forbidden": [],

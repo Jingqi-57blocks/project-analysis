@@ -6,8 +6,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # wrapper/ on path
 
-from doctor_wrapper.targetspec import GitProvenance, RepoTarget, stable_repo_id
-from doctor_wrapper import gitinfo
+from analysis_wrapper.targetspec import GitProvenance, RepoTarget, stable_repo_id
+from analysis_wrapper import gitinfo
 
 
 def _git(repo: Path, *args: str) -> None:

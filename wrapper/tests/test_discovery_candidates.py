@@ -1,6 +1,6 @@
 """57B-11 S6: integration candidates — every signal kind exercised, no name lists."""
 
-from doctor_wrapper.discovery.candidates import generate
+from analysis_wrapper.discovery.candidates import generate
 
 
 def _write(path, content):

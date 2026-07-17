@@ -2,8 +2,8 @@
 
 import subprocess
 
-from doctor_wrapper import go_cache, parsers
-from doctor_wrapper.registry import go_list
+from analysis_wrapper import go_cache, parsers
+from analysis_wrapper.registry import go_list
 
 
 def test_go_env_records_build_settings_and_offline_pins(target):

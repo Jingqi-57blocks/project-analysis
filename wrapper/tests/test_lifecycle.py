@@ -4,10 +4,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from doctor_wrapper import lifecycle
-from doctor_wrapper.cli import main
-from doctor_wrapper.lifecycle import Pointers, RunState, mint_run_id
-from doctor_wrapper.targetspec import TargetSpec
+from analysis_wrapper import lifecycle
+from analysis_wrapper.cli import main
+from analysis_wrapper.lifecycle import Pointers, RunState, mint_run_id
+from analysis_wrapper.targetspec import TargetSpec
 
 
 WHEN = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)

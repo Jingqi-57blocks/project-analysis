@@ -4,8 +4,8 @@ import importlib.util
 
 import pytest
 
-from doctor_wrapper import astgrep
-from doctor_wrapper.discovery import tables
+from analysis_wrapper import astgrep
+from analysis_wrapper.discovery import tables
 
 FIXDB = astgrep.RULES_DIR / "fixtures" / "db"
 _HAS_SQLGLOT = importlib.util.find_spec("sqlglot") is not None

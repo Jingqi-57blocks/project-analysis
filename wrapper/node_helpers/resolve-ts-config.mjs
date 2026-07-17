@@ -1,4 +1,4 @@
-// Doctor-owned TS alias resolver. Reads a repo's tsconfig (baseUrl / paths /
+// Analyzer-owned TS alias resolver. Reads a repo's tsconfig (baseUrl / paths /
 // project references) with the OFFICIAL TypeScript compiler API, and statically
 // extracts vite `resolve.alias` mappings from the config AST. It NEVER executes
 // target config — vite aliases are read from the parsed syntax tree only, and
@@ -7,7 +7,7 @@
 // is reported as `unresolved`, never guessed.
 //
 // Usage:  node resolve-ts-config.mjs --repo <abs> --tsconfig <rel> [--vite <rel>]
-// Env:    DOCTOR_TS_LIB = absolute path to the doctor-owned typescript package.
+// Env:    ANALYSIS_TS_LIB = absolute path to the analyzer-owned typescript package.
 // Output: JSON on stdout — { aliases, baseUrl, paths, references, unresolved,
 //         sources, typescriptVersion }. A fatal error prints { error } + exit 1.
 
@@ -35,9 +35,9 @@ if (!args.repo || !args.tsconfig) die('--repo and --tsconfig are required');
 
 let ts;
 try {
-  ts = require(process.env.DOCTOR_TS_LIB || 'typescript');
+  ts = require(process.env.ANALYSIS_TS_LIB || 'typescript');
 } catch (e) {
-  die('cannot load doctor typescript lib: ' + e.message);
+  die('cannot load analyzer typescript lib: ' + e.message);
 }
 
 const repo = path.resolve(args.repo);

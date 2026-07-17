@@ -5,10 +5,10 @@ import os
 from pathlib import Path
 import pytest
 
-from doctor_wrapper import gitinfo
-from doctor_wrapper.executor import prepare_output_directory, run_tool
-from doctor_wrapper.status import Status
-from doctor_wrapper.tooldefs import ToolDef
+from analysis_wrapper import gitinfo
+from analysis_wrapper.executor import prepare_output_directory, run_tool
+from analysis_wrapper.status import Status
+from analysis_wrapper.tooldefs import ToolDef
 
 from test_executor import bash_tool, run  # reuse helpers
 
@@ -66,7 +66,7 @@ def test_output_inside_target_is_refused_before_any_write(target, synthetic_repo
 
 
 def test_output_is_validated_against_all_targets_before_creation(target, tmp_path):
-    from doctor_wrapper.targetspec import RepoTarget
+    from analysis_wrapper.targetspec import RepoTarget
     later = tmp_path / "later"
     later.mkdir()
     second = RepoTarget(repo_id="later", path=str(later))
@@ -178,7 +178,7 @@ def test_porcelain_markers_not_stripped(synthetic_repo):
 
 
 def test_non_git_target_runs_in_reduced_mode(tmp_path):
-    from doctor_wrapper.targetspec import RepoTarget, stable_repo_id
+    from analysis_wrapper.targetspec import RepoTarget, stable_repo_id
     plain = tmp_path / "plain-dir"
     plain.mkdir()
     (plain / "a.js").write_text("x\n")

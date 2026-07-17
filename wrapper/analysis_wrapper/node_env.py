@@ -1,4 +1,4 @@
-"""Doctor-owned pinned Node toolchain (dependency-cruiser + typescript).
+"""Analyzer-owned pinned Node toolchain (dependency-cruiser + typescript).
 
 The environment lives under ``wrapper/node_tools`` and is installed with pnpm
 from a committed lockfile at bootstrap (a network step, approved once). We NEVER
@@ -44,7 +44,7 @@ def depcruise_binary(node_tools: Path = NODE_TOOLS_DIR) -> Path | None:
 
 
 def typescript_lib(node_tools: Path = NODE_TOOLS_DIR) -> Path:
-    """The doctor-owned TypeScript package dir — passed to the Node helper so it
+    """The analyzer-owned TypeScript package dir — passed to the Node helper so it
     requires OUR compiler API, never one resolved from a target."""
     return node_tools / "node_modules" / "typescript"
 
@@ -105,7 +105,7 @@ def probe(node_tools: Path = NODE_TOOLS_DIR,
     if binary is None:
         info = NodeToolInfo(
             available=False,
-            reason="doctor node_tools env not installed — run bootstrap (pnpm)")
+            reason="analyzer node_tools env not installed — run bootstrap (pnpm)")
     else:
         try:
             proc = run([str(binary), "--info"], capture_output=True, text=True,

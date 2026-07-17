@@ -1,4 +1,4 @@
-"""Create an isolated virtual environment for the Project Doctor wrapper.
+"""Create an isolated virtual environment for the Project Analysis wrapper.
 
 The host Python is used only for ``venv`` creation. The wrapper and every
 Python dependency are installed by the virtual environment's own interpreter,
@@ -42,7 +42,7 @@ def bootstrap(
 ) -> Path:
     """Create/update the venv and return its Python interpreter."""
     if sys.version_info < (3, 11):
-        raise RuntimeError("Project Doctor requires Python 3.11 or newer")
+        raise RuntimeError("Project Analysis requires Python 3.11 or newer")
 
     environment = environment.expanduser().resolve()
     python = environment_python(environment)
@@ -89,7 +89,7 @@ def bootstrap(
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
-        description="install Project Doctor Python dependencies into an isolated venv"
+        description="install Project Analysis Python dependencies into an isolated venv"
     )
     result.add_argument(
         "--venv",
@@ -130,13 +130,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     executable = python.parent / (
-        "project-doctor-wrapper.exe" if sys.platform == "win32"
-        else "project-doctor-wrapper"
+        "project-analysis-wrapper.exe" if sys.platform == "win32"
+        else "project-analysis-wrapper"
     )
     print(f"virtual environment: {python.parent.parent}")
     print(f"wrapper: {executable}")
 
-    # Doctor-owned pinned Node toolchain (dependency-cruiser + typescript). This
+    # Analyzer-owned pinned Node toolchain (dependency-cruiser + typescript). This
     # is the one approved network install for the dependency lane; a failure is
     # disclosed but non-fatal — the signal then fails closed downstream.
     if not args.skip_node_tools:

@@ -3,9 +3,9 @@ generic synthetic repos; fake tools are bash one-liners."""
 
 import json
 
-from doctor_wrapper.executor import run_tool
-from doctor_wrapper.status import Status
-from doctor_wrapper.tooldefs import ToolDef
+from analysis_wrapper.executor import run_tool
+from analysis_wrapper.status import Status
+from analysis_wrapper.tooldefs import ToolDef
 
 SCAN_DATE = "2026-07-16"
 
@@ -126,7 +126,7 @@ def test_target_mutation_is_failed_loudly(target, tmp_path):
 def test_already_dirty_target_is_valid_when_unchanged(target, tmp_path, synthetic_repo):
     (synthetic_repo / "wip.txt").write_text("uncommitted\n")  # pre-dirty
     # Discovery records the dirty state before execution.
-    from doctor_wrapper import gitinfo
+    from analysis_wrapper import gitinfo
     target.git.dirty_detail = gitinfo.dirty_detail(synthetic_repo)
     r = run(bash_tool("reader", "cat index.js > /dev/null"), target, tmp_path)
     assert r.status is Status.COMPLETE, "identical pre/post dirty state must pass"

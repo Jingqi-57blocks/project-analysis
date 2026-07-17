@@ -2,7 +2,7 @@
 
 import json
 
-from doctor_wrapper.sanitize import REDACTED, bound, redact, sanitize_text
+from analysis_wrapper.sanitize import REDACTED, bound, redact, sanitize_text
 
 MUST_REDACT = [
     ('{"token": "abc123"}', "abc123"),                    # quoted JSON value

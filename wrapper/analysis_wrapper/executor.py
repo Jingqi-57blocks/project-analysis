@@ -257,7 +257,7 @@ def run_tool(
     if preflight:
         return finish(Status.SKIPPED, f"preflight unavailable: {preflight}")
 
-    # Per-run preparation (e.g. depcruise alias resolution → doctor-owned config
+    # Per-run preparation (e.g. depcruise alias resolution → analyzer-owned config
     # written UNDER the output dir). Runs after authorization so it never touches
     # anything on a refused signal; a declined prepare fails closed (SKIPPED).
     if tooldef.prepare:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from doctor_wrapper.bootstrap import bootstrap, editable_install_target, environment_python
+from analysis_wrapper.bootstrap import bootstrap, editable_install_target, environment_python
 
 
 def test_install_target_keeps_runtime_and_dev_extras_explicit(tmp_path):

@@ -1,15 +1,15 @@
 ---
-name: project-doctor
-description: Project doctor — point it at any codebase (single- or multi-repo workspace, zero project-specific configuration) for a project overview + diagnosis (module map, ranked problems with evidence, honest coverage), then drill into any module for a PM-readable PRD and a dev-facing health report. Use when asked to diagnose, audit, map, or explain an unfamiliar or legacy project.
+name: project-analysis
+description: Project Analysis — point it at any codebase (single- or multi-repo workspace, zero project-specific configuration) for a project overview + diagnosis (module map, ranked problems with evidence, honest coverage), then drill into any module for a PM-readable PRD and a dev-facing health report. Use when asked to diagnose, audit, map, or explain an unfamiliar or legacy project.
 ---
 
-# Project Doctor
+# Project Analysis
 
-You are running the project doctor: a read-only diagnostician for codebases. You produce
+You are running Project Analysis: a read-only diagnostician for codebases. You produce
 (1) a **project overview + diagnosis** and (2) **module drill-downs** on request. The
 target may be a single repo or a multi-repo workspace. Nothing about the target is
 configured in advance — **zero project-specific configuration**: everything is discovered
-from its repositories. (The machine still needs the doctor's own prerequisites: Python
+from its repositories. (The machine still needs the analyzer's own prerequisites: Python
 3.11+, the wrapper bootstrap below, and the supported analysis tools — a missing tool
 means explicitly disclosed reduced coverage, never a silent gap.)
 
@@ -21,11 +21,11 @@ first-class confidence.
 ## Invocation
 
 ```
-/project-doctor [path] [--language zh-CN|en]
-/project-doctor module <module-id> [--from-run <run-id>] [--language zh-CN|en]
+/project-analysis [path] [--language zh-CN|en]
+/project-analysis module <module-id> [--from-run <run-id>] [--language zh-CN|en]
 ```
 
-(The command is `/project-doctor` because `/doctor` is a Claude Code built-in.)
+(The command is `/project-analysis`.)
 
 - `path` defaults to the current working directory; it is the **target workspace root**
   under which repositories are discovered.
@@ -34,7 +34,7 @@ first-class confidence.
   identifiers, and error strings are ALWAYS quoted verbatim from source — never
   translated. Intermediate artifacts (lens findings, signals) may remain English;
   the RUN language governs the delivered reports.
-- `/project-doctor module` resolves its source overview as: `--from-run <run-id>` if
+- `/project-analysis module` resolves its source overview as: `--from-run <run-id>` if
   given → otherwise the project's `current` pointer → otherwise **refuse**, listing the
   project's completed runs. A run other than `current` may be accepted later ONLY if it
   still passes the same match check as drill-down reuse (HEADs, clean state, tool
@@ -48,7 +48,7 @@ first-class confidence.
   this skill" when the skill loads; `${CLAUDE_SKILL_DIR}` where the runtime provides it).
   The wrapper, templates, `state/`, and `output/` all live HERE.
 - **`<workspace>`** — the target being analyzed. Treat it as read-only: NEVER create
-  `state/`, `output/`, virtualenvs, or any other doctor artifact inside the target; the
+  `state/`, `output/`, virtualenvs, or any other analyzer artifact inside the target; the
   wrapper enforces this for its own outputs, and you must uphold it for report files
   too. Be honest about the guarantee's scope: what is *verified* is **git-visible
   immutability** (pre/post `git status --porcelain` snapshots identical) — writes into
@@ -128,7 +128,7 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
   `signals/raw/` (self-gitignored), is never read into model context, and is never
   packaged. Everything else — views, manifests, reports — is redacted.
 - Excluded from analysis: `node_modules`, `vendor`, build output, generated code, and
-  the doctor's own `state/` and `output/`.
+  the analyzer's own `state/` and `output/`.
 
 ## Runs, pointers, and immutability
 
@@ -146,7 +146,7 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
   acceptance in one word.
 - A drill-down may reuse an overview run only when **every** repo's HEAD, clean state,
   and tool versions match the recorded provenance AND the analysis identity is unchanged
-  (doctor/wrapper version, tool definitions, prompt/template version, run language,
+  (analyzer/wrapper version, tool definitions, prompt/template version, run language,
   confirmed-facts revision — compared as recorded fields, not hashes). Any mismatch →
   run a new overview. Drill-downs write to `output/<project-id>/drilldown/<run-id>/`
   with a `source_overview_run` link.
@@ -193,7 +193,7 @@ anchored):
    never silently resolved). Write the run provenance block: per repo — path, HEAD,
    branch, credential-redacted remote URL, HEAD timestamp, `git describe`, dirty detail,
    submodule pins, history completeness (shallow flag, oldest commit, commit count);
-   run-level — doctor version, model id, language, analyzed-at.
+   run-level — analyzer version, model id, language, analyzed-at.
 2. **Preliminary module candidates** from routes, folder structure, table names, and
    committed API config → `module_candidates.md`, marked preliminary. Integration
    candidates are generated mechanically (imports, client initialization, outbound
@@ -248,7 +248,7 @@ Mint the drill-down run with the wrapper (it enforces resolution, staleness, and
 linkage — never create the directory by hand):
 
 ```
-"${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-doctor-wrapper" new-drilldown \
+"${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-analysis-wrapper" new-drilldown \
     --skill-root "${CLAUDE_SKILL_DIR}" --module <module-id> [--from-run <run-id>]
 ```
 
@@ -291,7 +291,7 @@ preserved across runs, with renames/merges recorded as aliases.
 ## Running the wrapper
 
 One-time per machine, from `<skill-dir>/wrapper`:
-`python3 -m doctor_wrapper.bootstrap` (creates the gitignored `wrapper/.venv` and
+`python3 -m analysis_wrapper.bootstrap` (creates the gitignored `wrapper/.venv` and
 installs the wrapper + history lane there — nothing global, no dev dependencies).
 **Bootstrap contacts the Python package index (PyPI) to install those dependencies** —
 setup-time network, distinct from analysis: tell the user and get their OK before the
@@ -299,7 +299,7 @@ first bootstrap on a machine. Analysis itself touches no network unless
 `--include-network` is separately authorized. Then:
 
 ```
-"${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-doctor-wrapper" \
+"${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-analysis-wrapper" \
     --targets "${CLAUDE_SKILL_DIR}/output/<project-id>/overview/<run-id>/targets.json" \
     --out "${CLAUDE_SKILL_DIR}/output/<project-id>/overview/<run-id>/signals" \
     sweep
@@ -307,7 +307,7 @@ first bootstrap on a machine. Analysis itself touches no network unless
 
 (If `CLAUDE_SKILL_DIR` is unset in your shell, substitute the absolute skill base
 directory announced when this skill loaded — never a relative path: relative paths
-resolve against the target workspace and would write doctor artifacts into it.)
+resolve against the target workspace and would write analyzer artifacts into it.)
 
 - The `--out` directory must be new (the wrapper refuses to overwrite) and must live
   under `<skill-dir>/output/` — never inside the target workspace.

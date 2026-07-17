@@ -107,7 +107,7 @@ def _numstat_path(value: str) -> tuple[str | None, str | None]:
 
 
 def collect_plain_git(repo: str, since: str) -> tuple[list[Commit], str]:
-    format_marker = "@@DOCTOR_COMMIT@@%x09%an%x09%ae"
+    format_marker = "@@ANALYSIS_COMMIT@@%x09%an%x09%ae"
     proc = subprocess.run(
         git_command(repo, "log", "--no-merges", "--full-history", f"--since={since}",
          "--numstat", f"--format={format_marker}", "HEAD", "--", ":/",
@@ -122,7 +122,7 @@ def collect_plain_git(repo: str, since: str) -> tuple[list[Commit], str]:
     commits: list[Commit] = []
     current: Commit | None = None
     for line in proc.stdout.splitlines():
-        if line.startswith("@@DOCTOR_COMMIT@@\t"):
+        if line.startswith("@@ANALYSIS_COMMIT@@\t"):
             _, name, email = (line.split("\t", 2) + ["", ""])[:3]
             current = Commit(name, email, [])
             if not is_bot(name, email):

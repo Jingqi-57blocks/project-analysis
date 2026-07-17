@@ -2,10 +2,10 @@
 
 import json
 
-from doctor_wrapper import parsers
-from doctor_wrapper.registry import dependency_cruiser, outdated, staticcheck
-from doctor_wrapper.status import Status
-from doctor_wrapper.targetspec import PackageManager
+from analysis_wrapper import parsers
+from analysis_wrapper.registry import dependency_cruiser, outdated, staticcheck
+from analysis_wrapper.status import Status
+from analysis_wrapper.targetspec import PackageManager
 
 
 def test_yarn_empty_success_is_valid_but_empty_error_is_not():
@@ -79,7 +79,7 @@ def test_depcruise_partitions_prod_dev_and_unclassified_imports(target, syntheti
 
 
 def test_tool_exit_semantics_table(target):
-    from doctor_wrapper.registry import scc, lizard, jscpd, dependency_cruiser, osv, outdated, go_list, git_history
+    from analysis_wrapper.registry import scc, lizard, jscpd, dependency_cruiser, osv, outdated, go_list, git_history
     definitions = [scc(target), lizard(target), jscpd(target), dependency_cruiser(target),
                    osv(target), outdated(target), go_list(target), staticcheck(target),
                    git_history(target, "2024-01-01")]
@@ -123,7 +123,7 @@ def test_go_lane_is_offline_even_with_host_proxy_config(monkeypatch, target):
 
 
 def test_osv_v2_uses_explicit_source_scan_and_lockfile(target):
-    from doctor_wrapper.registry import osv
+    from analysis_wrapper.registry import osv
     target.pm = PackageManager("npm", "package-lock.json", "fixture")
     argv = osv(target).build_argv(target)
     assert argv[1:3] == ["scan", "source"]
@@ -146,7 +146,7 @@ def test_outdated_endpoint_policy_is_configuration_aware(target, synthetic_repo,
     that can alter endpoints/auth — or a dependency host outside the approved
     set — is a guard refusal (SKIPPED), never silently contacted. Forced
     --registry cannot neutralize project-level .npmrc or scoped registries."""
-    monkeypatch.delenv("PROJECT_DOCTOR_ALLOW_HOSTS", raising=False)
+    monkeypatch.delenv("PROJECT_ANALYSIS_ALLOW_HOSTS", raising=False)
     target.pm = PackageManager("npm", "package-lock.json", "fixture")
 
     # Benign keys: signal survives, presence is disclosed.
@@ -171,8 +171,9 @@ def test_outdated_endpoint_policy_is_configuration_aware(target, synthetic_repo,
     reason = outdated(target).check_guards(target)
     assert "example.invalid" in reason and "--allow-hosts" in reason
 
-    # Explicit operator approval unblocks exactly that host.
-    monkeypatch.setenv("PROJECT_DOCTOR_ALLOW_HOSTS", "example.invalid")
+    # Explicit operator approval unblocks exactly that host, read from the
+    # PROJECT_ANALYSIS_ALLOW_HOSTS environment variable.
+    monkeypatch.setenv("PROJECT_ANALYSIS_ALLOW_HOSTS", "example.invalid")
     assert outdated(target).check_guards(target) == ""
 
 

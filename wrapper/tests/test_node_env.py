@@ -1,11 +1,11 @@
-"""Doctor-owned Node toolchain env: probe parsing, binary policy, setup argv."""
+"""Analyzer-owned Node toolchain env: probe parsing, binary policy, setup argv."""
 
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from doctor_wrapper import node_env
+from analysis_wrapper import node_env
 
 _INFO_TS_ON = """
     dependency-cruiser@18.1.0

@@ -2,14 +2,14 @@
 
 import subprocess
 
-from doctor_wrapper import cli
-from doctor_wrapper.git_history import worker
-from doctor_wrapper.git_history.identity import IdentityResolver
-from doctor_wrapper.registry import (
+from analysis_wrapper import cli
+from analysis_wrapper.git_history import worker
+from analysis_wrapper.git_history.identity import IdentityResolver
+from analysis_wrapper.registry import (
     dependency_cruiser, jscpd, lizard, scc, _language_args,
 )
-from doctor_wrapper.sanitize import sanitize_text
-from doctor_wrapper.targetspec import RepoTarget, stable_repo_id
+from analysis_wrapper.sanitize import sanitize_text
+from analysis_wrapper.targetspec import RepoTarget, stable_repo_id
 
 
 # --- P1-1: Tier-2 exclusions must reach every tool's argv ----------------------
@@ -119,7 +119,7 @@ def test_family_groups_split_node_and_go(tmp_path):
 # --- P3-14: safety refusal is a distinct CLI outcome -----------------------------
 
 def test_safety_refusal_exits_4_not_2(target, synthetic_repo, tmp_path, capsys):
-    from doctor_wrapper.targetspec import TargetSpec
+    from analysis_wrapper.targetspec import TargetSpec
     spec_file = tmp_path / "targets.json"
     TargetSpec(repos=[target]).save(spec_file)
     inside = synthetic_repo / "output"

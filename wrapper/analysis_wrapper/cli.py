@@ -90,7 +90,7 @@ def _family_groups(repos: list) -> dict[str, list]:
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(prog="project-doctor-wrapper")
+    result = argparse.ArgumentParser(prog="project-analysis-wrapper")
     result.add_argument("--targets", help="TargetSpec JSON from discovery "
                                           "(required for run/sweep)")
     result.add_argument("--out",
@@ -201,7 +201,7 @@ def _new_run(args: argparse.Namespace) -> int:
     emit.write_stage1(run_dir, spec, report)
     state = lifecycle.RunState.create(
         run_id, report["project_id"], spec, language=args.language,
-        analysis_identity={"wrapper": "project-doctor-wrapper"})
+        analysis_identity={"wrapper": "project-analysis-wrapper"})
     state.mark("discovery")
     state.save(run_dir)
     print(f"run: {run_dir}")
@@ -321,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.allow_hosts:
             # Registry guards read this when deciding whether a dependency
             # host outside the default registries is explicitly approved.
-            os.environ["PROJECT_DOCTOR_ALLOW_HOSTS"] = args.allow_hosts
+            os.environ["PROJECT_ANALYSIS_ALLOW_HOSTS"] = args.allow_hosts
         if args.command == "new-run":
             return _new_run(args)
         if args.command == "new-drilldown":
