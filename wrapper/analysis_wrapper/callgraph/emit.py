@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from ..executor import create_stage_dir, write_new_text
 from ..sanitize import sanitize_text
 from ..status import Status, aggregate
 from ..targetspec import RepoTarget, TargetSpec
@@ -47,7 +48,7 @@ def select_lanes(target: RepoTarget) -> list[str]:
 def _write_jsonl(path: Path, edges: list[CallEdge]) -> None:
     ordered = sorted(set(edges), key=lambda e: e.sort_key())
     body = "".join(edge.to_json_line() + "\n" for edge in ordered)
-    path.write_text(sanitize_text(body), "utf-8")
+    write_new_text(path, sanitize_text(body))
 
 
 def run_callgraph(spec: TargetSpec, out_dir: str | Path, scan_date: str, *,
@@ -57,8 +58,7 @@ def run_callgraph(spec: TargetSpec, out_dir: str | Path, scan_date: str, *,
     """Run the call-graph stage over a TargetSpec, writing artifacts under
     ``out_dir`` and returning the coverage report."""
     out = Path(out_dir).expanduser().resolve()
-    cg_dir = out / "callgraph"
-    cg_dir.mkdir(parents=True, exist_ok=True)
+    cg_dir = create_stage_dir(out / "callgraph")   # never write THROUGH a symlink
     coverages: list[RepoCoverage] = []
     for target in sorted(spec.repos, key=lambda r: r.repo_id):
         lanes = select_lanes(target)
@@ -74,7 +74,7 @@ def run_callgraph(spec: TargetSpec, out_dir: str | Path, scan_date: str, *,
             coverages.append(cov)
         _write_jsonl(cg_dir / f"{target.repo_id}.jsonl", edges)
     report = CoverageReport(scan_date=scan_date, repos=coverages)
-    (out / "callgraph-coverage.json").write_text(sanitize_text(report.to_json()), "utf-8")
+    write_new_text(out / "callgraph-coverage.json", sanitize_text(report.to_json()))
     return report
 
 

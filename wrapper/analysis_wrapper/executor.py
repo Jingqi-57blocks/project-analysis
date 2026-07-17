@@ -105,6 +105,37 @@ def _write_private(path: Path, text: str) -> None:
         raise
 
 
+def create_stage_dir(path: Path) -> Path:
+    """mkdir a stage output dir (e.g. ``imports/``, ``callgraph/``), refusing a
+    symlink or non-directory at the path first — a symlinked stage dir would
+    redirect every file written under it into the link target, potentially a
+    read-only analyzed repo. Returns the directory."""
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise WrapperSafetyError(
+            "stage directory is a symlink or non-directory (containment risk): "
+            f"{path}")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def write_new_text(path: Path, text: str) -> None:
+    """Create a NEW run-dir artifact, refusing to follow a symlink or clobber.
+
+    ``O_CREAT | O_EXCL`` never opens THROUGH a symlink (POSIX: it fails with
+    EEXIST when the path is a symbolic link, even a dangling one), so a planted
+    ``imports/<file> -> <path inside a target repo>`` link is refused, not
+    followed — the read-only-target containment guarantee holds for every
+    stage-emitted file. Default (umask) permissions, since these are normal
+    shipped run-dir artifacts, not raw containment."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def _assert_output_outside_targets(out: Path, targets: list[RepoTarget]) -> None:
     resolved = out.expanduser().resolve()
     for target in targets:
@@ -138,6 +169,61 @@ def prepare_output_directory(out_dir: str | Path, targets: list[RepoTarget]) -> 
         raise ValueError(f"output directory already exists; choose a fresh path: {out}")
     out.mkdir(parents=True, exist_ok=False)
     return out.resolve()
+
+
+def use_existing_run_directory(out_dir: str | Path, targets: list[RepoTarget], *,
+                               stage_marker: str = "") -> Path:
+    """Prepare a run dir for a post-discovery stage (callgraph / dependency-map).
+
+    Unlike :func:`prepare_output_directory`, a post-discovery stage layers into an
+    EXISTING run dir (discovery created it and wrote targets.json), so an existing
+    directory is expected, not refused — but every safety check still holds
+    (targets valid + distinct, output outside every target, no symlink
+    redirection, a real directory). A non-empty ``stage_marker`` that already
+    exists means THIS stage already ran; we refuse rather than clobber its
+    immutable evidence.
+    """
+    if not targets:
+        raise ValueError("TargetSpec contains no repositories")
+    seen: set[Path] = set()
+    for target in targets:
+        root = Path(target.path).expanduser().resolve()
+        if not root.is_dir():
+            raise ValueError(f"target repository is not a directory: {target.path}")
+        if root in seen:
+            raise ValueError(f"multiple repo IDs resolve to the same target: {root}")
+        seen.add(root)
+    out = Path(out_dir).expanduser()
+    _assert_output_outside_targets(out, targets)
+    if out.is_symlink():
+        raise WrapperSafetyError(f"output directory is a symlink: {out}")
+    if out.exists() and not out.is_dir():
+        raise ValueError(f"output path is not a directory: {out}")
+    out.mkdir(parents=True, exist_ok=True)
+    resolved = out.resolve()
+    if stage_marker:
+        # Guard the stage SUBDIR and the marker itself against symlink
+        # redirection. A dangling symlink is invisible to a bare ``.exists()``
+        # (False) yet ``write_text`` FOLLOWS it — so a planted
+        # ``imports/depmap-coverage.json -> <target repo path>`` would write into
+        # a read-only analyzed repo. Refuse a symlinked stage subdir (its writes
+        # would be redirected) and a symlinked-or-existing marker.
+        parts = Path(stage_marker).parts
+        if len(parts) > 1:
+            subdir = resolved / parts[0]
+            if subdir.is_symlink() or (subdir.exists() and not subdir.is_dir()):
+                raise WrapperSafetyError(
+                    f"stage subdirectory is a symlink or non-directory "
+                    f"(containment risk): {subdir}")
+        marker = resolved / stage_marker
+        if marker.is_symlink():
+            raise WrapperSafetyError(
+                f"stage marker is a symlink (containment risk): {marker}")
+        if marker.exists():
+            raise ValueError(
+                "stage output already exists in this run dir (refusing to "
+                f"clobber): {marker}")
+    return resolved
 
 
 def _assert_binary_outside_targets(binary: Path, targets: list[RepoTarget]) -> None:

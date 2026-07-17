@@ -4,6 +4,8 @@ import argparse
 from pathlib import Path
 
 from analysis_wrapper.cli import _sweep, main
+from analysis_wrapper.depmap import emit as dm_emit
+from analysis_wrapper.depmap.contract import DepMapReport
 from analysis_wrapper.status import Status
 from analysis_wrapper.targetspec import TargetSpec
 from analysis_wrapper.tooldefs import ToolDef
@@ -75,6 +77,32 @@ def test_cli_refuses_existing_output_without_overwriting(tmp_path, target):
                "run", "--repo", target.repo_id, "--tool", "scc"])
     assert rc == 2
     assert marker.read_text() == "keep\n"
+
+
+def test_dependency_map_layers_into_existing_run_dir(monkeypatch, tmp_path, target):
+    # Discovery already created the run dir + targets.json; the dependency-map
+    # stage must layer into it (not refuse it like run/sweep do), then refuse to
+    # clobber its own prior output on a re-run.
+    run = tmp_path / "run"
+    run.mkdir()
+    TargetSpec([target], produced_by="cli-test").save(run / "targets.json")
+
+    def stub_run_depmap(spec, out, scan_date, allow_network=False):
+        imports = Path(out) / "imports"
+        imports.mkdir(parents=True, exist_ok=True)
+        (imports / "depmap-coverage.json").write_text("{}\n")
+        return DepMapReport(scan_date=scan_date, repos=[])
+
+    monkeypatch.setattr(dm_emit, "run_depmap", stub_run_depmap)
+    rc = main(["--targets", str(run / "targets.json"), "--out", str(run),
+               "dependency-map"])
+    assert rc == 0
+    assert (run / "imports" / "depmap-coverage.json").is_file()
+
+    # Re-running the same stage into the same dir refuses (stage marker present).
+    rc2 = main(["--targets", str(run / "targets.json"), "--out", str(run),
+                "dependency-map"])
+    assert rc2 == 2
 
 
 def test_sweep_records_unauthorized_network_lanes_as_skipped(monkeypatch, tmp_path, target):

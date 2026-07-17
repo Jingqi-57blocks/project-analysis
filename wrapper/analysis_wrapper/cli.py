@@ -9,7 +9,9 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from .executor import SignalResult, WrapperSafetyError, prepare_output_directory, run_tool
+from .executor import (SignalResult, WrapperSafetyError,
+                       prepare_output_directory, run_tool,
+                       use_existing_run_directory)
 from .registry import git_history, jscpd_multi, local_tools, network_tools, tool_for
 from .sanitize import sanitize_text
 from .status import Status, aggregate, wrapper_exit_code
@@ -126,6 +128,14 @@ def parser() -> argparse.ArgumentParser:
         "callgraph", help="extract function/method call edges (57B-30) into "
                           "<out>/callgraph/<repo_id>.jsonl + callgraph-coverage.json")
     cg.add_argument("--include-network", action="store_true",
+                    help="authorize the Go module-cache warm for a cold cache "
+                         "(offline-first; without it a cold cache fails closed)")
+    dm = sub.add_parser(
+        "dependency-map",
+        help="produce per-repo import maps into <out>/imports/ "
+             "(<repo_id>.depcruise.json for JS/TS, <repo_id>.golist.json for Go); "
+             "the system-model stage consumes them into dependency edges")
+    dm.add_argument("--include-network", action="store_true",
                     help="authorize the Go module-cache warm for a cold cache "
                          "(offline-first; without it a cold cache fails closed)")
     disc = sub.add_parser(
@@ -322,6 +332,20 @@ def _callgraph(args: argparse.Namespace, spec: TargetSpec, out: Path) -> int:
     return 3 if cg_emit.aggregate_status(report) is Status.FAILED else 0
 
 
+def _depmap(args: argparse.Namespace, spec: TargetSpec, out: Path) -> int:
+    from .depmap import emit as dm_emit
+    report = dm_emit.run_depmap(
+        spec, out, args.scan_date, allow_network=args.include_network)
+    for cov in sorted(report.repos, key=lambda c: (c.repo_id, c.lane)):
+        suffix = f": {cov.reason}" if cov.reason else ""
+        print(f"{cov.repo_id} [{cov.lane}] {cov.status} "
+              f"(units={cov.units}, map={cov.map_file or '-'}){suffix}")
+    if not report.repos:
+        print("no Go/JS/TS repositories in the TargetSpec — nothing to analyze")
+        return 0
+    return 3 if dm_emit.aggregate_status(report) is Status.FAILED else 0
+
+
 def _system_model(args: argparse.Namespace) -> int:
     from .system_model.assemble import assemble, dump
     run = Path(args.run).expanduser().resolve()
@@ -409,9 +433,16 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["WORKSPACE_ROOT"] = os.path.commonpath(
                 [str(Path(r.path).expanduser().resolve()) for r in spec.repos]
             )
+        # Post-discovery stages layer into the existing run dir (discovery made
+        # it); run/sweep still demand a fresh signals dir. A per-stage marker
+        # refuses re-running a stage over its own prior evidence.
+        if args.command in ("callgraph", "dependency-map"):
+            marker = ("callgraph-coverage.json" if args.command == "callgraph"
+                      else "imports/depmap-coverage.json")
+            out = use_existing_run_directory(args.out, spec.repos, stage_marker=marker)
+            return (_callgraph if args.command == "callgraph" else _depmap)(
+                args, spec, out)
         out = prepare_output_directory(args.out, spec.repos)
-        if args.command == "callgraph":
-            return _callgraph(args, spec, out)
         results = _run_one(args, spec, out) if args.command == "run" else _sweep(args, spec, out)
         _record_summary(out, results)
         for item in results:

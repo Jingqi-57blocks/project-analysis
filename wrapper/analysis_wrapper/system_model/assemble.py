@@ -15,9 +15,11 @@ import json
 from pathlib import Path
 
 from .. import __version__
+from ..depmap import emit as depmap_emit
 from ..sanitize import sanitize_text
 from ..targetspec import TargetSpec
-from . import coverage, from_callgraph, from_discovery, from_imports
+from . import (coverage, from_callgraph, from_discovery, from_go_imports,
+               from_imports)
 from .builder import ModelBuilder
 from .schema import SystemModel
 
@@ -32,6 +34,23 @@ def _resolve_scan_date(run: Path, cg: dict, override: str) -> str:
     return cov.get("scan_date", "")
 
 
+def _merge_imports(spec: TargetSpec, js: dict, go: dict) -> dict:
+    """Fold the JS (dependency-cruiser) and Go (go list) import summaries into the
+    one dict coverage consumes. ``expected_repos`` is every dependency-map-eligible
+    repo (the stage's own lane selection); ``mapped_repos`` is those that actually
+    produced a map — the gap is what makes the partition ``partial`` with
+    disclosure."""
+    mapped = sorted(set(js.get("repos", [])) | set(go.get("repos", [])))
+    expected = sorted(r.repo_id for r in spec.repos if depmap_emit.select_lanes(r))
+    return {
+        "present": bool(js.get("present") or go.get("present")),
+        "js": js, "go": go,
+        "repos": mapped, "mapped_repos": mapped, "expected_repos": expected,
+        "unresolved": js.get("unresolved", 0) + go.get("unresolved", 0),
+        "stdlib_omitted": go.get("stdlib_omitted", 0),
+    }
+
+
 def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
     """Build the in-memory :class:`SystemModel` for ``run_dir``."""
     run = Path(run_dir).expanduser().resolve()
@@ -42,7 +61,9 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
     builder = ModelBuilder()
     disc = from_discovery.load(builder, spec, report)
     cg = from_callgraph.load(builder, run)
-    imports = from_imports.load(builder, run, heads)
+    imports = _merge_imports(spec,
+                             from_imports.load(builder, run, heads),
+                             from_go_imports.load(builder, run, heads))
     builder.resolve()
 
     resolved_scan_date = _resolve_scan_date(run, cg, scan_date)

@@ -312,28 +312,52 @@ def _deploy(builder: ModelBuilder, blocks: dict) -> Partition:
 
 
 def _imports(builder: ModelBuilder, imports: dict) -> Partition:
+    producers = ["dependency-cruiser", "go-list"]
+    expected = imports.get("expected_repos", [])
+    mapped = imports.get("mapped_repos", imports.get("repos", []))
     if not imports.get("present"):
+        note = ("import/dependency edges omitted (not fabricated). Run the "
+                "dependency-map stage to populate imports/<repo_id>."
+                "{depcruise,golist}.json.")
+        if expected:
+            note += (f" {len(expected)} dependency-map-eligible repo(s) produced "
+                     f"no map: {', '.join(expected)}.")
         return Partition(
-            status="partial", producers=["dependency-cruiser", "go list"],
+            status="partial", producers=producers,
             node_kinds=["file"], edge_types=["dependency"],
-            counts={"dependency_edges": 0},
+            counts={"dependency_edges": 0, "repos_with_maps": 0,
+                    "repos_eligible": len(expected)},
             source_universe="no machine-readable import map (dependency-cruiser / "
                             "go list) present in this run dir.",
-            notes=["import/dependency edges omitted (not fabricated). Provide "
-                   "imports/<repo_id>.depcruise.json to populate this partition."])
+            notes=[note])
+    observed = _edge_count(builder, "dependency", "observed")
     unresolved = _edge_count(builder, "dependency", "unresolved")
+    missing = [r for r in expected if r not in mapped]
+    notes = ["an import not resolvable to an in-repo file/package is kept as an "
+             "unresolved dependency edge carrying the raw specifier; Go stdlib "
+             "imports are counted, not emitted as edges.",
+             "dependency-cruiser is file→file (JS/TS); go list is package→package "
+             "(Go) — both the `dependency` type, kept SEPARATE from `call` edges."]
+    status = "complete"
+    if missing:
+        status = "partial"
+        notes.append(f"{len(missing)} eligible repo(s) produced NO dependency map "
+                     f"(partial): {', '.join(missing)}.")
+    elif unresolved:
+        status = "partial"
+        notes.append("external/third-party specifiers remain unresolved (expected "
+                     "wherever a repo has third-party imports) — disclosed as partial.")
     return Partition(
-        status="complete" if not unresolved else "partial",
-        producers=["dependency-cruiser"], node_kinds=["file"],
+        status=status, producers=producers, node_kinds=["file"],
         edge_types=["dependency"],
-        counts={"dependency_edges": _edge_count(builder, "dependency", "observed"),
-                "unresolved_edges": unresolved,
-                "repos": len(imports.get("repos", []))},
-        source_universe="dependency-cruiser module graph; edges kept SEPARATE "
-                        "from the language call-edge type.",
+        counts={"dependency_edges": observed, "unresolved_edges": unresolved,
+                "repos_with_maps": len(mapped), "repos_eligible": len(expected),
+                "stdlib_imports_omitted": imports.get("stdlib_omitted", 0)},
+        source_universe="dependency-cruiser module graph (JS/TS, file-level) + go "
+                        "list -deps package graph (Go, package-level); edges kept "
+                        "SEPARATE from the language call-edge type.",
         unresolved={"external_or_unresolvable_specifiers": unresolved},
-        notes=["an import not resolvable to an in-repo file is kept as an "
-               "unresolved dependency edge carrying the raw specifier."])
+        notes=notes)
 
 
 def _modules() -> Partition:
