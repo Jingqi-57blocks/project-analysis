@@ -21,8 +21,8 @@ from pathlib import Path
 
 from ..sanitize import redact
 from ..targetspec import RepoTarget, TargetSpec, stable_repo_id
-from . import (candidates, generated, inventory, liveness, modules, pm,
-               provenance, stacks)
+from . import (access_model, candidates, deploy_units, generated, integrations,
+               inventory, liveness, modules, pm, provenance, stacks, tables)
 
 
 def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
@@ -40,18 +40,8 @@ def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
     requires: list[str] = []
     gomod = repo_path / "go.mod"
     if gomod.is_file():
-        try:
-            for line in gomod.read_text("utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if line.endswith("// indirect"):
-                    continue
-                parts = line.split()
-                if len(parts) >= 2 and "." in parts[0] and parts[1].startswith("v"):
-                    requires.append(parts[0])
-                elif len(parts) >= 3 and parts[0] == "require" and parts[2].startswith("v"):
-                    requires.append(parts[1])
-        except OSError:
-            pass
+        # Structured `go mod edit -json` (OSS parser), direct requires only.
+        requires = stacks.gomod_requires(gomod, include_indirect=False)
     return deps, requires
 
 
@@ -87,6 +77,9 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     cand = candidates.generate(
         path, repo_id, dependencies=deps, go_requires=requires,
         tier2_exclusions=tier2.exclusions)
+    integ = integrations.generate(path, repo_id, tier2_exclusions=tier2.exclusions)
+    table_ev = tables.generate(path, repo_id, tier2_exclusions=tier2.exclusions)
+    access = access_model.generate(path, repo_id, tier2_exclusions=tier2.exclusions)
     signals = modules.extract(path, tier2_exclusions=tier2.exclusions)
 
     target = RepoTarget(
@@ -111,6 +104,10 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
                              "evidence": tier2.evidence},
         "module_signals": signals.to_dict(),
         "candidate_notes": cand.notes,
+        "integration_evidence": integ.to_dict(),
+        "table_evidence": table_ev.to_dict(),
+        "access_model": access.to_dict(),
+        "deployable_units": deploy_units.generate(path, tier2.exclusions).to_dict(),
     }
     return target, cand.candidates, report
 
@@ -190,6 +187,12 @@ def discover(workspace_root: str | Path,
         "reduced_coverage_targets": sorted(reduced),
         "integration_candidate_count": len(all_candidates),
         "route_liveness": liveness_report,
+        # Cross-repo role-catalog summary so catalog DIFFERENCES are computable
+        # (locate-only; names, not meanings).
+        "role_catalog_by_repo": {
+            r["repo_id"]: r.get("access_model", {}).get("role_catalog_names", [])
+            for r in repo_reports
+        },
     }
     return spec, report
 

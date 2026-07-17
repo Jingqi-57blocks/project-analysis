@@ -1,0 +1,95 @@
+# Access-model LOCATE-and-COUNT rules (57B-27 item 12). These record WHERE
+# authorization-shaped code sits — never what it means. Interpretation is a lens's
+# job. Function-name / type-name heuristics use generic English tokens
+# (permission/role/access/…), never a project-specific catalog.
+
+# --- inline authorization checks: calls whose name carries an authz token ---
+id: authz-check-js
+language: JavaScript
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '(?i)(permission|hasrole|checkrole|requirerole|canaccess|isadmin|authoriz|enforce|\bacl\b|forbidden|unauthorized)'
+---
+id: authz-check-ts
+language: TypeScript
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '(?i)(permission|hasrole|checkrole|requirerole|canaccess|isadmin|authoriz|enforce|\bacl\b|forbidden|unauthorized)'
+---
+id: authz-check-tsx
+language: Tsx
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '(?i)(permission|hasrole|checkrole|requirerole|canaccess|isadmin|authoriz|enforce|\bacl\b|forbidden|unauthorized)'
+---
+id: authz-check-go
+language: Go
+rule:
+  kind: call_expression
+  has:
+    field: function
+    kind: selector_expression
+    has: { field: field, regex: '(?i)(permission|hasrole|checkrole|requirerole|canaccess|isadmin|authoriz|enforce|acl)' }
+---
+# --- middleware attachment (router.use / gin chains) ---
+id: middleware-attach-js
+language: JavaScript
+rule:
+  kind: call_expression
+  has: { field: function, kind: member_expression, has: { field: property, regex: '^use$' } }
+---
+id: middleware-attach-ts
+language: TypeScript
+rule:
+  kind: call_expression
+  has: { field: function, kind: member_expression, has: { field: property, regex: '^use$' } }
+---
+id: middleware-attach-go
+language: Go
+rule:
+  kind: call_expression
+  has: { field: function, kind: selector_expression, has: { field: field, regex: '^Use$' } }
+---
+# --- role catalogs: role/permission-named types + enums (located for cross-repo diff) ---
+id: role-type-go
+language: Go
+rule:
+  kind: type_declaration
+  regex: '(?i)type\s+\w*(role|permission|scope|grant|privilege)\w*\s'
+---
+id: role-enum-ts
+language: TypeScript
+rule:
+  kind: enum_declaration
+  regex: '(?i)enum\s+\w*(role|permission|scope|grant|privilege)\w*'
+---
+# --- frontend route guards (JSX element whose name looks like a guard) ---
+id: route-guard-tsx
+language: Tsx
+rule:
+  any:
+    - kind: jsx_opening_element
+    - kind: jsx_self_closing_element
+  has:
+    field: name
+    regex: '(?i)(guard|protected|private|require.*(auth|role|permission)|auth.*route)'
+---
+# --- contextual-identity checks: owner/leader/approver identity comparisons
+#     (structurally obvious equality only; anything else is left unresolved) ---
+id: identity-check-go
+language: Go
+rule:
+  kind: binary_expression
+  regex: '(?i)(owner|leader|approver|creator|author|assignee)\w*(id)?\s*(==|!=)'
+---
+id: identity-check-ts
+language: TypeScript
+rule:
+  kind: binary_expression
+  regex: '(?i)(owner|leader|approver|creator|author|assignee)\w*(id)?\s*(===|!==|==|!=)'
