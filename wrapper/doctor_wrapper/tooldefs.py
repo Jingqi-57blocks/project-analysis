@@ -37,6 +37,21 @@ PreflightFn = Callable[[], str]                             # "" = online/ready
 
 
 @dataclass
+class PrepareResult:
+    """Outcome of a tool's per-run preparation step (e.g. depcruise's
+    alias-resolution + config generation). ``ok=False`` makes the signal SKIPPED
+    with ``reason``; otherwise ``notes``/``reads`` are folded into the manifest."""
+    notes: str = ""
+    reads: list[str] = field(default_factory=list)
+    ok: bool = True
+    reason: str = ""
+
+
+PrepareFn = Callable[[RepoTarget, "Path"], PrepareResult]   # (target, out_dir)
+AnnotateFn = Callable[[RepoTarget, str, str], str]          # (target, stdout, stderr) -> note
+
+
+@dataclass
 class ToolDef:
     name: str
     binary: str                             # executable probed on PATH
@@ -58,6 +73,8 @@ class ToolDef:
     applied_exclusions: list[str] = field(default_factory=list)
     cwd_mode: str = "target"                 # target | output
     preflight: PreflightFn | None = None
+    prepare: PrepareFn | None = None         # per-run input generation (given the out dir)
+    annotate: AnnotateFn | None = None       # post-run manifest note (metrics)
     extra_notes: str = ""                    # standing disclosures for the manifest
 
     # ---- executor-facing API --------------------------------------------------
@@ -132,6 +149,12 @@ class ToolDef:
 
     def check_preflight(self) -> str:
         return self.preflight() if self.preflight else ""
+
+    def run_prepare(self, target: RepoTarget, out: Path) -> PrepareResult:
+        return self.prepare(target, out) if self.prepare else PrepareResult()
+
+    def run_annotate(self, target: RepoTarget, stdout: str, stderr: str) -> str:
+        return self.annotate(target, stdout, stderr) if self.annotate else ""
 
     def scope_description(self, target: RepoTarget) -> str:
         roots = ", ".join(target.analysis_roots) or "<repo root>"

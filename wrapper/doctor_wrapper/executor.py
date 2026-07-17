@@ -33,7 +33,7 @@ from .manifest import Manifest, RepoStamp
 from .sanitize import bound
 from .status import Status
 from .targetspec import RepoTarget
-from .tooldefs import ToolDef, approved_argv0
+from .tooldefs import PrepareResult, ToolDef, approved_argv0
 
 _NET_ERR = re.compile(
     r"ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|"
@@ -200,6 +200,7 @@ def run_tool(
     cwd = Path(target.path) if tooldef.cwd_mode == "target" else out.resolve()
     version: str | None = None
     drift = ""
+    prep = PrepareResult()
 
     def finish(status: Status, reason: str, *, exit_code=None, wall=None,
                raw: Path | None = None, view: Path | None = None,
@@ -224,9 +225,9 @@ def run_tool(
             network=tooldef.network,
             scan_date=scan_date,
             output_files=outputs,
-            declared_reads=tooldef.declared_reads(target),
+            declared_reads=list(dict.fromkeys(tooldef.declared_reads(target) + list(prep.reads))),
             version_drift=drift,
-            notes="; ".join(x for x in (tooldef.extra_notes, notes) if x),
+            notes="; ".join(x for x in (tooldef.extra_notes, prep.notes, notes) if x),
         )
         manifest.write(out, name)
         return SignalResult(tooldef.name, target.repo_id, status, reason,
@@ -255,6 +256,17 @@ def run_tool(
     preflight = tooldef.check_preflight()
     if preflight:
         return finish(Status.SKIPPED, f"preflight unavailable: {preflight}")
+
+    # Per-run preparation (e.g. depcruise alias resolution → doctor-owned config
+    # written UNDER the output dir). Runs after authorization so it never touches
+    # anything on a refused signal; a declined prepare fails closed (SKIPPED).
+    if tooldef.prepare:
+        try:
+            prep = tooldef.run_prepare(target, out.resolve())
+        except Exception as exc:  # never let input generation crash the run
+            return finish(Status.FAILED, f"prepare step failed: {type(exc).__name__}: {exc}")
+        if not prep.ok:
+            return finish(Status.SKIPPED, prep.reason or "prepare step declined")
 
     argv = tooldef.build_argv(target)
     if not approved_argv0(tooldef, argv, resolved_binary):
@@ -362,15 +374,24 @@ def run_tool(
         return finish(Status.PARTIAL, view_error,
                       exit_code=exit_code, wall=wall, raw=raw_path, view=None)
 
+    # Post-run manifest annotation (metrics that only exist after the run, e.g.
+    # depcruise edge-resolution ratios). Best-effort — never fails the run.
+    try:
+        annotation = tooldef.run_annotate(target, stdout, stderr)
+    except Exception:
+        annotation = ""
+
     degraded = tooldef.check_degraded(
         target, stdout + "\n### STDERR ###\n" + stderr, exit_code
     )
     if degraded:
         return finish(Status.PARTIAL, degraded,
-                      exit_code=exit_code, wall=wall, raw=raw_path, view=view_path)
+                      exit_code=exit_code, wall=wall, raw=raw_path, view=view_path,
+                      notes=annotation)
 
     nongit = [item.repo_id for item in targets if not item.git.is_git]
     notes = ("non-git targets: immutability compare skipped (reduced-coverage mode): "
              + ", ".join(nongit)) if nongit else ""
     return finish(Status.COMPLETE, "", exit_code=exit_code, wall=wall,
-                  raw=raw_path, view=view_path, notes=notes)
+                  raw=raw_path, view=view_path,
+                  notes="; ".join(x for x in (notes, annotation) if x))

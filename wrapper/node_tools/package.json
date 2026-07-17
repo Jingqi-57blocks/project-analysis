@@ -1,0 +1,10 @@
+{
+  "name": "doctor-node-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Doctor-owned pinned Node toolchain (dependency-cruiser + typescript). Installed with pnpm at bootstrap; NEVER installed into, or resolved from, a target repository, and NEVER a global binary.",
+  "dependencies": {
+    "dependency-cruiser": "18.1.0",
+    "typescript": "5.9.3"
+  }
+}

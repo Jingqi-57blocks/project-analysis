@@ -9,8 +9,8 @@ from doctor_wrapper.bootstrap import bootstrap, editable_install_target, environ
 
 def test_install_target_keeps_runtime_and_dev_extras_explicit(tmp_path):
     root = tmp_path / "wrapper"
-    assert editable_install_target(root, False) == f"{root.resolve()}[history]"
-    assert editable_install_target(root, True) == f"{root.resolve()}[history,dev]"
+    assert editable_install_target(root, False) == f"{root.resolve()}[history,sql]"
+    assert editable_install_target(root, True) == f"{root.resolve()}[history,sql,dev]"
 
 
 def test_bootstrap_installs_with_only_the_venv_interpreter(tmp_path):
@@ -47,7 +47,7 @@ def test_bootstrap_installs_with_only_the_venv_interpreter(tmp_path):
     assert calls[1:] == [
         ([
             str(python), "-m", "pip", "install", "--disable-pip-version-check",
-            "-e", f"{wrapper_root.resolve()}[history,dev]",
+            "-e", f"{wrapper_root.resolve()}[history,sql,dev]",
         ], {"check": True})
     ]
 

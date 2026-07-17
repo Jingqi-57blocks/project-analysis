@@ -12,6 +12,7 @@ import re
 import shutil
 import site
 import socket
+import subprocess
 import sys
 import json
 from datetime import date, timedelta
@@ -19,44 +20,15 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import parsers
+from .depcruise_lane import dependency_cruiser
+from .exclusions import (
+    NODE_ENV_REMOVALS, TIER1_DIRS, TIER1_FILE_GLOBS, _excluded_dirs,
+    _jscpd_ignores,
+)
 from .targetspec import RepoTarget
 from .tooldefs import COREPACK_GUARD_ENV, ToolDef, yarn_exec_vector_guard
 
 
-# Tier 1 — universal, safe on ANY repo. Per-project (Tier-2) exclusions such as
-# generated docs/public/migrations come ONLY from TargetSpec.tier2_exclusions
-# (derived by discovery, disclosed in every manifest) — never baked in here.
-TIER1_DIRS = ["node_modules", "vendor", ".git", "dist", "build", "coverage"]
-# Universal generated-FILE markers (naming conventions, not project claims).
-TIER1_FILE_GLOBS = [
-    "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml",
-    "**/*.min.js", "**/*.min.css", "**/*.gen.go", "**/*_gen.go",
-    "**/swagger.json", "**/swagger.yaml",
-]
-
-
-def _excluded_dirs(target: RepoTarget) -> list[str]:
-    """Tier-1 universal dirs + this target's derived Tier-2 dirs, deduped."""
-    seen: list[str] = []
-    for name in TIER1_DIRS + list(target.tier2_exclusions):
-        if name and name not in seen:
-            seen.append(name)
-    return seen
-
-
-def _jscpd_ignores(targets: list[RepoTarget]) -> list[str]:
-    dirs: list[str] = list(TIER1_DIRS)
-    for target in targets:
-        for name in target.tier2_exclusions:
-            if name not in dirs:
-                dirs.append(name)
-    return [f"**/{d}/**" for d in dirs] + list(TIER1_FILE_GLOBS)
-
-
-def _js_exclude_re(target: RepoTarget) -> str:
-    names = [re.escape(d) for d in _excluded_dirs(target) if d not in {".git", "node_modules"}]
-    return "^(" + "|".join(names) + ")"
-NODE_ENV_REMOVALS = ["NODE_OPTIONS"]
 PACKAGE_ENV_PREFIXES = ["NPM_CONFIG_", "npm_config_", "YARN_", "COREPACK_"]
 # Remove only the vars our SAFE_GO_ENV pins (they are re-set explicitly).
 # GOPRIVATE and friends stay untouched: with GOPROXY=off nothing is fetched,
@@ -75,8 +47,47 @@ SAFE_GO_ENV = {
 }
 GO_ENV_NOTE = ("OFFLINE-FIRST: GOPROXY=off/GOSUMDB=off — no network destination is "
                "contacted; -mod=readonly, local toolchain, workspaces off. A cold "
-               "module cache fails with 'module lookup disabled': warm the cache "
-               "(e.g. `go mod download` under your own approval) and rerun")
+               "module cache / missing dep / load failure fails LOUDLY (never a clean "
+               "no-findings result): warm the cache under approval "
+               "(`python3 -m doctor_wrapper.bootstrap --warm-go <repo>`) and rerun")
+
+# Build settings the offline Go lane analyzes under, recorded in every manifest
+# so the analyzed universe is explicit: the LOCAL toolchain's GOOS/GOARCH/CGO and
+# NO extra build tags, so files excluded by build constraints are outside scope.
+_GO_BUILD_CACHE: dict[str, dict[str, str]] = {}
+
+
+def _go_build_settings(go_binary: str) -> dict[str, str]:
+    if go_binary in _GO_BUILD_CACHE:
+        return _GO_BUILD_CACHE[go_binary]
+    settings: dict[str, str] = {}
+    try:
+        # Pins on ALL go invocations, `go env` included (offline, no side effects).
+        out = subprocess.run([go_binary, "env", "GOOS", "GOARCH", "CGO_ENABLED"],
+                             capture_output=True, text=True, timeout=30,
+                             env={**os.environ, **SAFE_GO_ENV})
+        if out.returncode == 0:
+            for key, value in zip(("GOOS", "GOARCH", "CGO_ENABLED"), out.stdout.split()):
+                if value:
+                    settings[key] = value
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    _GO_BUILD_CACHE[go_binary] = settings
+    return settings
+
+
+def _go_env(go_binary: str) -> dict[str, str]:
+    """Offline Go env + the local build settings pinned (and thus recorded)."""
+    return {**SAFE_GO_ENV, **_go_build_settings(go_binary)}
+
+
+def _go_notes(go_binary: str) -> str:
+    build = _go_build_settings(go_binary)
+    settings = ", ".join(f"{k}={build[k]}" for k in ("GOOS", "GOARCH", "CGO_ENABLED")
+                         if k in build) or "unavailable"
+    return (f"{GO_ENV_NOTE}; build settings: {settings}, build tags: none (default) — "
+            "code excluded by build constraints (GOOS/GOARCH///go:build) is outside "
+            "the analyzed universe")
 
 
 def _binary(name: str) -> str:
@@ -306,61 +317,18 @@ def jscpd_multi(targets: list[RepoTarget]) -> ToolDef:
     )
 
 
-def dependency_cruiser(target: RepoTarget) -> ToolDef:
-    binary = _binary("depcruise")
-    root = Path(target.path)
-    tsconfig = ""
-    for name in ("tsconfig.app.json", "tsconfig.json"):
-        if (root / name).is_file():
-            tsconfig = name; break
-    # Analysis roots come from TargetSpec (discovery). Only when discovery
-    # derived none do we fall back to a src/ heuristic — and we disclose it.
-    notes = ""
-    if target.analysis_roots:
-        bases = list(target.analysis_roots)
-    elif tsconfig and (root / "src").is_dir():
-        bases = ["src"]
-        notes = ("analysis_roots not derived; heuristic fallback scanned src/ only — "
-                 "other source dirs are NOT SCANNED")
-    else:
-        bases = ["."]
-    if tsconfig:
-        # Glob mode: depcruise directory scans silently drop .tsx (Phase 0 F11).
-        sources = [f"{b}/**/*.{ext}" if b != "." else f"**/*.{ext}"
-                   for b in bases for ext in ("ts", "tsx", "js", "jsx")]
-        extra = ["--ts-config", tsconfig]
-    else:
-        sources = bases
-        extra = []
-    exclude_re = _js_exclude_re(target)
-    reads = ["package.json"] + ([tsconfig] if tsconfig else [])
-    return ToolDef(
-        name="dependency-cruiser", binary=binary, validated_version="18.1.0",
-        version_argv=[binary, "--version"], normal_exits=frozenset({0}),
-        argv_builder=lambda _t: [binary, "--no-config", *extra, "--do-not-follow",
-                                 "node_modules", "--exclude", exclude_re,
-                                 "--output-type", "json", *sources],
-        output_validator=parsers.validate_depcruise,
-        degraders=[parsers.depcruise_degraded], view_builder=parsers.depcruise_view,
-        view_lines=220, reads_declared=reads,
-        applied_exclusions=_excluded_dirs(target),
-        cwd_mode="target", timeout_s=300,
-        remove_env=NODE_ENV_REMOVALS,
-        extra_notes=notes,
-    )
-
-
 def staticcheck(target: RepoTarget) -> ToolDef:
     binary = _binary("staticcheck")
+    go_binary = _binary("go")
     return ToolDef(
         name="staticcheck", binary=binary, validated_version="2026.1",
         version_argv=[binary, "--version"], normal_exits=frozenset({0, 1}),
-        argv_builder=lambda _t: [binary, "./..."], env=dict(SAFE_GO_ENV),
+        argv_builder=lambda _t: [binary, "./..."], env=_go_env(go_binary),
         remove_env=GO_ENV_REMOVALS,
         degraders=[parsers.staticcheck_degraded], view_builder=parsers.staticcheck_view,
         view_lines=260, applied_exclusions=["generated docs/ findings (view only)"],
         network=False, cwd_mode="target", timeout_s=600,
-        extra_notes=GO_ENV_NOTE,
+        extra_notes=_go_notes(go_binary),
         # No DNS preflight: the Go lane only conditionally needs network (cold
         # module cache). Attempt-and-classify — offline downloads fail loudly.
     )
@@ -372,12 +340,13 @@ def go_list(target: RepoTarget) -> ToolDef:
         name="go-list", binary=binary, validated_version="go1.26.5",
         version_argv=[binary, "version"], normal_exits=frozenset({0}),
         argv_builder=lambda _t: [binary, "list", "-deps", "-json", "./..."],
-        env=dict(SAFE_GO_ENV), remove_env=GO_ENV_REMOVALS,
+        env=_go_env(binary), remove_env=GO_ENV_REMOVALS,
         output_validator=parsers.validate_go_list,
+        degraders=[parsers.go_list_degraded],
         view_builder=parsers.go_list_view, view_lines=300, reads_declared=["go.mod", "go.sum"],
         applied_exclusions=["stdlib and third-party packages excluded from internal edge set"],
         network=False, cwd_mode="target", timeout_s=600,
-        extra_notes=GO_ENV_NOTE,
+        extra_notes=_go_notes(binary),
         # No DNS preflight — see staticcheck; warm-cache offline runs must succeed.
     )
 
@@ -461,7 +430,8 @@ def outdated(target: RepoTarget) -> ToolDef:
     )
 
 
-def git_history(target: RepoTarget, since: str | None = None) -> ToolDef:
+def git_history(target: RepoTarget, since: str | None = None,
+                coupling_sample_cap: int = 0) -> ToolDef:
     since = since or (date.today() - timedelta(days=730)).isoformat()
     requested = os.environ.get("PROJECT_DOCTOR_PYDRILLER_PYTHON", "")
     binary = requested if requested and Path(requested).is_file() else sys.executable
@@ -471,9 +441,11 @@ def git_history(target: RepoTarget, since: str | None = None) -> ToolDef:
         name="git-history", binary=binary, validated_version="pydriller 2.10",
         version_argv=[binary, "-m", "doctor_wrapper.git_history.worker", "--version"],
         normal_exits=frozenset({0}),
+        # coupling-sample-cap 0 = no cap (default: unchanged behavior).
         argv_builder=lambda _t: [binary, "-m", "doctor_wrapper.git_history.worker",
                                  "--repo", target.path, "--since", since,
-                                 "--top", "20", "--min-shared", "5", "--bulk-limit", "50"],
+                                 "--top", "20", "--min-shared", "5", "--bulk-limit", "50",
+                                 "--coupling-sample-cap", str(coupling_sample_cap)],
         env={
             "PYTHONPATH": package_root,
             "PROJECT_DOCTOR_GIT_BINARY": git_binary,

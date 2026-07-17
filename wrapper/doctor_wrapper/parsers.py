@@ -125,108 +125,12 @@ def validate_jscpd(text: str, _exit: int) -> str:
         else "jscpd console summary is missing 'Found N clones'"
 
 
-def validate_depcruise(text: str, _exit: int) -> str:
-    try:
-        data = _json(text)
-    except Exception as exc:
-        return f"invalid dependency-cruiser JSON: {exc}"
-    return "" if isinstance(data, dict) and isinstance(data.get("modules"), list) \
-        else "expected an object with a modules list"
-
-
-def _is_internal_spec(module: str) -> bool:
-    """A relative/alias import that SHOULD resolve inside the repo. External
-    npm specifiers (bare/scoped package names) are not internal — their
-    non-resolution under `--do-not-follow node_modules` is a classification
-    limitation, not a broken internal graph."""
-    if not module:
-        return False
-    if module.startswith((".", "/")):
-        return True
-    # Common tsconfig path-alias roots for in-repo imports.
-    first = module.split("/", 1)[0]
-    return first in {"src", "app", "lib", "@", "@src", "@app"} or module.startswith("~/")
-
-
-def depcruise_stats(text: str):
-    """Returns (modules, edges, unresolved, circular, externals,
-    internal_edges, internal_unresolved)."""
-    data = _json(text)
-    modules = data.get("modules", [])
-    edges = unresolved = circular = 0
-    internal_edges = internal_unresolved = 0
-    externals: set[str] = set()
-    for module in modules:
-        for dep in module.get("dependencies", []):
-            edges += 1
-            spec = str(dep.get("module", ""))
-            internal = _is_internal_spec(spec)
-            if internal:
-                internal_edges += 1
-            if dep.get("couldNotResolve"):
-                unresolved += 1
-                if internal:
-                    internal_unresolved += 1
-            if dep.get("circular"):
-                circular += 1
-            if any(str(kind).startswith("npm") for kind in dep.get("dependencyTypes", [])):
-                externals.add(spec)
-    return (len(modules), edges, unresolved, circular,
-            sorted(x for x in externals if x), internal_edges, internal_unresolved)
-
-
-def depcruise_degraded(_target: RepoTarget, combined: str, _exit: int) -> str:
-    # stdout is placed before the sentinel by the executor.
-    stdout = combined.split("\n### STDERR ###\n", 1)[0]
-    try:
-        _, _, _, _, _, internal_edges, internal_unresolved = depcruise_stats(stdout)
-    except Exception:
-        return ""
-    # Coverage is measured over INTERNAL edges only — unresolved external npm
-    # subpaths (antd/es/*, @dnd-kit/*) are a known limit of the safe
-    # `--no-config`/`--do-not-follow` run, not a hole in the coupling graph.
-    if internal_edges and internal_unresolved / internal_edges > 0.15:
-        return ("dependency coverage partial: "
-                f"{internal_unresolved}/{internal_edges} INTERNAL edges unresolved (>15%)")
-    return ""
-
-
-def depcruise_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
-    target = _target
-    (modules, edges, unresolved, circular, externals,
-     internal_edges, internal_unresolved) = depcruise_stats(stdout)
-    production: list[str] = []
-    dev_test: list[str] = []
-    unclassified: list[str] = []
-    package_file = Path(target.path) / "package.json"
-    package_data = _json(package_file.read_text("utf-8")) if package_file.is_file() else {}
-    deps = set(package_data.get("dependencies", {}))
-    dev_deps = set(package_data.get("devDependencies", {}))
-
-    def package_root(value: str) -> str:
-        parts = value.split("/")
-        return "/".join(parts[:2]) if value.startswith("@") else parts[0]
-
-    for value in externals:
-        root = package_root(value)
-        if root in deps:
-            production.append(value)
-        elif root in dev_deps:
-            dev_test.append(value)
-        else:
-            unclassified.append(value)
-    out = [
-        f"modules: {modules}", f"edges: {edges}", f"unresolved_edges: {unresolved}",
-        f"internal_edges: {internal_edges}",
-        f"internal_unresolved_edges: {internal_unresolved} "
-        f"(coupling-graph coverage; external npm subpaths excluded)",
-        f"circular_edges: {circular}", "", "external_imports_production:", *production,
-        "", "external_imports_dev_test:", *dev_test,
-        "", "external_imports_unclassified:", *unclassified,
-    ]
-    if stderr.strip():
-        out += ["", "stderr:", *stderr.splitlines()[:30]]
-    return "\n".join(out)
+# dependency-cruiser parsers live in parsers_depcruise.py (size-signal split);
+# re-exported here so callers keep a single `parsers.*` import surface.
+from .parsers_depcruise import (  # noqa: E402,F401
+    _depcruise_cycles, _is_internal_spec, depcruise_degraded,
+    depcruise_resolution_note, depcruise_stats, depcruise_view, validate_depcruise,
+)
 
 
 _COMPILE_FAILURE = re.compile(
@@ -274,6 +178,30 @@ def validate_go_list(text: str, _exit: int) -> str:
         return f"invalid go list JSON stream: {exc}"
     return "" if values and all("ImportPath" in x for x in values) \
         else "expected one or more package objects with ImportPath"
+
+
+_GO_LOAD_FAILURE = re.compile(
+    r"cannot find package|no required module provides|module lookup disabled|"
+    r"missing go\.sum entry|build constraints exclude all Go files|"
+    r"cannot load|go: updates to go\.(?:mod|sum) needed",
+    re.I,
+)
+
+
+def go_list_degraded(_target: RepoTarget, combined: str, _exit: int) -> str:
+    """Fail-closed partial coverage: package load/resolution failures (cold cache,
+    missing deps, constraint-excluded packages) must never read as a clean graph.
+    A hard failure already exits non-zero (FAILED); this catches the case where a
+    per-package Error rides along in an otherwise-accepted run."""
+    stdout, _, stderr = combined.partition("\n### STDERR ###\n")
+    try:
+        if any("Error" in pkg for pkg in decode_json_stream(stdout)):
+            return "go list coverage partial: one or more packages reported a load Error"
+    except Exception:
+        pass
+    if _GO_LOAD_FAILURE.search(stderr):
+        return "go list coverage partial: package load/resolution failure in diagnostics"
+    return ""
 
 
 def _go_module(target: RepoTarget) -> str:
@@ -422,6 +350,9 @@ def history_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
         f"since: {data.get('since')}", f"commits_used: {data.get('commits_used')}",
         f"shallow: {complete.get('shallow')}",
         f"bulk_changesets_excluded_from_coupling: {data.get('bulk_changesets_excluded_from_coupling')}",
+        f"coupling_sample_cap: {data.get('coupling_sample_cap', 0)} "
+        f"(commits_for_coupling: {data.get('coupling_commits_used', data.get('commits_used'))}, "
+        f"sampled: {str(data.get('coupling_sampled', False)).lower()})",
         "", "churn:",
     ]
     out += [f"{x['commits']}\t{x['total_lines']}\t{x['file']}" for x in data.get("churn", [])]
@@ -435,8 +366,19 @@ def history_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
     out += ["", "ownership:"]
     out += [f"{x['distinct_committers']}\t{x['dominant_commit_share']}\t"
             f"{x['dominant_churn_share']}\t{x['file']}" for x in data.get("ownership", [])]
+    # Authors: STRONG-merged roster (exact-email/.mailmap via git check-mailmap),
+    # with git shortlog -sne as a mailmap-applied but bot-inclusive cross-check.
+    roster = data.get("author_roster", [])
+    if roster:
+        out += ["", f"authors (strong identity: exact-email / .mailmap merges; "
+                    f"{data.get('distinct_authors_strong', len(roster))} distinct; "
+                    f"git shortlog -sne cross-check: "
+                    f"{data.get('git_shortlog_author_count', '?')} — mailmap-applied, "
+                    "bot-inclusive):"]
+        out += [f"{x['commits']}\t{x['author']}" for x in roster[:40]]
     if data.get("uncertain_name_matches"):
-        out += ["", "uncertain_name_matches:", *data["uncertain_name_matches"]]
+        out += ["", "uncertain_name_matches (name-only collisions — NOT merged, "
+                    "surfaced for confirmation):", *data["uncertain_name_matches"]]
     if stderr.strip():
         out += ["", "stderr:", *stderr.splitlines()[:30]]
     return "\n".join(out)
