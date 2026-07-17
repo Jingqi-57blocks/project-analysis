@@ -8,10 +8,19 @@ its template.
 
 `overview.md` is the **primary, human-facing document**: a reader with no prior
 context understands the system and its biggest changeability risks in ~10
-minutes without opening anything else. `technical-overview.md` is its
-full-detail companion (all findings, evidence, metrics, disposition, coverage).
-`project-map.md` is the reusable topology. The simpler document is DERIVED from
-the fuller one and never contradicts it.
+minutes without opening anything else. It is **diagnosis-only** and reflects
+**current state ONLY** — conditions and observed impact, never fixes, directions,
+remediation, roadmaps, priority labels, recommended next modules, or suggested
+next analyses, and it never tells the reader what to do next; those
+(`suggested_direction`, priorities) live in `technical-overview.md` and the
+module reports. It presents per-module conditions with enough fidelity that the
+READER decides where to drill down — it never identifies or recommends which
+modules deserve a drill-down. Its main text carries NO source paths, raw metrics,
+or tool names — every claim links to `technical-overview.md`, where the citations
+live. `technical-overview.md` is its full-detail companion (all findings with
+`suggested_direction`, evidence, metrics, disposition, coverage). `project-map.md`
+is the reusable topology. The simpler document is DERIVED from the fuller one and
+never contradicts it.
 
 **Prime rule: synthesis reorganizes cited material — it does not create new
 claims.** If, while synthesizing, you notice something no lens reported, you
@@ -61,15 +70,17 @@ context):**
   carries an explicit label (`included` systems solid, anything else
   `unresolved` dashed).
 - **Simplicity is a rule, not a preference.** Prefer plain sentences a PM can
-  act on. Each claim must be verifiable from its own citation alone; never make
-  the reader cross-check two documents to understand one point. Minimize what a
-  human must verify without omitting what shouldn't be omitted. Facts come from
-  code — never fabricated, never inferred from a name.
+  act on. In `overview.md` the main text carries no source paths, raw metrics, or
+  tool names — a claim is stated plainly and links to `technical-overview.md`,
+  where it is verifiable from its citation alone; the reader never has to assemble
+  evidence from several places to understand one point. Minimize what a human must
+  verify without omitting what shouldn't be omitted. Facts come from code — never
+  fabricated, never inferred from a name.
 
 ## The six changeability questions
 
 Change difficulty — not defect count — is the product's core question. Drive the
-diagnosis (overview.md §4) and the module changeability table (overview.md §6)
+diagnosis (overview.md §11) and the module changeability table (overview.md §13)
 by answering these six, each ONLY from cited evidence:
 
 1. **Boundary clarity** — does each module own one coherent responsibility, or
@@ -79,15 +90,17 @@ by answering these six, each ONLY from cited evidence:
    move with it? (co-change pairs, cross-directory coupling, clone pairs.) →
    the *change spread* cell.
 3. **Rule locality** — does a business rule live in one place, or is it smeared
-   across layers/services? **Assess this ONLY along the representative change
-   paths you actually sample (§5) — never claim it repo-wide.**
+   across layers/services? **Assess this ONLY along the journeys and
+   change-impact paths you actually sample (overview.md §5, §12) — never claim
+   it repo-wide.**
 4. **Hidden coupling** — what breaks that a reader wouldn't expect? (shared DB
    tables, dependency hubs/cycles, token/config trust edges.) → the *hidden
    coupling* cell.
 5. **Duplication & evolution debt** — is the same logic maintained in N copies;
    are there parallel implementations / partial replacements / compatibility
    layers of one capability? (clone pairs, route-liveness ledger, two packages
-   doing one job.) → feeds §4 and the *change spread* / *hidden coupling* cells.
+   doing one job.) → feeds §11 (and §3's system-evolution line) and the
+   *change spread* / *hidden coupling* cells.
 6. **Verification difficulty** — if someone changes this, what catches a
    mistake? (observed tests + their wiring, type/migration nets, CI gates.) →
    the *safety net* cell.
@@ -133,6 +146,42 @@ never turns unrelated cells into concerns or clears them.
   generically (parallel implementations / partial replacement / compatibility
   layer) from evidence; never assume "migration" or any project-specific story a
   generic prompt shouldn't carry.
+- **A route is not a UI entry.** A registered backend route does not prove a
+  user-facing screen exists. A UI entry requires a frontend entry point (a
+  rendered control/label), verified by reading it — never inferred from a route.
+- **Frontend permission checks are not backend authorization.** A hidden menu or
+  guarded route is visibility; authorization is proven only at the backend
+  (middleware / policy engine / inline check). Report the two separately; never
+  present frontend visibility as enforcement.
+- **A definition is not activation.** A defined file, task, scheduler, role, or
+  route is not proof it runs or applies. Behavior-activation labels
+  (`active` / `conditional` / `status unresolved`) require evidence.
+- **Partial repos are not the whole system.** When only some repos/deployables
+  are analyzed, scope every claim to the analyzed set; absence there is not
+  absence in the system.
+- **Naming is not migration proof.** `v2` / `legacy` / `new` / `old` /
+  `deprecated` in a name is not evidence of a migration or replacement state —
+  cite behavior (parallel implementations, route-liveness, shared tables), never
+  the name.
+
+## Output budget & generation constraints
+
+**Readability budget for `overview.md`:** ONE system diagram, at most 2–3 user
+journeys, at most 2–3 change-impact paths, at most 5–7 findings, a ~10-minute
+read. Main text has no source paths, raw metrics, or tool jargon (citations live
+in `technical-overview.md`). When a section exceeds its budget, keep the
+highest-impact items and move the remainder to `technical-overview.md`. The
+~10-minute figure is the LAYERED read: §2 Executive diagnosis is a self-sufficient
+~2–3 minute summary of the whole diagnosis, and §3–§16 are the reference a reader
+dips into per question.
+
+**Generation constraints (this stage adds NO new LLM pass):** synthesis consumes
+the bounded structured summaries already produced (lens findings, signal views,
+`discovery-report.json`) plus a FEW targeted bounded reads — only the 2–3
+user-journey entry files, and only to quote their verbatim UI labels. It never
+does broad source reads. If you run past the time budget, report the affected
+section as `partial` / `unknown` and say so — never compensate with broad reads.
+Target: a fresh run stays within ~20% of the current baseline wall-clock.
 
 ## Step 4 — finalize `project-map.md` (template: templates/project-map.md)
 
@@ -200,53 +249,99 @@ observed` scoped to signals that ran, never "healthy"); the full
 integration-candidate disposition table (counts sum to total); the lens
 coverage table (status over REQUIRED signals, optional-capability gaps as
 `partial — <capability> unavailable`) plus the verbatim per-signal detail from
-`run-summary.json`; and assumptions/open-questions. Generate its table of
-contents LAST. Topology lives in `project-map.md` — link, don't duplicate.
+`run-summary.json`; and assumptions/open-questions. It also holds the detail
+`overview.md` sheds: the endpoint-level interface/consumer inventory, the
+access-model backing (role catalogs, enforcement-layer citations), and the
+data-ownership backing (per-store writers/readers with the distinction reached
+on the ladder). Findings here KEEP their `priority` and `suggested_direction` —
+the dev-facing detail `overview.md` omits. Generate its table of contents LAST.
+Topology lives in `project-map.md` — link, don't duplicate.
 
 ### 6b. `overview.md` (template: templates/overview.md)
 
 The PRIMARY human-facing document, written AFTER technical-overview.md and
 derived from it — nothing here may appear that technical-overview.md does not
-support. Nine sections, independently readable in ~10 minutes:
+support. **Diagnosis-only** and **current-state-only** (no fixes, directions,
+priorities, recommended next modules, or suggested next analyses; it never tells
+the reader what to do next — it presents conditions so the READER decides where
+to drill down) and within the readability budget above. Sixteen sections, in this
+exact order (they MUST match the template headings and the SKILL.md step-6 list):
 
-1. **Analysis basis** — compact header: run date, per-repo commit vintage
-   (short), the few coverage limits that shape the reading, link to
-   technical-overview.md, and the standing scope disclaimer. NOT the full
-   provenance table.
-2. **Project snapshot** — purpose; business capabilities; platform/shared
-   components (kept separate from capabilities); **evidence-backed user roles**
-   (only from permission checks / route guards / menu-or-role definitions /
-   approval relations — otherwise `unresolved`, never inferred from a module
-   name); a **system-evolution** line ONLY when evidence detects one (parallel
-   implementations, partial replacement, compatibility layer — generic, no
-   assumed "migration").
-3. **Capability & system map** — business capabilities NEVER mixed with
-   technical/platform components at one level; a SIMPLIFIED mermaid
-   (business-labeled, identifiers parenthesized, no bare status codes / route
-   paths / table names), edges backed by project-map.md.
-4. **Overall changeability diagnosis** — the 3–5 strongest SYSTEMIC causes and
-   explicitly HOW THEY REINFORCE one another (one coherent story, not a list).
-5. **Representative change paths** — 2–3 project-level examples (one
-   business-rule change, one API/data change, optionally one UI change) SELECTED
-   where evidence is strongest (co-change ∩ complexity ∩ missing safety net) and
-   citing it; each shows components crossed, responsibilities involved, side
-   effects, verification required, why expensive. Rule locality is assessed here
-   (sampled), not repo-wide. Per-module tracing stays in the module drill-down.
-6. **Module changeability table** — columns responsibility clarity / change
+1. **Analysis basis** — run date; per-repo one line (name, short HEAD, commit
+   DATE, clean/dirty); referenced-but-unavailable systems (name only); the few
+   coverage limits that shape the reading; link to technical-overview.md; the
+   standing scope disclaimer. NOT the full provenance table.
+2. **Executive diagnosis** — the read-this-and-stop paragraph, COMPLETE ON ITS
+   OWN (~2–3 min): what it is, who uses it, architectural shape, whether it is
+   broadly easy/hard to change and why, EVERY systemic cause and HOW THEY
+   REINFORCE, and EVERY top remaining evidence gap — all in plain sentences,
+   because many readers stop here. No later section (§3–§16) may state a
+   diagnosis conclusion that is absent from §2; those sections add evidence and
+   organization, not new conclusions. Conditions and impact ONLY.
+3. **Product snapshot** — capabilities, each with primary users + business
+   outcome + confidence; platform/shared components listed SEPARATELY; a
+   system-evolution line ONLY when evidenced (a `v2`/`legacy` NAME is never
+   proof — cite behavior).
+4. **Users, roles & access model** — static roles vs external user types vs
+   contextual identities (owner/leader/approver); where defined + catalog drift
+   across repos; enforcement layers present (frontend menus/routes · backend
+   middleware · policy engines · inline checks); observed authz gaps; unresolved
+   boundaries. MUST distinguish frontend visibility vs backend authorization,
+   contextual vs static, discovery vs verification. Per-role matrices go to the
+   module PRDs.
+5. **Representative user journeys** — 2–3 (normal / approval-or-rule-heavy /
+   background-or-integration): actor → UI entry (label VERBATIM from source, via
+   a bounded read of that entry file) → action → API/service → rule → data →
+   notification/final state. No-independent-UI capabilities labeled
+   `embedded`/`background`/`API-only`.
+6. **Runtime & system topology** — ONE mermaid; nodes = UI apps / deployable
+   services (a source dir is NOT a deployable unit — deploy configs are the
+   evidence; render deployable-unit nodes `inferred`, never implying deploy-config
+   discovery is complete) / schedulers / data stores / external systems / trust
+   boundaries;
+   distinguish edge TYPES (sync API · service-to-service · scheduled · data read
+   · data write · authn/authz · external); every edge backed by project-map.md.
+7. **Interface & consumer boundaries** — public/internal/legacy/versioned; known
+   consumers; providers a caller references but that could not be located;
+   parallel old+new interfaces for one capability. NO endpoint inventory.
+8. **Data ownership & lifecycle** — per IMPORTANT domain: source of truth,
+   writers, readers, multi-service direct access, shared-via-API vs shared-DB,
+   known lifecycle, coverage confidence; state the distinction reached on the
+   ladder (declaration / read / write / join-reference / same-name-only /
+   unresolved-dynamic). A name match ALONE is never confirmed shared persistence.
+9. **Background execution** — per job: trigger, owner, data, external calls,
+   observed retry/idempotency/failure-recording/alerting. Defined ≠ active.
+10. **External systems** — grouped by evidence class: confirmed / config-only /
+   dynamic-unresolved / referenced-without-use / internal-misclassified (an
+   apparent external proven internal — belongs in the topology, noted here).
+   No fixed vendor lists; full disposition accounting stays in
+   technical-overview.md.
+11. **Overall changeability diagnosis** — the six changeability questions as ONE
+   causal story (rule locality only along the sampled journeys/paths), naming
+   the systemic causes and HOW THEY REINFORCE. NO remediation.
+12. **Representative change-impact paths** — 2–3 (business-rule / API-data /
+   optional UI) SELECTED where evidence is strongest: components crossed,
+   responsibilities, side effects, verification required, why expensive TODAY,
+   and remaining unknowns. Current cost only — no improvement proposals.
+13. **Module changeability table** — columns responsibility clarity / change
    spread / hidden coupling / safety net / confidence; cells EXACTLY `confirmed
    concern` · `no concern observed` (basis inline) · `unknown`. Per-gap unknown
-   mapping (§ six questions). Never "healthy".
-7. **Prioritized findings** — systemic first, local second, coverage gaps
-   third; each with impact / evidence (link to the technical-overview finding) /
-   confidence / direction. Note explicitly: this is ENGINEERING-RISK priority,
-   not a business-roadmap priority.
-8. **External systems & boundaries** — plain summary of what the product relies
-   on; disposition detail stays in technical-overview.md.
-9. **Open questions & limitations** — ONLY questions code cannot answer, each
-   stating WHY (if a re-run knob or producer could answer it, it is a coverage
-   gap for the technical-overview backlog, not a question). Product context
-   (ownership, usage, SLA, criticality, roadmap) listed as what code cannot
-   know.
+   mapping (§ six questions). Never "healthy". DESCRIBES conditions only — no
+   recommendation column, no "drill here next" marking, and row order implies no
+   analysis priority beyond the cell values.
+14. **Findings by observed impact** — 5–7 MAX, system-level impact only, ordered
+   by OBSERVED ENGINEERING IMPACT (not product priority); each with claim /
+   affected modules / observed impact / evidence (link to the technical-overview
+   finding) / confidence / limitations. NO direction, NO priority label.
+15. **Operational state** — observable evidence per aspect (tests · CI ·
+   deployable units · DB migrations · rollback · health checks · logging ·
+   metrics/tracing/alerts · failure recovery · dependency-vuln scanning);
+   `unknown` where insufficient. NEVER infer reliable/unreliable from absence.
+16. **Coverage & unknowns** — TWO categories: (a) code COULD answer but this run
+   didn't — analysis-coverage gaps stated FACTUALLY (the gap + the signal that
+   would hold the answer, never an action request), (b) code CANNOT answer
+   (production traffic, usage, SLAs, ownership, criticality, incidents, roadmap,
+   prod-enablement). Never converted into recommendations.
 
 ## After writing
 

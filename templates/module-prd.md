@@ -33,6 +33,10 @@ paraphrased.
 ## Roles & permissions
 <!-- include only if role/permission logic was observed -->
 
+This is the home for the per-module role/permission MATRIX that overview.md §4 defers
+here. Keep frontend visibility distinct from backend authorization (say which in
+`activation`/`evidence`), and distinguish what was discovered from what was verified.
+
 | role | can | cannot | activation | evidence |
 |---|---|---|---|---|
 | {{role}} | {{allowed}} | {{denied}} | {{active/conditional/status unresolved}} | {{citations}} |

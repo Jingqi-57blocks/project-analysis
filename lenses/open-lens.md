@@ -19,12 +19,15 @@ Typical catches (non-exhaustive — that is the point of this lens):
   (report the FILE as a finding; the redactor keeps values out of views).
 - **Inconsistent patterns** — three different error-handling or auth styles
   across one codebase; each style cited once.
-- **Role/permission evidence (for the overview's user-roles snapshot)** — when
-  you observe role or permission logic (route guards, permission middleware/
-  checks, menu-or-role definitions, approval relations), package the roles it
-  actually names, cited and with activation labels. This is the ONLY basis the
-  snapshot may use for user roles — absent such evidence, roles stay
-  `unresolved`, never inferred from module or folder names.
+- **Role/permission & access-model evidence (for the overview's roles snapshot
+  and access model)** — when you observe role or permission logic (route guards,
+  permission middleware/checks, menu-or-role definitions, policy-engine rules,
+  approval relations), package the roles it names AND the enforcement LAYER and
+  location of each check: frontend menu/route (visibility) versus backend
+  middleware / policy engine / inline check (authorization). Cite each, label
+  activation, and keep frontend visibility distinct from backend authorization.
+  This is the ONLY basis the snapshot and access model may use — absent such
+  evidence, roles stay `unresolved`, never inferred from module or folder names.
 - **Anything else** you can claim, cite, and argue impact for.
 
 Rules:

@@ -212,18 +212,35 @@ anchored):
 6. **Write `technical-overview.md` then `overview.md`** (templates:
    `templates/technical-overview.md`, `templates/overview.md`; rules: `synthesis.md`
    step 6). `technical-overview.md` is the full-detail companion: full provenance,
-   complete analysis scope, every finding in the shared shape, per-module health
-   metrics, the integration-candidate disposition table, and lens coverage (per-lens
-   aggregate + per-signal detail). `overview.md` is the PRIMARY, human-facing document —
-   nine sections a PM reads in ~10 minutes (analysis basis; project snapshot; capability
-   & system map; overall changeability diagnosis; representative change paths; module
-   changeability table; prioritized findings; external systems; open questions) — derived
-   from technical-overview.md, business-simple, same citation discipline. Synthesis
-   reorganizes cited material — it never creates new uncited claims.
+   complete analysis scope, every finding in the shared shape (keeping `priority` and
+   `suggested_direction`), per-module health metrics, the integration-candidate
+   disposition table, the endpoint-level interface/consumer inventory and the
+   access-model / data-ownership backing, and lens coverage (per-lens aggregate +
+   per-signal detail). `overview.md` is the PRIMARY, human-facing document —
+   **diagnosis-only and current-state-only** (no fixes, directions, priorities,
+   roadmaps, recommended next modules, or suggested next analyses; it never tells the
+   reader what to do next — it presents per-module conditions so the reader decides where
+   to drill down), readable in ~10 minutes — with sixteen sections in order: (1) analysis
+   basis, (2) executive
+   diagnosis, (3) product snapshot, (4) users, roles & access model, (5) representative
+   user journeys, (6) runtime & system topology, (7) interface & consumer boundaries,
+   (8) data ownership & lifecycle, (9) background execution, (10) external systems,
+   (11) overall changeability diagnosis, (12) representative change-impact paths,
+   (13) module changeability table, (14) findings by observed impact, (15) operational
+   state, (16) coverage & unknowns. Its main text carries no source paths, raw metrics,
+   or tool jargon — claims link to technical-overview.md. Synthesis reorganizes cited
+   material — it never creates new uncited claims.
 7. **Offer acceptance** (sets the `current` pointer on the user's yes). Skip the offer
    for inspection-only runs.
 
 Target wall-clock is 10–15 minutes; quality is the gate, not the clock.
+
+**Generation budget (no new analysis passes).** Synthesis adds no extra LLM stage: it
+works from the bounded structured summaries already produced (lens findings, signal
+views, discovery report) plus a FEW targeted bounded reads — only the 2–3 user-journey
+entry files, for their verbatim UI labels — never broad source reads. If it runs past
+budget, the affected section is reported `partial`/`unknown`, never backfilled with broad
+reads; a fresh run should stay within ~20% of the current baseline wall-clock.
 
 ## Module drill-down
 

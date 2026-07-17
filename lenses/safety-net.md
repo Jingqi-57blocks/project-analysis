@@ -24,6 +24,11 @@ Look for, with evidence:
 - **Type/migration nets** — TypeScript strictness settings, DB migration
   discipline (read tsconfig/migration files as data) — supporting evidence
   for or against safety, always cited.
+- **Operational-state signals (for the overview's operational-state section)** —
+  while reading CI and config, record the PRESENCE/ABSENCE and LOCATION only (never
+  a reliability verdict) of: health-check endpoints, logging config, DB migration
+  directories, rollback/deploy hints, metrics/tracing/alert wiring. Absence is
+  `unknown`, not "unreliable".
 
 Rules:
 - NEVER report a coverage percentage — no coverage tool runs in v1. Claims

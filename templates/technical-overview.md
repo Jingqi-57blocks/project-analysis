@@ -58,8 +58,29 @@ the topology-level detail lives in project-map.md}}
 **Exclusions applied:** {{tier1_and_tier2_exclusions_per_repo — disclosed, with the
 evidence that derived each Tier-2 entry}}
 
-Topology, module classification, relationships, and shared persistence are in
-[`project-map.md`](project-map.md).
+Topology, module classification, relationships, and shared persistence (with the
+data-ownership distinction ladder) are in [`project-map.md`](project-map.md).
+
+## Interfaces & consumers
+
+Endpoint-level backing for overview.md §7 (which stays summary-level). Per interface:
+exposure, version, known consumers, and any provider a caller references but that could
+not be located.
+
+| interface / endpoint group | exposure | version | known consumers | evidence |
+|---|---|---|---|---|
+| {{path or handler group}} | {{public / internal / legacy}} | {{version or none}} | {{modules/clients that call it, or `provider unlocated`}} | {{citations}} |
+
+## Access model (backing)
+
+Backs overview.md §4: the role catalog and the enforcement-layer evidence (per-role
+permission MATRICES live in the module PRDs). Distinguish frontend visibility from
+backend authorization, and discovery from verification — a frontend guard is visibility,
+not proof of enforcement.
+
+| role / identity | kind | defined at | enforced at (layer + citation) | verification |
+|---|---|---|---|---|
+| {{role}} | {{static / external-user-type / contextual}} | {{where declared}} | {{frontend-menu / route-guard / backend-middleware / policy-engine / inline-check — cited}} | {{observed / status unresolved}} |
 
 ## Top problems
 

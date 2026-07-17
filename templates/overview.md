@@ -8,93 +8,166 @@
 > Findings labeled `status unresolved` need human confirmation.
 
 <!--
-This is the PRIMARY, human-facing document: a reader with no prior context should
-understand the system and its biggest changeability risks in ~10 minutes, WITHOUT
-opening any other file. Keep it simple — plain sentences a PM can act on. Every claim
-is grounded in code (never invented) and is verifiable from its own citation; do not
-make the reader cross-check multiple documents to understand one point. The exhaustive
-evidence, full findings, and metrics live in technical-overview.md — link to it, don't
-inline it. Run language governs the prose AND the section headings of this document
-(default zh-CN); code identifiers, UI labels, citations, and the fixed status
-vocabulary (`confirmed concern`/`no concern observed`/`unknown`, `included`/`unresolved`,
-`status unresolved`, priorities) stay verbatim. For a zh-CN run, render the disclaimer
-above as its faithful zh-CN translation (same scope claims).
+PRIMARY, human-facing document — read top-to-bottom in ~10 minutes with no prior
+context. It is DIAGNOSIS-ONLY and reflects CURRENT STATE ONLY: it describes what the
+system IS and how hard it is to change, with conditions and observed impact. It contains
+NO fix recommendations, refactoring proposals, directions, roadmaps, remediation,
+priority labels, recommended next modules, or suggested next analyses — and it never
+tells the reader what to do next (those, as `suggested_direction`/priorities, live in
+technical-overview.md and the module reports). It presents per-module conditions with
+enough fidelity that the READER decides where to drill down; it never identifies or
+recommends which modules deserve a drill-down.
+Readability budget: ONE system diagram, at most 2–3 user journeys, at most 2–3
+change-impact paths, at most 5–7 findings. Main text carries NO source paths, NO raw
+metrics, and NO tool names — every claim links to technical-overview.md, where the
+citations live; UI labels are quoted verbatim and module IDs may be parenthesized.
+Facts come from code, never invented, never inferred from a name. Run language governs
+the prose AND section headings (default zh-CN); render the disclaimer as a faithful
+zh-CN translation for a zh-CN run.
 -->
+
+*How to read this: **§2 Executive diagnosis** is the complete diagnosis in summary form —
+a ~2–3 minute read that stands on its own. **§3–§16** are the evidence-organized reference
+to dip into per question; the ~10-minute read is layered on top of §2.*
 
 ## 1. Analysis basis
 
-- **Run:** `{{run_id}}` · {{analyzed_at}} · language `{{language}}` · full detail:
-  [`technical-overview.md`](technical-overview.md)
-- **Analyzed:** {{repos_with_short_commit_vintage — one line per repo: name, short HEAD,
-  HEAD date; NOT the full provenance table (that is in technical-overview.md)}}
-- **Coverage limits that shape what follows:** {{the few coverage gaps a reader must
-  keep in mind — e.g. a skipped network scan, a partially-resolved dependency graph, a
-  reduced-support stack — one clause each; the complete list is section 9}}
+- **Run:** `{{run_id}}` · {{analyzed_at}} · language `{{language}}` · full detail &
+  citations: [`technical-overview.md`](technical-overview.md)
+- **Analyzed:** {{one line per repo — name, short HEAD, commit DATE, clean/dirty}}
+- **Referenced but unavailable:** {{systems/endpoints configured here whose serving
+  source was not among the analyzed repos — name only; detail in project-map.md. "none"
+  if none}}
+- **Coverage limits that shape this reading:** {{the few gaps a reader must keep in mind
+  — one clause each; the full two-category list is section 16}}
 
 <!-- ONLY when any target was dirty or non-git: -->
-> **Inspection-only run:** one or more targets were dirty worktrees (or non-git folders)
-> at analysis time; citations use `repo@WORKTREE:`/`repo@NON-GIT:` forms and this run
-> cannot be accepted as `current`.
+> **Inspection-only run:** one or more targets were dirty worktrees (or non-git folders);
+> this run cannot be accepted as `current`.
 
-## 2. Project snapshot
+## 2. Executive diagnosis
 
-- **What it is / who it's for:** {{purpose in plain product language}}
-- **Business capabilities:** {{the capabilities the product delivers — business terms,
-  not module IDs}}
-- **Platform & shared components:** {{the shared/technical pieces that serve those
-  capabilities — frontend app, auth service, schedulers, storage — kept SEPARATE from
-  the business capabilities above, never listed at the same level}}
-- **User roles:** {{roles ONLY when backed by evidence — permission checks, route
-  guards, menu/role definitions, approval relations (cite in technical-overview.md);
-  otherwise write `unresolved` — never infer a role from a module or folder name}}
-- **System evolution:** {{INCLUDE ONLY when evidence detects one — parallel
-  implementations of the same capability, a partial replacement, a compatibility layer;
-  state plainly which side carries what, citing the evidence. OMIT this line entirely if
-  no such state is observed — do not assume a migration}}
+{{the read-this-and-stop section, plain prose: what the system is, who uses it, its
+architectural shape at a glance, whether it is broadly easy or hard to change and why,
+the systemic causes and HOW THEY REINFORCE one another, and the top remaining evidence
+gaps. Conditions and observed impact ONLY — no fixes, no directions. Each claim traces
+to a later section / technical-overview.md.}}
 
-## 3. Capability & system map
+## 3. Product snapshot
 
-{{one or two plain sentences framing the diagram}}
+- **Business capabilities:** {{each with its primary users, the business outcome it
+  serves, and a confidence — business terms, not module IDs}}
+- **Platform & shared components:** {{frontend app, auth, schedulers, storage, etc. —
+  listed SEPARATELY from capabilities, never at the same level}}
+- **System evolution:** {{INCLUDE ONLY when evidence detects one (parallel
+  implementations / partial replacement / compatibility layer), stating which side
+  carries what. A `v2`/`legacy`/`new`/`old` NAME is never proof of a migration state —
+  cite behavior, not naming. OMIT this line if no such state is evidenced}}
+
+## 4. Users, roles & access model
+
+- **Who the users are:** {{distinguish static roles (a fixed catalog) · external user
+  types · contextual identities earned per record (owner / leader / approver / …)}}
+- **Where defined & catalog drift:** {{where roles/permissions are declared, and any
+  differences in the role catalog across repos}}
+- **Enforcement layers (presence + location class, not raw paths):** {{frontend menus/
+  routes · backend middleware · policy engines · inline checks — which layers exist}}
+- **Observed authorization gaps / unresolved boundaries:** {{gaps actually seen;
+  boundaries that could not be resolved}}
+
+Distinguish throughout: **frontend visibility vs backend authorization**, **contextual
+vs static** identity, and **discovery vs verification** (what was found ≠ what was
+proven enforced). Per-role permission matrices belong in the module PRDs, not here.
+
+## 5. Representative user journeys
+
+{{2–3 journeys — one normal, one approval-or-rule-heavy, one background-or-integration.
+Each traced: actor → UI entry (label quoted VERBATIM from source) → action → API/service
+→ rule applied → data touched → notification / final state. A capability with no
+independent UI is labeled `embedded` / `background` / `API-only`. Verbatim labels come
+from bounded reads of only the 2–3 entry files.}}
+
+### {{journey_name}}
+{{actor → "verbatim UI label" → … → final state}}
+
+## 6. Runtime & system topology
 
 ```mermaid
-{{simplified_topology — business-language labels with identifiers parenthesized; show
-capabilities, the platform/shared components that serve them, and external systems on
-the boundary. NO bare status codes, route paths, or table names in labels. Only edges
-backed by project-map.md relationship rows}}
+{{ONE diagram. Nodes: UI apps · deployable services (a source directory is NOT a
+deployable unit — deploy configs are the evidence; render deployable-unit nodes with an
+`inferred` label and never imply deploy-config discovery is complete) · schedulers · data
+stores · external systems · trust boundaries. Distinguish edge TYPES: sync API ·
+service-to-service · scheduled · data read · data write · authn/authz · external. Every
+edge is evidence-backed (backing in project-map.md); edges show code references,
+never traffic; the diagram introduces no new edge}}
 ```
 
-Full topology, relationship labels, and shared data: [`project-map.md`](project-map.md).
+Relationship labels, shared data, and evidence: [`project-map.md`](project-map.md).
 
-## 4. Overall changeability diagnosis
+## 7. Interface & consumer boundaries
 
-{{the 3–5 strongest SYSTEMIC causes of change difficulty, told as ONE coherent story:
-name each cause in a plain sentence, then say explicitly HOW THEY REINFORCE one another
-(e.g. a still-live parallel implementation × duplicated logic × no test net compound
-into a single risk). Not a bulleted list of unrelated defects — a diagnosis. Each cause
-restates a finding from section 7 / technical-overview.md; no new uncited claims}}
+{{which interfaces are public / internal / legacy / versioned; the known consumers of
+each; any provider that a caller references but that could not be located; parallel
+old+new interfaces serving one capability. NO endpoint inventory — that is in
+technical-overview.md.}}
 
-## 5. Representative change paths
+## 8. Data ownership & lifecycle
 
-{{2–3 PROJECT-LEVEL worked examples — one business-rule change, one API/data change,
-optionally one UI change — SELECTED where the evidence is strongest (co-change ∩
-complexity ∩ missing safety net) and citing that evidence. For each: the components a
-change crosses, the responsibilities involved, the side effects to expect, what
-verification it would require, and why it is expensive today. Keep each to a short
-paragraph; per-module tracing detail lives in the module drill-down, not here.}}
+{{per IMPORTANT domain only: source of truth · writers · readers · any multi-service
+direct access · shared-via-API vs shared-DB · known lifecycle (create → archive/delete
+where visible) · coverage confidence. State the strongest distinction reachable on the
+ladder: declaration / read / write / join-reference / same-name-only / unresolved-dynamic.
+A name match ALONE is never confirmed shared persistence.}}
 
-### {{path_name — e.g. "changing an approval rule"}}
-{{crosses …; involves …; side effects …; verification …; expensive because … (cite)}}
+| domain | source of truth | writers | readers | sharing | distinction reached | confidence |
+|---|---|---|---|---|---|---|
+| {{domain}} | {{owner}} | {{...}} | {{...}} | {{via-API / shared-DB / none}} | {{ladder level}} | {{high/medium/low}} |
 
-## 6. Module changeability table
+## 9. Background execution
+
+{{scheduled/async work, per job: trigger · owning component · data touched · external
+calls · observed retry / idempotency / failure-recording / alerting. A job that is
+DEFINED is not proven ACTIVE — label accordingly. "none observed" if none.}}
+
+## 10. External systems
+
+{{what the product relies on that it does not own, grouped by evidence class:
+**confirmed integration** · **config-only** · **dynamic/unresolved** ·
+**referenced-without-use** · **internal-misclassified** (looked external, proven
+internal — moved to the topology, noted here). Derive from evidence — no fixed
+vendor lists. The full per-candidate disposition accounting is in
+technical-overview.md.}}
+
+## 11. Overall changeability diagnosis
+
+{{the six changeability questions told as ONE causal story — boundary clarity, change
+spread, rule locality (only along the sampled journeys/paths), hidden coupling,
+duplication & evolution debt, verification difficulty — naming the systemic causes and
+HOW THEY REINFORCE one another. Conditions only; NO remediation.}}
+
+## 12. Representative change-impact paths
+
+{{2–3 worked change examples (one business-rule, one API/data, optionally one UI),
+SELECTED where evidence is strongest (co-change ∩ complexity ∩ missing safety net). Each:
+components crossed · responsibilities involved · side effects · verification required ·
+why it is expensive TODAY · **remaining unknowns**. Current cost only — no improvement
+proposals.}}
+
+### {{path_name}}
+{{crosses …; side effects …; verification …; expensive today because …; remaining unknowns …}}
+
+## 13. Module changeability table
 
 One row per business/platform module. Cells use EXACTLY this vocabulary — never
 "healthy" or any wellness word inferred from the absence of a finding:
-- `confirmed concern` — a cited finding says this is hard/risky to change (name the basis).
-- `no concern observed` — signals for THIS cell ran and surfaced nothing (state the
-  basis inline, e.g. "tests present", "low churn").
+- `confirmed concern` — a finding says this is hard/risky to change (name the basis).
+- `no concern observed` — the signal for THIS cell ran and surfaced nothing (basis inline).
 - `unknown` — the signal for THIS cell did not run or could not resolve. A gap in one
-  lens makes only its own cell `unknown`; it never turns unrelated cells into concerns
-  or clears them.
+  lens makes only its own cell `unknown`; it never turns unrelated cells into concerns.
+
+The table DESCRIBES conditions only — no recommendation column, no "drill here next"
+marking, and the row order implies no analysis priority beyond the stated cell values.
+The reader draws their own drill-down conclusions from the conditions.
 
 | module | responsibility clarity | change spread | hidden coupling | safety net | confidence |
 |---|---|---|---|---|---|
@@ -103,42 +176,38 @@ One row per business/platform module. Cells use EXACTLY this vocabulary — neve
 <!-- business + platform modules; roll shared-infra modules with no findings into one
 closing row, but NEVER collapse a module that has a finding into such a row -->
 
-## 7. Prioritized findings
+## 14. Findings by observed impact
 
-Ordered **systemic first, then local, then coverage gaps** — this is
-**engineering-risk** priority (what makes change hard or dangerous), NOT a
-business-roadmap priority. Full finding detail and all evidence are in
-[`technical-overview.md`](technical-overview.md).
-
-{{for each: a one-line claim; **impact** in plain terms; **evidence** (one citation or a
-link to the technical-overview finding number); **confidence**; **direction** (a
-direction, not a prescription). Systemic findings that span repos appear ONCE with their
-per-repo evidence beneath — never N separate rows for one root cause.}}
+At most 5–7, system-level impact only, ordered by **observed engineering impact — NOT
+product priority**. Each carries claim / affected modules / observed impact / evidence /
+confidence / limitations. NO direction, NO remediation, NO priority label (those live in
+technical-overview.md). Systemic findings appear ONCE, never N rows for one root cause.
 
 ### {{n}}. {{claim}}
-- **Impact:** {{plain-language consequence}}
-- **Evidence:** {{citation / technical-overview.md#finding-n}} · **Confidence:** {{...}}
-- **Direction:** {{...}}
+- **Affected modules:** {{module_ids}}
+- **Observed impact:** {{what it costs when someone changes/operates this}}
+- **Evidence:** [`technical-overview.md#finding-{{n}}`](technical-overview.md) · **Confidence:** {{...}}
+- **Limitations:** {{what this finding cannot see}}
 
-## 8. External systems & boundaries
+## 15. Operational state
 
-{{plain-language summary of what the product relies on that it does not own — storage,
-mail, chat, issue tracking, directory, etc. — noting anything with only weak signals as
-"signs present, not confirmed" (`unresolved`). This is a SUMMARY; the per-candidate
-disposition with evidence is in technical-overview.md, and the topology is in
-project-map.md.}}
+Observable evidence only — one line per aspect, `unknown` where evidence is insufficient.
+NEVER infer reliable/unreliable from absence; absence is `unknown`, not a verdict.
 
-## 9. Open questions & limitations
+| aspect | observed | reading |
+|---|---|---|
+| {{aspect — one row EACH for: automated tests · CI · deployable units · DB migrations · rollback · health checks · logging · metrics/tracing/alerts · failure recovery · dependency-vuln scanning}} | {{present/absent/partial + where}} | {{one line, or `unknown`}} |
 
-**Questions code cannot answer** — each states WHY the repository cannot answer it. If a
-re-run knob, a producer, or more evidence COULD answer it, it does not belong here (it
-is a coverage gap for the technical-overview backlog, not an open question):
+## 16. Coverage & unknowns
 
-{{numbered; each: the question, and the reason the repository is silent on it}}
+**(a) Code could answer, this run did not** — analysis-coverage gaps, stated factually:
+{{each gap and the signal/knob that WOULD hold the answer — a statement of what is
+missing, never a request or recommendation to run it}}
 
-**What code cannot know (product context):** {{ownership, real-world usage, SLAs,
-criticality, and roadmap are outside repository evidence — list the ones this project
-raises so a human owner can supply them}}
+**(b) Code cannot answer** — outside repository evidence: production traffic, real usage,
+SLAs, ownership, criticality, incident history, roadmap, whether a configured integration
+is enabled in production. {{list the ones this project raises, for a human owner. These
+are never turned into recommendations.}}
 
 ---
 <!-- ONLY for clean (non-inspection-only) runs, end with the acceptance offer: -->

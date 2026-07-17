@@ -45,9 +45,14 @@ claims}}
 
 ## Shared persistence
 
-| store / table | written by | read by | label | evidence |
-|---|---|---|---|---|
-| {{table_or_store}} | {{module_ids}} | {{module_ids}} | {{observed/inferred/unresolved}} | {{citations}} |
+Data-ownership backing for overview.md §8. The **sharing distinction** states the
+strongest evidence reached on the ladder — a name match ALONE is `same-name-only`, never
+confirmed shared persistence; `observed` sharing needs a write/read distinction reached
+with citations.
+
+| store / table | written by | read by | sharing distinction | label | evidence |
+|---|---|---|---|---|---|
+| {{table_or_store}} | {{module_ids}} | {{module_ids}} | {{declaration / read / write / join-reference / same-name-only / unresolved-dynamic}} | {{observed/inferred/unresolved}} | {{citations}} |
 
 ## Backend liveness (which routes the frontend actually calls)
 
@@ -59,7 +64,7 @@ orphan list and nothing here is "dead").
 
 | backend | UI-called routes | distinct UI call paths (ledger) | reading |
 |---|---|---|---|
-| `{{repo}}` | {{ui_called_count}} | {{ledger_path_count_for_its_base}} | {{one line — e.g. "still a live backend: N UI paths" or "carries the bulk of traffic"}} |
+| `{{repo}}` | {{ui_called_count}} | {{ledger_path_count_for_its_base}} | {{one line — e.g. "still a live backend: N UI paths" or "carries the bulk of UI call paths"}} |
 
 {{when parallel implementations of the same capability exist: state plainly which
 domains still route to which implementation, citing the ledger. Caveat mount-prefix
