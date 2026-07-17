@@ -1,0 +1,91 @@
+# ORM table declarations + access sites. Table NAMES and access verbs are read
+# structurally; the Python side (discovery/tables.py) maps each match to an
+# access-type on the ladder: declaration / write / read / join-ref /
+# same-name-only / unresolved-dynamic. Cross-file constant/model→table binding is
+# NOT attempted — a table referenced through a constant or a model object is
+# recorded as unresolved, never asserted as a confirmed access.
+
+# --- Sequelize: migrations (DDL) ---
+id: sequelize-create-table
+language: JavaScript
+rule:
+  pattern: $Q.createTable($N, $$$)
+constraints:
+  N: { kind: string }
+---
+id: sequelize-ddl-write
+language: JavaScript
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '\.(dropTable|renameTable|addColumn|removeColumn|renameColumn|changeColumn|addIndex|removeIndex|bulkInsert|bulkUpdate|bulkDelete)$'
+---
+# --- Sequelize: model → table binding (declaration) ---
+id: sequelize-tablename
+language: JavaScript
+rule:
+  kind: pair
+  regex: '^tableName\s*:'
+---
+id: sequelize-tablename-ts
+language: TypeScript
+rule:
+  kind: pair
+  regex: '^tableName\s*:'
+---
+id: sequelize-create-table-ts
+language: TypeScript
+rule:
+  pattern: $Q.createTable($N, $$$)
+constraints:
+  N: { kind: string }
+---
+# --- GORM (Go): table-name constants + model TableName() bindings (declaration) ---
+id: go-table-const
+language: Go
+rule:
+  kind: const_spec
+  regex: 'TableName\s*='
+---
+id: go-tablename-method
+language: Go
+rule:
+  pattern: 'func ($R) TableName() string { return $N }'
+---
+# --- GORM (Go): access sites through `.Table(...)` — the terminal verb classifies
+# read vs write; the Python side joins `.Table(constant.X)` to the typed-const
+# registry by EXACT identifier match (structural join, not data-flow).
+id: gorm-access-write
+language: Go
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        kind: selector_expression
+        has: { field: field, regex: '^(Create|Save|Updates|Update|Delete|Exec)$' }
+    - has:
+        stopBy: end
+        kind: call_expression
+        has:
+          field: function
+          kind: selector_expression
+          has: { field: field, regex: '^Table$' }
+---
+id: gorm-access-read
+language: Go
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        kind: selector_expression
+        has: { field: field, regex: '^(Find|First|Take|Last|Scan|Pluck|Count|Rows)$' }
+    - has:
+        stopBy: end
+        kind: call_expression
+        has:
+          field: function
+          kind: selector_expression
+          has: { field: field, regex: '^Table$' }

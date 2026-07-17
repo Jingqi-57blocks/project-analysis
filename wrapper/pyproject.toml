@@ -17,6 +17,7 @@ project-doctor-wrapper = "doctor_wrapper.cli:main"
 
 [project.optional-dependencies]
 history = ["pydriller==2.10"]
+sql = ["sqlglot==30.12.0"]
 dev = ["pytest"]
 
 [tool.pytest.ini_options]
