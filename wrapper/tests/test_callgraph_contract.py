@@ -59,6 +59,16 @@ def test_sort_key_is_stable_and_orders_by_callsite():
     assert sorted([b, a], key=lambda e: e.sort_key()) == [a, b]
 
 
+def test_sort_key_is_a_total_order_over_caller_symbol():
+    # Synthetic package-init edges share a positionless caller_citation and
+    # differ only in caller_symbol; sort_key MUST still distinguish them so the
+    # written jsonl order is not left to hash-seed-dependent set iteration.
+    a = _edge(caller_symbol="p/a.init", caller_citation="app@abc::0")
+    b = _edge(caller_symbol="p/b.init", caller_citation="app@abc::0")
+    assert a.sort_key() != b.sort_key()
+    assert sorted([b, a], key=lambda e: e.sort_key()) == [a, b]
+
+
 def test_call_site_counts_total():
     counts = CallSiteCounts(resolved=3, ambiguous=1, external=4, unresolved=2)
     assert counts.total == 10

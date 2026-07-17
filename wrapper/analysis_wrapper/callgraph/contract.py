@@ -103,9 +103,18 @@ class CallEdge:
                 raise ValueError(f"CallEdge.{name} must be non-empty")
 
     def sort_key(self) -> tuple:
-        """Stable order for deterministic output under identical inputs."""
+        """Stable order for deterministic output under identical inputs.
+
+        Covers EVERY field so distinct edges never tie: synthetic callers (Go
+        package ``init`` thunks) share a positionless ``caller_citation``, so
+        without ``caller_symbol`` as the final discriminator such edges tie and
+        their written order follows hash-seed-dependent ``set`` iteration —
+        byte-nondeterministic across processes though the normalized model is
+        unaffected. ``caller_symbol`` last keeps the primary declaration-site
+        ordering unchanged."""
         return (self.caller_citation, self.callsite_citation, self.callee_citation,
-                self.callee_symbol, self.kind, self.resolution, self.lang)
+                self.callee_symbol, self.kind, self.resolution, self.lang,
+                self.caller_symbol)
 
     def to_json_line(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
