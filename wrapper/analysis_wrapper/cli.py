@@ -162,6 +162,12 @@ def parser() -> argparse.ArgumentParser:
                        help="report language (default: the source run's)")
     drill.add_argument("--project", default="",
                        help="project-id (needed only when output/ has several)")
+    sysmodel = sub.add_parser(
+        "system-model",
+        help="assemble system-model.json from a completed run dir (targets.json "
+             "+ discovery-report.json + callgraph/); import maps under imports/ "
+             "are consumed when present")
+    sysmodel.add_argument("--run", required=True, help="completed run directory")
     mark = sub.add_parser("mark-stage", help="record a stage checkpoint as done")
     mark.add_argument("--run", required=True, help="run directory")
     mark.add_argument("--stage", required=True)
@@ -316,6 +322,29 @@ def _callgraph(args: argparse.Namespace, spec: TargetSpec, out: Path) -> int:
     return 3 if cg_emit.aggregate_status(report) is Status.FAILED else 0
 
 
+def _system_model(args: argparse.Namespace) -> int:
+    from .system_model.assemble import assemble, dump
+    run = Path(args.run).expanduser().resolve()
+    spec = TargetSpec.load(run / "targets.json")
+    # $WORKSPACE relativization backstop for the sanitizer (citations are already
+    # repo-relative, but keep parity with the other emitters).
+    if spec.repos and not os.environ.get("WORKSPACE_ROOT"):
+        os.environ["WORKSPACE_ROOT"] = os.path.commonpath(
+            [str(Path(r.path).expanduser().resolve()) for r in spec.repos])
+    model = assemble(run)
+    out = dump(model, run)
+    stats = model.to_dict()["stats"]
+    print(f"wrote {out}")
+    print(f"nodes: {stats['node_count']} {stats['nodes_by_kind']}")
+    print(f"edges: {stats['edge_count']} {stats['edges_by_type']}")
+    partials = [name for name, p in model.coverage.items()
+                if p["status"] != "complete"]
+    if partials:
+        print("non-complete partitions: " + ", ".join(
+            f"{n}={model.coverage[n]['status']}" for n in sorted(partials)))
+    return 0
+
+
 def _lifecycle_cmd(args: argparse.Namespace) -> int:
     from . import lifecycle
     run_dir = Path(args.run).expanduser().resolve()
@@ -360,6 +389,8 @@ def main(argv: list[str] | None = None) -> int:
             return _new_drilldown(args)
         if args.command in ("mark-stage", "rollback", "status", "accept"):
             return _lifecycle_cmd(args)
+        if args.command == "system-model":
+            return _system_model(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)

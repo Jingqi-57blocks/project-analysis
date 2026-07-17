@@ -95,11 +95,15 @@ def generate(repo_path: str | Path, repo_id: str, *,
                    "evidence SKIPPED (fail-closed — install ast-grep to enable)"],
             astgrep=provenance)
 
+    # Sort matches into a stable order BEFORE the 5-site evidence cap applies, so
+    # a truncated sample is deterministic (ast-grep scan order is not stable).
+    _key = lambda m: (m.file, m.line, m.rule_id, m.text)
     rules_dir = astgrep.RULES_DIR
-    host_matches = astgrep.scan(repo_path, [rules_dir / _HOST_RULE])
-    call_matches = astgrep.scan(repo_path, [rules_dir / _HTTP_RULE])
+    host_matches = sorted(astgrep.scan(repo_path, [rules_dir / _HOST_RULE]), key=_key)
+    call_matches = sorted(astgrep.scan(repo_path, [rules_dir / _HTTP_RULE]), key=_key)
 
     # 1) host-fragment constants
+    evidence_truncated = False               # a dropped >5th site is disclosed below
     host_evidence: dict[str, list[str]] = defaultdict(list)
     for match in host_matches:
         if _excluded(match.file, tier2):
@@ -108,8 +112,12 @@ def generate(repo_path: str | Path, repo_id: str, *,
         if not _is_host_fragment(value):
             continue
         where = f"{match.file}:{match.line}"
-        if where not in host_evidence[value] and len(host_evidence[value]) < 5:
+        if where in host_evidence[value]:
+            continue
+        if len(host_evidence[value]) < 5:
             host_evidence[value].append(where)
+        else:
+            evidence_truncated = True
     host_fragments = [{"value": value, "evidence": host_evidence[value]}
                       for value in sorted(host_evidence)]
 
@@ -129,6 +137,8 @@ def generate(repo_path: str | Path, repo_id: str, *,
         entry["http_calls"] += 1
         if len(entry["evidence"]) < 5:
             entry["evidence"].append(f"{match.file}:{match.line}")
+        else:
+            evidence_truncated = True
     integration_packages = [
         {"package": e["package"], "dirs": sorted(e["dirs"]),
          "http_calls": e["http_calls"], "evidence": e["evidence"]}
@@ -144,5 +154,10 @@ def generate(repo_path: str | Path, repo_id: str, *,
         "candidates only — evidence of code that CAN talk to a service, never "
         "proof one is active; table/column naming evidence is in the DB extractor.",
     ]
+    if evidence_truncated:
+        notes.append(
+            "COVERAGE CAP: per-host / per-package evidence capped at 5 sites — "
+            "further call sites for at least one integration were NOT recorded "
+            "(the distinct host/package set is complete; per-site evidence is sampled).")
     return IntegrationEvidence(True, host_fragments, integration_packages, notes,
                                astgrep=provenance)

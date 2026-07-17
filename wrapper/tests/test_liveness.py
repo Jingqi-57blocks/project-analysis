@@ -52,6 +52,24 @@ def test_liveness_classifies_ui_internal_and_orphan(tmp_path):
     assert ledger["appRunnerApi"] == ["billing"]
 
 
+def test_file_cap_hit_is_disclosed(tmp_path, monkeypatch):
+    monkeypatch.setattr(liveness, "_MAX_FILES", 1)
+    fe = tmp_path / "ui"
+    _write(fe / "src" / "a.ts", "get(`${api}/x/1`);\n")
+    _write(fe / "src" / "b.ts", "get(`${api}/y/2`);\n")
+    report = liveness.liveness(str(fe), [])
+    assert any("COVERAGE CAP" in n and "source scan stopped" in n
+               for n in report.notes)
+
+
+def test_oversized_file_cap_is_disclosed(tmp_path, monkeypatch):
+    monkeypatch.setattr(liveness, "_MAX_BYTES", 10)
+    fe = tmp_path / "ui"
+    _write(fe / "src" / "a.ts", "get(`${api}/x/1`);\n")   # >10 bytes -> skipped
+    report = liveness.liveness(str(fe), [])
+    assert any("COVERAGE CAP" in n for n in report.notes)
+
+
 def test_no_frontend_yields_all_no_caller_but_never_dead(tmp_path):
     be = tmp_path / "svc"
     _write(be / "main.go",

@@ -49,6 +49,24 @@ def test_version_drift_flows_into_signal_entry(monkeypatch, tmp_path):
     assert d["version_drift"] == "validated 0.44.1, found ast-grep 9.9.9"
 
 
+def test_evidence_cap_is_disclosed(monkeypatch, tmp_path):
+    # Six distinct sites for one host exceed the 5-site evidence cap; the drop of
+    # the 6th must be disclosed as a COVERAGE CAP note (57B-31).
+    from types import SimpleNamespace
+    hosts = [SimpleNamespace(file=f"src/f{i}.go", line=1, text='"api.acme.io"',
+                             rule_id="integration-host", vars={}) for i in range(6)]
+    fake = astgrep.Probe(version="ast-grep 0.44.1", path="/opt/x/ast-grep")
+    monkeypatch.setattr(astgrep, "binary", lambda: fake.path)
+    monkeypatch.setattr(astgrep, "available", lambda: True)
+    monkeypatch.setattr(astgrep, "probe", lambda **k: fake)
+    monkeypatch.setattr(astgrep, "scan",
+                        lambda repo, rules: hosts
+                        if str(rules[0]).endswith("integration-host.yml") else [])
+    ev = integrations.generate(str(tmp_path), "widget")
+    assert any("COVERAGE CAP" in n and "5 sites" in n for n in ev.notes)
+    assert len(ev.host_fragments[0]["evidence"]) == 5      # capped, not dropped-silent
+
+
 @pytest.mark.skipif(not astgrep.available(), reason="ast-grep not installed")
 def test_integration_evidence_on_synthetic_repo(tmp_path):
     acme = tmp_path / "internal" / "handlers" / "acme"

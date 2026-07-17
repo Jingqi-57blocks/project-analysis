@@ -86,12 +86,17 @@ def _classify_astgrep(matches, tier2: set[str]):
     referenced: set[str] = set()           # registry constants actually referenced
     method_bindings: list[tuple[str, str]] = []   # (where, const_id)
     accesses: list[tuple[str, str, str]] = []      # (access, where, text)
+    flags = {"truncated": False}           # a dropped >8th site is disclosed upstream
 
     def add(name: str, access: str, where: str) -> None:
         if _TABLE_NAME.match(name):
             bucket = tables[name][access]
-            if where not in bucket and len(bucket) < 8:
+            if where in bucket:
+                return
+            if len(bucket) < 8:
                 bucket.append(where)
+            else:
+                flags["truncated"] = True
 
     # phase 1 — declarations + registry
     for match in matches:
@@ -156,7 +161,7 @@ def _classify_astgrep(matches, tier2: set[str]):
             unresolved.append({"kind": "gorm-access", "access": access,
                                "evidence": where,
                                "constant": cref.group(1) if cref else None})
-    return tables, unresolved, registry, referenced
+    return tables, unresolved, registry, referenced, flags["truncated"]
 
 
 def _iter_sql(root: Path, tier2: set[str]):
@@ -186,12 +191,17 @@ def _sql_coverage(root: Path, tables, tier2: set[str], dialect: str = "mysql") -
                 "sqlglot / bootstrap [sql] extra) — raw SQL DDL NOT parsed"}
     files = list(_iter_sql(root, tier2))
     parsed, parse_failures, unparsed = 0, [], []
+    trunc = {"hit": False}                  # a dropped >8th site is disclosed upstream
 
     def add(name, access, where):
         if name and _TABLE_NAME.match(name):
             bucket = tables[name][access]
-            if where not in bucket and len(bucket) < 8:
+            if where in bucket:
+                return
+            if len(bucket) < 8:
                 bucket.append(where)
+            else:
+                trunc["hit"] = True
 
     for path in files:
         rel = path.relative_to(root).as_posix()
@@ -234,6 +244,7 @@ def _sql_coverage(root: Path, tables, tier2: set[str], dialect: str = "mysql") -
         "parsed_files": parsed, "parse_failures": parse_failures,
         "unparsed": unparsed,
         "complete": not parse_failures and not unparsed,
+        "evidence_truncated": trunc["hit"],
     }
 
 
@@ -249,15 +260,22 @@ def generate(repo_path: str | Path, repo_id: str, *,
     root = Path(repo_path).expanduser().resolve()
     provenance = astgrep.probe().provenance()
     if not astgrep.available():
-        return TableEvidence(
-            available=False,
-            notes=["ast-grep unavailable: ORM table declarations NOT extracted "
-                   "(fail-closed)"],
-            sql_coverage=_sql_coverage(root, defaultdict(lambda: defaultdict(list)),
-                                       scan_tier2, sql_dialect),
-            astgrep=provenance)
-    matches = astgrep.scan(repo_path, [astgrep.RULES_DIR / _RULE])
-    tables, unresolved, registry, referenced = _classify_astgrep(matches, scan_tier2)
+        sql_cov = _sql_coverage(root, defaultdict(lambda: defaultdict(list)),
+                                scan_tier2, sql_dialect)
+        fc_notes = ["ast-grep unavailable: ORM table declarations NOT extracted "
+                    "(fail-closed)"]
+        if sql_cov.get("evidence_truncated"):
+            fc_notes.append("COVERAGE CAP: per-(table, access-type) evidence capped "
+                            "at 8 sites — further sites were NOT recorded (sampled).")
+        return TableEvidence(available=False, notes=fc_notes,
+                             sql_coverage=sql_cov, astgrep=provenance)
+    # Sort matches into a stable order BEFORE classification so the per-bucket
+    # 8-site cap keeps a deterministic sample (ast-grep scan order is not stable;
+    # an unsorted cap would silently retain a different subset each run).
+    matches = sorted(astgrep.scan(repo_path, [astgrep.RULES_DIR / _RULE]),
+                     key=lambda m: (m.file, m.line, m.rule_id, m.text))
+    tables, unresolved, registry, referenced, astgrep_truncated = \
+        _classify_astgrep(matches, scan_tier2)
     sql_coverage = _sql_coverage(root, tables, scan_tier2, sql_dialect)
     registry_coverage = {
         "typed_constants": len(registry),
@@ -279,6 +297,11 @@ def generate(repo_path: str | Path, repo_id: str, *,
         notes.append("DDL/migration dirs scanned deliberately for this lane "
                      "(first-class table evidence, exempt from tier2): "
                      + ", ".join(sorted(ddl_kept)))
+    if astgrep_truncated or sql_coverage.get("evidence_truncated"):
+        notes.append(
+            "COVERAGE CAP: per-(table, access-type) evidence capped at 8 sites — "
+            "further access sites for at least one bucket were NOT recorded "
+            "(the distinct table set is complete; per-site evidence is sampled).")
     return TableEvidence(
         available=True,
         tables={name: {a: ev for a, ev in buckets.items()}

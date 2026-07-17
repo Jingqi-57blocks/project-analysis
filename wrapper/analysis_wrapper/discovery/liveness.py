@@ -79,7 +79,7 @@ class LivenessReport:
         return {base: sorted(paths) for base, paths in sorted(by_base.items())}
 
 
-def _iter_source(root: Path):
+def _iter_source(root: Path, stats: dict | None = None):
     count = 0
     stack = [root]
     while stack:
@@ -97,13 +97,17 @@ def _iter_source(root: Path):
                 continue
             count += 1
             if count > _MAX_FILES:
+                if stats is not None:            # disclose the hit cap upstream
+                    stats["file_cap_hit"] = True
                 return
             yield entry
 
 
-def _read(path: Path) -> str:
+def _read(path: Path, stats: dict | None = None) -> str:
     try:
         if path.stat().st_size > _MAX_BYTES:
+            if stats is not None:                # a skipped oversized file is disclosed
+                stats["oversized"] = stats.get("oversized", 0) + 1
             return ""
         return path.read_text("utf-8", errors="replace")
     except OSError:
@@ -154,11 +158,11 @@ def _matches(route: list[str], call: list[str]) -> bool:
     return concrete_agree
 
 
-def ui_call_sites(repo_path: str | Path) -> list[CallHit]:
+def ui_call_sites(repo_path: str | Path, stats: dict | None = None) -> list[CallHit]:
     root = Path(repo_path).expanduser().resolve()
     hits: list[CallHit] = []
-    for path in _iter_source(root):
-        text = _read(path)
+    for path in _iter_source(root, stats):
+        text = _read(path, stats)
         if "${" not in text:
             continue
         rel = path.relative_to(root).as_posix()
@@ -179,16 +183,25 @@ _MOUNTS = {"USE", "GROUP", "HANDLE"}  # mounts/groups, not leaf routes
 
 
 def route_registrations(repo_path: str | Path,
-                        tier2_exclusions: list[str] | None = None) -> list[RouteHit]:
+                        tier2_exclusions: list[str] | None = None,
+                        stats: dict | None = None) -> list[RouteHit]:
     """Structural route extraction via ast-grep (route-registration.yml). Falls
     back to the transparent regex scan when ast-grep is unavailable, so the
     signal degrades rather than disappears; the fallback is disclosed in
-    ``liveness()``'s report notes (and thus the discovery report)."""
+    ``liveness()``'s report notes (and thus the discovery report).
+
+    ``stats`` (when given) accumulates scan-cap hits for the regex fallback, so a
+    truncated walk is disclosed rather than silently short. The ast-grep path
+    scans independently and is not bounded by the doctor-owned file/byte caps."""
     tier2 = set(tier2_exclusions or [])
     if not astgrep.available():
-        return _route_registrations_regex(repo_path, tier2)
+        return _route_registrations_regex(repo_path, tier2, stats)
     hits: list[RouteHit] = []
-    for match in astgrep.scan(repo_path, [astgrep.rule_path(_ROUTE_RULE)]):
+    # Stable order so route rows (and any downstream cap/sample) are deterministic
+    # regardless of ast-grep scan order.
+    matches = sorted(astgrep.scan(repo_path, [astgrep.rule_path(_ROUTE_RULE)]),
+                     key=lambda m: (m.file, m.line, m.rule_id, m.text))
+    for match in matches:
         parts = PurePosixPath(match.file).parts
         if parts and parts[0] in tier2:
             continue
@@ -206,13 +219,14 @@ def route_registrations(repo_path: str | Path,
     return hits
 
 
-def _route_registrations_regex(repo_path: str | Path, tier2: set[str]) -> list[RouteHit]:
+def _route_registrations_regex(repo_path: str | Path, tier2: set[str],
+                               stats: dict | None = None) -> list[RouteHit]:
     root = Path(repo_path).expanduser().resolve()
     hits: list[RouteHit] = []
-    for path in _iter_source(root):
+    for path in _iter_source(root, stats):
         if path.relative_to(root).parts and path.relative_to(root).parts[0] in tier2:
             continue
-        text = _read(path)
+        text = _read(path, stats)
         rel = path.relative_to(root).as_posix()
         pattern = _GO_ROUTE if path.suffix == ".go" else _JS_ROUTE
         for m in pattern.finditer(text):
@@ -249,7 +263,11 @@ def liveness(frontend_repo, backends: list[tuple],
             "ROUTE EXTRACTION FALLBACK: ast-grep unavailable — route registrations "
             "came from the transparent regex scan, not the structural rule "
             "(reduced robustness; disclosed).")
-    calls = ui_call_sites(frontend_repo) if frontend_repo else []
+    # Accumulates doctor-owned scan-cap hits across the frontend call scan and
+    # any regex-fallback route scan, so a truncated walk is disclosed (57B-31:
+    # a cap that silently shortens the canonical graph is a partial partition).
+    scan_stats: dict = {"file_cap_hit": False, "oversized": 0}
+    calls = ui_call_sites(frontend_repo, scan_stats) if frontend_repo else []
     report.ui_calls = calls
     norm_calls = [(_norm_segments(c.path), c) for c in calls]
     internal_callers = internal_callers or {}
@@ -257,7 +275,7 @@ def liveness(frontend_repo, backends: list[tuple],
     for repo_id, path, tier2 in backends:
         internal = internal_callers.get(repo_id, [])
         norm_internal = [(_norm_segments(c.path), c) for c in internal]
-        for route in route_registrations(path, tier2):
+        for route in route_registrations(path, tier2, scan_stats):
             rsegs = _norm_segments(route.path)
             # A route with no concrete segment (e.g. leaf `/:id` shorn of its
             # router mount prefix) cannot be matched reliably — report it as
@@ -282,4 +300,13 @@ def liveness(frontend_repo, backends: list[tuple],
             report.rows.append(LivenessRow(
                 repo_id, route.method, route.path, route.evidence,
                 "no-direct-path-match", []))
+
+    if scan_stats["file_cap_hit"]:
+        report.notes.append(
+            f"COVERAGE CAP: source scan stopped after {_MAX_FILES} files — call "
+            "sites / route registrations beyond the cap were NOT scanned (incomplete).")
+    if scan_stats["oversized"]:
+        report.notes.append(
+            f"COVERAGE CAP: {scan_stats['oversized']} source file(s) exceeded "
+            f"{_MAX_BYTES} bytes and were NOT scanned (incomplete).")
     return report

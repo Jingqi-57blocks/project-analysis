@@ -48,6 +48,20 @@ def test_distinct_tables_survive_before_view_caps():
     assert len(ev.tables) >= (3 if _HAS_SQLGLOT else 2)
 
 
+def test_evidence_cap_is_disclosed(tmp_path, monkeypatch):
+    # generate() must surface the per-bucket 8-site truncation flag from
+    # _classify_astgrep as a COVERAGE CAP note (57B-31 canonical-completeness).
+    monkeypatch.setattr(tables, "_classify_astgrep",
+                        lambda *a, **k: ({}, [], {}, set(), True))
+    ev = tables.generate(str(tmp_path), "db-fix")
+    assert any("COVERAGE CAP" in n and "8 sites" in n for n in ev.notes)
+
+
+def test_no_evidence_cap_note_when_within_budget():
+    ev = tables.generate(str(FIXDB), "db-fix")   # small fixture, buckets < 8
+    assert not any("COVERAGE CAP" in n for n in ev.notes)
+
+
 def test_every_bucket_is_on_the_ladder():
     ev = tables.generate(str(FIXDB), "db-fix")
     for buckets in ev.tables.values():
