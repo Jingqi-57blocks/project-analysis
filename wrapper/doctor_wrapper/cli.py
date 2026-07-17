@@ -33,8 +33,8 @@ def _record_summary(out: Path, results: list[SignalResult]) -> None:
 
 def _run_one(args: argparse.Namespace, spec: TargetSpec, out: Path) -> list[SignalResult]:
     target = spec.repo(args.repo)
-    definition = git_history(target, args.since) if args.tool == "git-history" \
-        else tool_for(args.tool, target)
+    definition = git_history(target, args.since, args.coupling_sample_cap) \
+        if args.tool == "git-history" else tool_for(args.tool, target)
     return [run_tool(
         definition, target, out, args.scan_date,
         allow_network=args.include_network,
@@ -47,8 +47,8 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path) -> list[Signal
     for target in repos:
         definitions = local_tools(target)
         # Respect the CLI's reproducible history window instead of the registry default.
-        definitions = [git_history(target, args.since) if d.name == "git-history" else d
-                       for d in definitions]
+        definitions = [git_history(target, args.since, args.coupling_sample_cap)
+                       if d.name == "git-history" else d for d in definitions]
         # Always materialize applicable network lanes. The executor records
         # them as SKIPPED without authorization, so absence cannot masquerade
         # as a clean/covered result.
@@ -101,6 +101,12 @@ def parser() -> argparse.ArgumentParser:
         "--since", default=None,
         help="history window start (default: 24 months before today; the value "
              "actually used is recorded in every git-history manifest)",
+    )
+    result.add_argument(
+        "--coupling-sample-cap", type=int, default=0,
+        help="cap commits fed into the git-history co-change pass (0 = no cap, "
+             "default/unchanged; when set and exceeded, an evenly-spaced sample "
+             "is used and disclosed in the manifest)",
     )
     result.add_argument(
         "--allow-hosts", default="",

@@ -75,3 +75,42 @@ def test_cross_dir_coupling_survives_top_n_truncation(tmp_path):
     assert any({p["file_a"], p["file_b"]} == {"api/svc.go", "ui/page.tsx"} for p in pairs)
     # a same-dir-only pair must NOT appear in the cross-dir list
     assert all(p["file_a"].split("/")[0] != p["file_b"].split("/")[0] for p in pairs)
+
+
+def test_coupling_sample_cap_is_disclosed_and_default_off(tmp_path):
+    repo = tmp_path / "widget"; repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    for i in range(6):
+        (repo / f"f{i}.py").write_text(f"x = {i}\n")
+        (repo / "shared.py").write_text(f"v = {i}\n")
+        _commit(repo, f"c{i}")
+    full = analyze(str(repo), "2000-01-01", top=20, min_shared=1, bulk_limit=50,
+                   coupling_sample_cap=0)
+    assert not full["coupling_sampled"]
+    assert full["coupling_commits_used"] == full["commits_used"] == 6
+    capped = analyze(str(repo), "2000-01-01", top=20, min_shared=1, bulk_limit=50,
+                     coupling_sample_cap=3)
+    assert capped["coupling_sampled"] and capped["coupling_commits_used"] == 3
+    # churn/ownership stay over the FULL history — only coupling is sampled.
+    assert capped["commits_used"] == 6
+
+
+def test_author_roster_strong_merges_by_email_never_by_name(tmp_path):
+    repo = tmp_path / "roster"; repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    # Same email, different display → strong-merged into ONE roster row.
+    (repo / "a.py").write_text("1")
+    _commit(repo, "a", name="Sam Smith", email="sam@example.invalid")
+    (repo / "b.py").write_text("2")
+    _commit(repo, "b", name="Samuel Smith", email="sam@example.invalid")
+    # Byte-identical display name, DIFFERENT email → must stay SEPARATE.
+    (repo / "c.py").write_text("3")
+    _commit(repo, "c", name="Sam Smith", email="other@example.invalid")
+    result = analyze(str(repo), "2000-01-01", top=20, min_shared=1, bulk_limit=50)
+    # Two email groups → two roster rows (never collapsed by the shared name).
+    assert result["distinct_authors_strong"] == 2
+    total = sum(r["commits"] for r in result["author_roster"])
+    assert total == result["commits_used"] == 3
+    # The same-name/different-email collision is surfaced, not silently merged.
+    assert "sam smith" in result["uncertain_name_matches"]
+    assert result["git_shortlog_author_count"] >= 1

@@ -13,7 +13,7 @@ from itertools import combinations
 from pathlib import PurePosixPath
 
 from ..gitinfo import git_command, safe_git_env
-from .identity import IdentityResolver, is_bot
+from .identity import IdentityResolver, is_bot, shortlog_authors
 
 EXCLUDED_DIRS = {"node_modules", "vendor", "dist", "build"}
 EXCLUDED_NAMES = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock"}
@@ -139,7 +139,8 @@ def collect_plain_git(repo: str, since: str) -> tuple[list[Commit], str]:
     return commits, "plain-git fallback"
 
 
-def analyze(repo: str, since: str, top: int, min_shared: int, bulk_limit: int) -> dict:
+def analyze(repo: str, since: str, top: int, min_shared: int, bulk_limit: int,
+            coupling_sample_cap: int = 0) -> dict:
     comp = completeness(repo, since)
     if comp["total_commits_head"] == 0:
         # No reachable commits: a repo state, reported as reduced coverage.
@@ -148,6 +149,10 @@ def analyze(repo: str, since: str, top: int, min_shared: int, bulk_limit: int) -
             "coverage_status": "partial", "since": since,
             "history_completeness": comp, "commits_used": 0,
             "bulk_changesets_excluded_from_coupling": 0,
+            "coupling_sample_cap": coupling_sample_cap,
+            "coupling_commits_used": 0, "coupling_sampled": False,
+            "author_roster": [], "distinct_authors_strong": 0,
+            "git_shortlog_author_count": 0,
             "uncertain_name_matches": [], "rename_aliases": [],
             "churn": [], "coupling": [], "ownership": [],
         }
@@ -177,10 +182,15 @@ def analyze(repo: str, since: str, top: int, min_shared: int, bulk_limit: int) -
     added: Counter[str] = Counter(); deleted: Counter[str] = Counter()
     author_commits: dict[str, Counter[str]] = defaultdict(Counter)
     author_churn: dict[str, Counter[str]] = defaultdict(Counter)
-    pair_shared: Counter[tuple[str, str]] = Counter()
-    bulk_excluded = 0
+    # Repo roster keyed by strong-merge GROUP (email/.mailmap), not display name,
+    # so identical-name / different-email identities are never silently merged.
+    group_totals: Counter[object] = Counter()
+    group_display: dict[object, str] = {}
     for commit in commits:
         author = resolver.resolve(commit.name, commit.email)
+        display, group_key = resolver.group(commit.name, commit.email)
+        group_totals[group_key] += 1
+        group_display[group_key] = display
         touched: dict[str, int] = defaultdict(int)
         for change in commit.changes:
             path = canonical(change.new or change.old or "")
@@ -192,12 +202,34 @@ def analyze(repo: str, since: str, top: int, min_shared: int, bulk_limit: int) -
             commits_by_file[path] += 1
             author_commits[path][author] += 1
             author_churn[path][author] += churn
-        paths = sorted(touched)
-        if len(paths) > bulk_limit:
+
+    # Co-change coupling pass. The sampling cap bounds cost on very long
+    # histories: cap 0 (default) uses every commit — identical to the
+    # churn/ownership universe; when set and exceeded, an evenly-spaced sample of
+    # that many commits is used, and BOTH the shared count and its rev
+    # denominators come from that SAME sample so coupling% stays self-consistent.
+    coupling_sampled = bool(coupling_sample_cap) and len(commits) > coupling_sample_cap
+    if coupling_sampled:
+        step = len(commits) / coupling_sample_cap
+        keep = sorted({min(len(commits) - 1, int(i * step))
+                       for i in range(coupling_sample_cap)})
+        coupling_commits = [commits[i] for i in keep]
+    else:
+        coupling_commits = commits
+    coupling_revs: Counter[str] = Counter() if coupling_sampled else commits_by_file
+    pair_shared: Counter[tuple[str, str]] = Counter()
+    bulk_excluded = 0
+    for commit in coupling_commits:
+        touched_paths = {canonical(c.new or c.old or "") for c in commit.changes}
+        touched_paths.discard("")
+        if len(touched_paths) > bulk_limit:
             bulk_excluded += 1
-        else:
-            for pair in combinations(paths, 2):
-                pair_shared[pair] += 1
+            continue
+        if coupling_sampled:
+            for path in touched_paths:
+                coupling_revs[path] += 1
+        for pair in combinations(sorted(touched_paths), 2):
+            pair_shared[pair] += 1
 
     churn = sorted(({
         "file": path, "commits": count, "added": added[path], "deleted": deleted[path],
@@ -208,9 +240,9 @@ def analyze(repo: str, since: str, top: int, min_shared: int, bulk_limit: int) -
     for (a, b), shared in pair_shared.items():
         if shared < min_shared:
             continue
-        degree = round(100 * shared / ((commits_by_file[a] + commits_by_file[b]) / 2), 1)
+        degree = round(100 * shared / ((coupling_revs[a] + coupling_revs[b]) / 2), 1)
         coupling.append({"file_a": a, "file_b": b, "shared_commits": shared,
-                         "revs_a": commits_by_file[a], "revs_b": commits_by_file[b],
+                         "revs_a": coupling_revs[a], "revs_b": coupling_revs[b],
                          "coupling_pct": degree})
     coupling.sort(key=lambda x: (-x["coupling_pct"], -x["shared_commits"], x["file_a"], x["file_b"]))
 
@@ -240,11 +272,25 @@ def analyze(repo: str, since: str, top: int, min_shared: int, bulk_limit: int) -
         ({"old": old, "final": canonical(old)} for old in successor if canonical(old) != old),
         key=lambda x: (x["final"], x["old"]),
     )
+    # Strong-merged repo roster (exact-email/.mailmap via git check-mailmap) vs a
+    # git-native corroboration count (git shortlog -sne, mailmap-applied but
+    # bot-inclusive); name-only collisions stay in uncertain_name_matches, never
+    # silently merged.
+    author_roster = [{"author": group_display[key], "commits": count}
+                     for key, count in sorted(group_totals.items(),
+                                              key=lambda x: (-x[1], group_display[x[0]]))]
+    shortlog = shortlog_authors(repo, since)
     status = "partial" if comp["shallow"] or backend.startswith("plain-git") else "complete"
     return {
         "backend": backend, "coverage_status": status, "since": since,
         "history_completeness": comp, "commits_used": len(commits),
         "bulk_changesets_excluded_from_coupling": bulk_excluded,
+        "coupling_sample_cap": coupling_sample_cap,
+        "coupling_commits_used": len(coupling_commits),
+        "coupling_sampled": coupling_sampled,
+        "author_roster": author_roster,
+        "distinct_authors_strong": len(author_roster),
+        "git_shortlog_author_count": len(shortlog),
         "uncertain_name_matches": resolver.uncertain_name_matches,
         "rename_aliases": aliases, "churn": churn[:top], "coupling": coupling[:top],
         "cross_dir_coupling": cross_dir_coupling[:top],
@@ -260,6 +306,9 @@ def main() -> None:
     parser.add_argument("--top", type=int, default=20)
     parser.add_argument("--min-shared", type=int, default=5)
     parser.add_argument("--bulk-limit", type=int, default=50)
+    parser.add_argument("--coupling-sample-cap", type=int, default=0,
+                        help="cap the number of commits fed into the co-change "
+                             "pass (0 = no cap; evenly-spaced sample when exceeded)")
     args = parser.parse_args()
     if args.version:
         try:
@@ -269,8 +318,10 @@ def main() -> None:
         return
     if not args.repo or not args.since:
         parser.error("--repo and --since are required")
-    print(json.dumps(analyze(args.repo, args.since, args.top, args.min_shared, args.bulk_limit),
-                     sort_keys=True))
+    print(json.dumps(
+        analyze(args.repo, args.since, args.top, args.min_shared, args.bulk_limit,
+                args.coupling_sample_cap),
+        sort_keys=True))
 
 
 if __name__ == "__main__":

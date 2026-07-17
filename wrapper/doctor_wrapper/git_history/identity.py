@@ -31,6 +31,38 @@ def normalize_email(value: str) -> str:
     return match.group(1) if match else email
 
 
+_SHORTLOG_ROW = re.compile(r"\s*(\d+)\s+(.*?)\s+<([^>]*)>\s*$")
+
+
+def shortlog_authors(repo: str, since: str | None = None) -> list[tuple[int, str, str]]:
+    """git's own mailmap-applied author summary: (commits, name, email).
+
+    A git-native cross-check (`git shortlog -sne`) for the resolved roster over
+    the SAME window; git applies .mailmap here itself. Empty on failure. NOTE:
+    this is only ``--no-merges`` filtered — unlike the analyzed roster it is NOT
+    bot-filtered, so it is disclosed as a corroboration count, never as the
+    authoritative set."""
+    args = ["shortlog", "-sne", "--no-merges"]
+    if since:
+        args.append(f"--since={since}")
+    args.append("HEAD")
+    try:
+        proc = subprocess.run(
+            git_command(repo, *args),
+            capture_output=True, text=True, timeout=60, env=safe_git_env(),
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
+    rows: list[tuple[int, str, str]] = []
+    for line in proc.stdout.splitlines():
+        match = _SHORTLOG_ROW.match(line)
+        if match:
+            rows.append((int(match.group(1)), match.group(2), match.group(3)))
+    return rows
+
+
 def apply_mailmap(repo: str, identities: list[tuple[str, str]]) -> dict[tuple[str, str], tuple[str, str]]:
     """Use Git's own .mailmap parser; failure safely falls back to exact identities."""
     unique = sorted(set(identities))
@@ -89,3 +121,14 @@ class IdentityResolver:
     def resolve(self, name: str, email: str) -> str:
         mapped = self._mapped.get((name, email), (name, email))
         return self._labels.get(mapped, mapped[0].strip() or mapped[1].strip() or "(unknown)")
+
+    def group(self, name: str, email: str) -> tuple[str, object]:
+        """(display, group_key) for the repo-level roster. The KEY is the
+        strong-merge group (normalized email, or a per-identity token when there
+        is no email) — so two identities that share a display name but differ in
+        email stay SEPARATE and are never silently merged into one roster row."""
+        mapped = self._mapped.get((name, email), (name, email))
+        display = self._labels.get(
+            mapped, mapped[0].strip() or mapped[1].strip() or "(unknown)")
+        normalized = normalize_email(mapped[1])
+        return display, normalized if normalized else ("no-email", mapped)
