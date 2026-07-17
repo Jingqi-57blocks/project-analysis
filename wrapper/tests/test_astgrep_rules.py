@@ -50,3 +50,8 @@ def test_integration_host_rule_matches_domain_shapes():
     js_values = {m.text.strip("'\"") for m in by.get("host.js", [])}
     assert "api.gadget.io" in go_values
     assert "cdn.widget.io" in js_values
+    # The rule is DELIBERATELY permissive: property-path / member-access / library
+    # -event string literals share a host's shape and DO match here (57B-41).
+    # Precision is the filter's job (see integrations._is_host_fragment), so these
+    # must surface at the rule layer but never as reported host candidates.
+    assert {"avatar.url", "pj.id", "mouseleave.bs.carousel"} <= js_values

@@ -17,6 +17,26 @@ def test_host_fragment_filter_drops_files_and_identifiers():
     assert not integrations._is_host_fragment("api.gadget.example")   # reserved TLD
 
 
+def test_host_fragment_filter_drops_property_paths_and_events():
+    # 57B-41: dotted string literals that share a host's shape but are member
+    # access / library fragments. Domain-neutral stand-ins for the WCP finds.
+    assert not integrations._is_host_fragment("pj.id")        # member access (.id ccTLD)
+    assert not integrations._is_host_fragment("wl.id")        # member access
+    assert not integrations._is_host_fragment("widget.name")  # property path (.name gTLD-ish)
+    assert not integrations._is_host_fragment("gadget.url")   # property path (.url not a TLD)
+    assert not integrations._is_host_fragment("item.to")      # property path (.to ccTLD)
+    assert not integrations._is_host_fragment("mouseleave.bs.carousel")  # library event
+    assert not integrations._is_host_fragment("x.bs.y")               # library event ns
+    assert not integrations._is_host_fragment("container.noop")       # template lookup
+    # The TLD gate must NOT overreach onto genuine scheme-less hosts, including
+    # deeper hosts under a property-ish ccTLD (the 2-label guard fires ONLY at
+    # two labels, so a subdomain keeps a real `.id` / `.it` host).
+    assert integrations._is_host_fragment("openapi.vendor.cn")
+    assert integrations._is_host_fragment("dev-auth.vendor.com")
+    assert integrations._is_host_fragment("api.vendor.id")    # 3 labels -> real host
+    assert integrations._is_host_fragment("svc.example.it")   # 3 labels -> real host
+
+
 def test_unavailable_astgrep_is_fail_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(astgrep, "binary", lambda: None)
     astgrep._reset_probe_cache()
@@ -85,3 +105,20 @@ def test_integration_evidence_on_synthetic_repo(tmp_path):
     packages = {p["package"] for p in ev.integration_packages}
     assert "acme" in packages          # distinctively-named dir with HTTP calls
     assert "common" not in packages    # generic name / no HTTP calls
+
+
+@pytest.mark.skipif(not astgrep.available(), reason="ast-grep not installed")
+def test_property_paths_and_events_are_not_host_candidates(tmp_path):
+    # 57B-41 end-to-end: the permissive rule matches these dotted string literals,
+    # but the filter must keep them out of the reported host fragments while the
+    # genuine scheme-less host survives.
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "widget.js").write_text(
+        'const host = "api.gadget.io";\n'          # genuine host -> candidate
+        'const path = _.get(o, "avatar.url");\n'    # property path
+        'const key = data["pj.id"];\n'              # member-access-shaped literal
+        'el.on("mouseleave.bs.carousel", fn);\n')   # library event namespace
+    values = {h["value"] for h in integrations.generate(str(tmp_path), "w").host_fragments}
+    assert "api.gadget.io" in values
+    assert values.isdisjoint({"avatar.url", "pj.id", "mouseleave.bs.carousel"})

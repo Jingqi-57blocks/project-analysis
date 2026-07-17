@@ -25,7 +25,12 @@ _HOST_RULE = "integration-host.yml"
 _HTTP_RULE = "http-call-site.yml"
 
 # A host fragment is a lowercase domain; the ast-grep rule is permissive so the
-# hostname shape is enforced HERE, dropping file-name and identifier look-alikes.
+# hostname shape is enforced HERE. The shape regex alone is NOT enough: dotted
+# string literals such as lodash property paths (`avatar.url`, `client.id`),
+# library event namespaces (`mouseleave.bs.carousel`) and template lookups
+# (`container.noop`) are the same shape as a scheme-less host. Precision therefore
+# rests on the final label: it must be a real public TLD, and a two-label token
+# ending in a TLD that doubles as a common object-property name is member access.
 _HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*\.)+[a-z]{2,}$")
 _FILE_EXT = {
     "json", "yaml", "yml", "xlsx", "xls", "csv", "go", "js", "ts", "tsx", "jsx",
@@ -34,6 +39,24 @@ _FILE_EXT = {
     "ini", "conf", "proto", "mod", "sum", "env", "tmpl", "gohtml", "webp", "ico",
 }
 _NON_PUBLIC_SUFFIX = (".invalid", ".local", ".localhost", ".test", ".example")
+
+# Curated common generic TLDs (3+ letters). ISO-3166 two-letter ccTLDs are
+# accepted structurally (the shape regex already constrains the final label to
+# 2+ lowercase letters), so only multi-letter gTLDs need enumerating. Property-
+# name look-alike gTLDs (e.g. `.name`) are DELIBERATELY excluded here so that
+# `tag.name` / `project.name` fail the TLD gate. Dependency-free by design — a
+# public-suffix library is heavier than this concern warrants (tools/README §1).
+_GTLDS = frozenset({
+    "com", "net", "org", "edu", "gov", "mil", "int", "biz", "info", "pro",
+    "dev", "app", "cloud", "tech", "online", "site", "store", "shop", "xyz",
+})
+# Two-letter ccTLDs that also read as common object-property / identifier names.
+# `.id` (Indonesia) is a real ccTLD, so a public-suffix check ALONE cannot reject
+# `pj.id`; these are treated as member access and dropped at TWO-label depth only,
+# so genuine deeper hosts (`api.vendor.id`, `svc.example.it`) still pass.
+_PROPERTY_CCTLDS = frozenset({
+    "id", "in", "is", "it", "to", "me", "as", "by", "do", "no", "at",
+})
 
 # Directory names too generic to be an integration's own package.
 _GENERIC_DIRS = {
@@ -76,7 +99,15 @@ def _is_host_fragment(value: str) -> bool:
         return False
     if value in _NOISE_HOSTS or value.endswith(_NON_PUBLIC_SUFFIX):
         return False
-    return value.rsplit(".", 1)[1] not in _FILE_EXT
+    labels = value.split(".")
+    tld = labels[-1]
+    if tld in _FILE_EXT:                       # file-name look-alike (styles.css)
+        return False
+    if len(tld) != 2 and tld not in _GTLDS:    # final label is not a real TLD
+        return False                           # -> avatar.url, x.bs.carousel, tag.name
+    if len(labels) == 2 and tld in _PROPERTY_CCTLDS:
+        return False                           # member access: pj.id, wl.id, bt.to
+    return True
 
 
 def _excluded(rel: str, tier2: set[str]) -> bool:
@@ -147,8 +178,10 @@ def generate(repo_path: str | Path, repo_id: str, *,
 
     notes = [
         "host fragments: bare-hostname string literals (scheme-less assembled "
-        "URLs); file-name and dotted-identifier look-alikes filtered; cross-file "
-        "constant propagation NOT attempted (unresolved).",
+        "URLs); the final label must be a real public TLD, so file-name, "
+        "property-path (`avatar.url`, `client.id`) and library-event "
+        "(`x.bs.carousel`) look-alikes are filtered; cross-file constant "
+        "propagation NOT attempted (unresolved).",
         "integration packages: distinctively-named directories with outbound HTTP "
         "call sites (generic infra dir names excluded).",
         "candidates only — evidence of code that CAN talk to a service, never "
