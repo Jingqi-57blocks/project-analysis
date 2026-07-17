@@ -31,6 +31,12 @@ _JS_IMPORT = re.compile(
     r"(?:require\(\s*['\"]|from\s+['\"]|import\s*\(\s*['\"]|^import\s+['\"])"
     r"([^'\"./][^'\"]*)['\"]", re.M)
 _GO_IMPORT = re.compile(r'^\s*(?:[\w.]+\s+)?"([\w-]+\.[\w.-]+/[^"]+)"', re.M)
+# DISCLOSURE (57B-26): a declarative ast-grep equivalent exists at
+# `wrapper/rules/client-init.yml` (rule-ready, fixtured + tested), but this
+# per-file, near-an-import cross-reference is NOT yet wired to it — client_init
+# candidate detection here still uses this transparent regex. Migrating this
+# cross-reference to the rule is a follow-up; until then the rule and this regex
+# coexist and the rule is not consumed by a producer.
 _CLIENT_INIT = re.compile(
     r"new\s+[\w.]*Client\b|\.createClient\s*\(|\bNew\w*Client\s*\(|"
     r"createTransport\s*\(|NewSession\s*\(|\.connect\s*\(")

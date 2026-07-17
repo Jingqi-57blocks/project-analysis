@@ -1,0 +1,39 @@
+# Client / transport construction — "this code stands up an outbound client".
+# Structural replacement for discovery/candidates.py's _CLIENT_INIT regex.
+id: client-init-new-js
+language: JavaScript
+rule:
+  pattern: new $C($$$)
+constraints:
+  C: { regex: 'Client$' }
+---
+id: client-init-factory-js
+language: JavaScript
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '(createClient|create[A-Za-z0-9]*Client|createTransport|NewSession)$'
+---
+id: client-init-new-ts
+language: TypeScript
+rule:
+  pattern: new $C($$$)
+constraints:
+  C: { regex: 'Client$' }
+---
+id: client-init-factory-ts
+language: TypeScript
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '(createClient|create[A-Za-z0-9]*Client|createTransport|NewSession)$'
+---
+id: client-init-go
+language: Go
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '(New[A-Za-z0-9]*Client|createClient|NewSession)$'

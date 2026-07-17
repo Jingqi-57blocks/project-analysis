@@ -10,7 +10,10 @@ candidates) — frameworks are structural facts, not integration name lists.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,7 +35,53 @@ _GO_FRAMEWORKS = {
     "github.com/gofiber/fiber", "github.com/go-chi/chi",
     "github.com/gorilla/mux", "gorm.io/gorm",
 }
-_GO_REQUIRE = re.compile(r"^\s*(?:require\s+)?([\w./-]+)\s+v[\w.+-]+", re.M)
+_GO_REQUIRE = re.compile(r"^\s*(?:require\s+)?([\w./-]+)\s+v[\w.+-]+")
+# `go mod edit -json` is authoritative (parses require blocks/replace correctly);
+# these keep it offline (GOPROXY/GOSUMDB off — the pins-on-ALL-go-invocations rule)
+# and free of workspace/toolchain side effects.
+_GOMOD_ENV = {"GOTOOLCHAIN": "local", "GOWORK": "off", "GOFLAGS": "-mod=readonly",
+              "GOPROXY": "off", "GOSUMDB": "off"}
+
+
+def gomod_requires(gomod: Path, *, include_indirect: bool = True) -> list[str]:
+    """Required module paths from ``go mod edit -json`` (the OSS parser — handles
+    require blocks and replace), with a textual fallback when go is unavailable."""
+    go = shutil.which("go")
+    if go:
+        try:
+            proc = subprocess.run(
+                [go, "mod", "edit", "-json"], cwd=str(gomod.parent),
+                capture_output=True, text=True, timeout=30,
+                env={**os.environ, **_GOMOD_ENV})
+            if proc.returncode == 0:
+                data = json.loads(proc.stdout)
+                out: list[str] = []
+                for req in data.get("Require") or []:
+                    if not isinstance(req, dict) or not req.get("Path"):
+                        continue
+                    if not include_indirect and req.get("Indirect"):
+                        continue
+                    out.append(req["Path"])
+                return out
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+    return _gomod_requires_textual(gomod, include_indirect=include_indirect)
+
+
+def _gomod_requires_textual(gomod: Path, *, include_indirect: bool) -> list[str]:
+    try:
+        text = gomod.read_text("utf-8", errors="replace")
+    except OSError:
+        return []
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not include_indirect and stripped.endswith("// indirect"):
+            continue
+        match = _GO_REQUIRE.match(stripped)
+        if match:
+            out.append(match.group(1))
+    return out
 
 
 @dataclass
@@ -95,12 +144,7 @@ def _js_frameworks(manifest: Path) -> list[str]:
 
 
 def _go_frameworks(gomod: Path) -> list[str]:
-    try:
-        text = gomod.read_text("utf-8", errors="replace")
-    except OSError:
-        return []
-    modules = set(_GO_REQUIRE.findall(text))
-    return sorted(modules & _GO_FRAMEWORKS)
+    return sorted(set(gomod_requires(gomod)) & _GO_FRAMEWORKS)
 
 
 def _relative(root: Path, directory: Path) -> str:

@@ -1,0 +1,27 @@
+# Bare host-fragment string literals (no scheme) — assembled-URL evidence the
+# scheme-anchored URL regex misses (e.g. `host = "api.vendor-x.example"`). The
+# rule matches domain-shaped string literals; the Python side filters file-
+# extension look-alikes and noise hosts, and NEVER follows cross-file constants.
+id: integration-host-js
+language: JavaScript
+rule:
+  kind: string
+  regex: '^["''][A-Za-z0-9]([A-Za-z0-9-]*\.)+[A-Za-z]{2,}["'']$'
+---
+id: integration-host-ts
+language: TypeScript
+rule:
+  kind: string
+  regex: '^["''][A-Za-z0-9]([A-Za-z0-9-]*\.)+[A-Za-z]{2,}["'']$'
+---
+id: integration-host-tsx
+language: Tsx
+rule:
+  kind: string
+  regex: '^["''][A-Za-z0-9]([A-Za-z0-9-]*\.)+[A-Za-z]{2,}["'']$'
+---
+id: integration-host-go
+language: Go
+rule:
+  kind: interpreted_string_literal
+  regex: '^"[A-Za-z0-9]([A-Za-z0-9-]*\.)+[A-Za-z]{2,}"$'

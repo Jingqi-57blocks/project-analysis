@@ -1,0 +1,42 @@
+# Server route registrations (Express/Koa + gin/echo/chi/mux). Structural match
+# via ast-grep replaces the brittle regex in discovery/liveness.py. JS/TS expose
+# the method + path as metavars directly; Go matches the call structurally (the
+# variadic `$$$` pattern is unreliable for Go in ast-grep 0.44) and the path is
+# read from the matched call's leading string literal on the Python side.
+id: route-js
+language: JavaScript
+rule:
+  pattern: $O.$M($P, $$$)
+constraints:
+  M: { regex: '^(get|post|put|patch|delete)$' }
+  P: { kind: string }
+---
+id: route-ts
+language: TypeScript
+rule:
+  pattern: $O.$M($P, $$$)
+constraints:
+  M: { regex: '^(get|post|put|patch|delete)$' }
+  P: { kind: string }
+---
+id: route-tsx
+language: Tsx
+rule:
+  pattern: $O.$M($P, $$$)
+constraints:
+  M: { regex: '^(get|post|put|patch|delete)$' }
+  P: { kind: string }
+---
+id: route-go
+language: Go
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        regex: '\.(GET|POST|PUT|PATCH|DELETE|Handle|HandleFunc)$'
+    - has:
+        field: arguments
+        has:
+          kind: interpreted_string_literal
+          regex: '^"/'

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+from .. import astgrep
 
 _SKIP_DIRS = {"node_modules", "vendor", ".git", "dist", "build", "coverage"}
 _MAX_FILES = 6000
@@ -165,10 +167,43 @@ def ui_call_sites(repo_path: str | Path) -> list[CallHit]:
     return hits
 
 
+_ROUTE_RULE = "route-registration.yml"
+# Method + path from a matched Go route call's text (the leading "/…" literal).
+_GO_ROUTE_TEXT = re.compile(
+    r'\.\s*(GET|POST|PUT|PATCH|DELETE|Handle|HandleFunc)\s*\(\s*"([/][^"]*)"')
+_MOUNTS = {"USE", "GROUP", "HANDLE"}  # mounts/groups, not leaf routes
+
+
 def route_registrations(repo_path: str | Path,
                         tier2_exclusions: list[str] | None = None) -> list[RouteHit]:
-    root = Path(repo_path).expanduser().resolve()
+    """Structural route extraction via ast-grep (route-registration.yml). Falls
+    back to the transparent regex scan when ast-grep is unavailable, so the
+    signal degrades rather than disappears; the fallback is disclosed in
+    ``liveness()``'s report notes (and thus the discovery report)."""
     tier2 = set(tier2_exclusions or [])
+    if not astgrep.available():
+        return _route_registrations_regex(repo_path, tier2)
+    hits: list[RouteHit] = []
+    for match in astgrep.scan(repo_path, [astgrep.rule_path(_ROUTE_RULE)]):
+        parts = PurePosixPath(match.file).parts
+        if parts and parts[0] in tier2:
+            continue
+        if match.rule_id == "route-go":
+            found = _GO_ROUTE_TEXT.search(match.text)
+            if not found:
+                continue
+            method, path = found.group(1).upper(), found.group(2)
+        else:  # route-js / route-ts / route-tsx expose method + path as metavars
+            method, path = match.vars.get("M", "").upper(), match.vars.get("P", "")
+        if method in _MOUNTS or not path.startswith("/"):
+            continue
+        hits.append(RouteHit(method=method, path=path,
+                             evidence=f"{match.file}:{match.line}"))
+    return hits
+
+
+def _route_registrations_regex(repo_path: str | Path, tier2: set[str]) -> list[RouteHit]:
+    root = Path(repo_path).expanduser().resolve()
     hits: list[RouteHit] = []
     for path in _iter_source(root):
         if path.relative_to(root).parts and path.relative_to(root).parts[0] in tier2:
@@ -178,7 +213,7 @@ def route_registrations(repo_path: str | Path,
         pattern = _GO_ROUTE if path.suffix == ".go" else _JS_ROUTE
         for m in pattern.finditer(text):
             method = m.group(1).upper()
-            if method in {"USE", "GROUP", "HANDLE"}:  # mounts/groups, not leaf routes
+            if method in _MOUNTS:
                 continue
             hits.append(RouteHit(method=method, path=m.group(2),
                                  evidence=f"{rel}:{_line_of(text, m.start())}"))
@@ -204,6 +239,11 @@ def liveness(frontend_repo, backends: list[tuple],
         "match heuristic: version-prefix-tolerant, param wildcards, route is a "
         "prefix of the call, at least one concrete segment must agree.",
     ])
+    if backends and not astgrep.available():
+        report.notes.append(
+            "ROUTE EXTRACTION FALLBACK: ast-grep unavailable — route registrations "
+            "came from the transparent regex scan, not the structural rule "
+            "(reduced robustness; disclosed).")
     calls = ui_call_sites(frontend_repo) if frontend_repo else []
     report.ui_calls = calls
     norm_calls = [(_norm_segments(c.path), c) for c in calls]

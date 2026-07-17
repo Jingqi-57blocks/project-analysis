@@ -1,0 +1,37 @@
+# Outbound HTTP call sites — the "this code talks to something over HTTP" signal.
+# Grouped by directory (Python side) to surface integration packages. Imports are
+# NEVER read here (that is dependency-cruiser / go list territory, D1).
+#
+# Go uses the kind+has idiom (the variadic `$$$` pattern is unreliable for Go in
+# ast-grep 0.44); JS/TS use the same idiom for consistency.
+id: http-call-go
+language: Go
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '^(http\.(NewRequest|NewRequestWithContext|Get|Post|PostForm|Head)|[A-Za-z_][A-Za-z0-9_.]*\.Do)$'
+---
+id: http-call-js
+language: JavaScript
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '^(fetch|axios|axios\.(get|post|put|patch|delete|request))$'
+---
+id: http-call-ts
+language: TypeScript
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '^(fetch|axios|axios\.(get|post|put|patch|delete|request))$'
+---
+id: http-call-tsx
+language: Tsx
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '^(fetch|axios|axios\.(get|post|put|patch|delete|request))$'

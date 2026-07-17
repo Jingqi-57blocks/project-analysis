@@ -13,8 +13,14 @@ PROSE_FILES = [SKILL_ROOT / "SKILL.md", SKILL_ROOT / "synthesis.md"] \
     + sorted((SKILL_ROOT / "templates").glob("*.md")) \
     + sorted((SKILL_ROOT / "lenses").glob("*.md"))
 
-# Target-project literals that must never appear in shipped skill prose.
-FORBIDDEN = re.compile(r"wcp|57block|jira|bitbucket|rancher|worklog", re.I)
+# Target-project literals that must never appear in shipped skill prose or the
+# wrapper's declarative rules/fixtures (both are ship candidates).
+FORBIDDEN = re.compile(r"wcp|57block|jira|bitbucket|rancher|worklog|beisen|italent", re.I)
+
+# The wrapper's ast-grep rules + their fixtures ship with the tool and must stay
+# evidence-free (domain-neutral widget/gadget naming only).
+RULE_FILES = sorted(p for p in (SKILL_ROOT / "wrapper" / "rules").rglob("*")
+                    if p.is_file())
 
 DISCLAIMER_MARK = "repository evidence only"
 
@@ -26,6 +32,19 @@ def test_shipped_prose_has_zero_target_literals():
             if FORBIDDEN.search(line):
                 offenders.append(f"{path.relative_to(SKILL_ROOT)}:{i}: {line.strip()[:80]}")
     assert not offenders, "target literals in shipped prose:\n" + "\n".join(offenders)
+
+
+def test_wrapper_rules_and_fixtures_have_zero_target_literals():
+    offenders = []
+    for path in RULE_FILES:
+        try:
+            text = path.read_text("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if FORBIDDEN.search(line):
+                offenders.append(f"{path.relative_to(SKILL_ROOT)}:{i}: {line.strip()[:80]}")
+    assert not offenders, "target literals in wrapper rules/fixtures:\n" + "\n".join(offenders)
 
 
 def test_every_report_template_carries_the_standing_disclaimer():
