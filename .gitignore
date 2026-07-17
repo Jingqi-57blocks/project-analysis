@@ -14,3 +14,9 @@ output/*
 
 # oversized raw tool outputs — only trimmed samples are committed
 spike/results/**/raw/
+
+# 57B-30 call-graph spike: raw edge dumps + installed spike tools (trimmed samples committed)
+wrapper/go_tools/
+wrapper/node_tools_spike/
+spike/callgraph/**/edges-*.tsv
+spike/callgraph/**/jelly-callgraph-*.json
