@@ -22,7 +22,8 @@ from pathlib import Path
 from ..sanitize import redact
 from ..targetspec import RepoTarget, TargetSpec, stable_repo_id
 from . import (access_model, candidates, deploy_units, generated, integrations,
-               inventory, liveness, modules, pm, provenance, stacks, tables)
+               inventory, liveness, modules, pm, provenance, self_exclusion,
+               stacks, tables)
 
 
 def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
@@ -113,10 +114,19 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
 
 
 def discover(workspace_root: str | Path,
-             exclude_names: list[str] | None = None) -> tuple[TargetSpec, dict]:
-    """Run all producers; return (TargetSpec, discovery report dict)."""
+             exclude_names: list[str] | None = None,
+             analyzer_root: str | Path | None = None) -> tuple[TargetSpec, dict]:
+    """Run all producers; return (TargetSpec, discovery report dict).
+
+    ``analyzer_root`` is the analyzer's own checkout, excluded by canonical path
+    identity so the tool never analyzes itself (57B-34). It defaults to the
+    package install location and needs no operator input; self-exclusion is
+    independent of ``exclude_names``. If the analyzer is embedded inside a
+    legitimate target repo we FAIL CLOSED (see ``self_exclusion``).
+    """
     inv = inventory.find_repos(workspace_root)
     excluded = set(exclude_names or [])
+    analyzer = self_exclusion.resolve_analyzer_root(analyzer_root)
 
     repo_targets: list[RepoTarget] = []
     all_candidates = []
@@ -130,19 +140,47 @@ def discover(workspace_root: str | Path,
         all_candidates.extend(cands)
         repo_reports.append(report)
 
+    def self_excluded(path: str | Path) -> bool:
+        """True (and disclose) when ``path`` is the analyzer's own checkout.
+
+        Raises ``AnalyzerBoundaryConflict`` when the analyzer is embedded inside
+        this discovered target — excluding at admission is the single point that
+        feeds every downstream repo list, so failing closed here is total.
+        """
+        verdict = self_exclusion.classify(path, analyzer)
+        if verdict == self_exclusion.CONFLICT:
+            raise self_exclusion.AnalyzerBoundaryConflict(
+                self_exclusion.conflict_message(analyzer, path))
+        if verdict == self_exclusion.SELF:
+            disclosed.append(f"{path} ({self_exclusion.SELF_EXCLUSION_REASON})")
+            return True
+        return False
+
     for hit in inv.repos:
+        if self_excluded(hit.path):
+            continue
         if Path(hit.path).name in excluded:
             disclosed.append(f"{hit.path} (excluded by operator flag)")
             continue
         if hit.nested_in:
-            disclosed.append(
-                f"{hit.path} (nested in {hit.nested_in} — scanned as part of "
-                f"the enclosing repo, not a separate target in v1)")
+            if Path(hit.nested_in).resolve() == analyzer:
+                # The enclosing repo is the self-excluded analyzer, so this
+                # subtree is NOT scanned at all — say so instead of the normal
+                # nested wording, which would falsely promise coverage.
+                disclosed.append(
+                    f"{hit.path} (nested in the analyzer-owned checkout — "
+                    f"not scanned)")
+            else:
+                disclosed.append(
+                    f"{hit.path} (nested in {hit.nested_in} — scanned as part "
+                    f"of the enclosing repo, not a separate target in v1)")
             continue
         admit(Path(hit.path), hit.repo_id)
 
     git_paths = [hit.path for hit in inv.repos]
     for path in _non_git_projects(Path(inv.workspace_root), git_paths):
+        if self_excluded(path):
+            continue
         if path.name in excluded:
             disclosed.append(f"{path} (excluded by operator flag)")
             continue

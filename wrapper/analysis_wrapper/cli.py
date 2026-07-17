@@ -130,6 +130,10 @@ def parser() -> argparse.ArgumentParser:
     disc.add_argument("--exclude", default="",
                       help="comma-separated repo basenames to exclude "
                            "(disclosed in the report)")
+    disc.add_argument("--analyzer-root", default="",
+                      help="override the analyzer's own checkout root that is "
+                           "self-excluded from discovery (default: resolved "
+                           "from the installed package; needs no operator input)")
     new_run = sub.add_parser(
         "new-run", help="mint a run dir under <skill-root>/output and run "
                         "discovery into it (stage 1 done)")
@@ -138,6 +142,9 @@ def parser() -> argparse.ArgumentParser:
                          help="skill base directory (owns state/ and output/)")
     new_run.add_argument("--language", default="zh-CN", choices=["en", "zh-CN"])
     new_run.add_argument("--exclude", default="")
+    new_run.add_argument("--analyzer-root", default="",
+                         help="override the self-excluded analyzer checkout "
+                              "root (default: resolved from the package)")
     drill = sub.add_parser(
         "new-drilldown", help="mint a drill-down run from a completed overview "
                               "run (--from-run → current pointer → refuse)")
@@ -170,7 +177,9 @@ def parser() -> argparse.ArgumentParser:
 def _discover(args: argparse.Namespace) -> int:
     from .discovery import emit
     exclude = [x.strip() for x in args.exclude.split(",") if x.strip()]
-    spec, report = emit.discover(args.workspace, exclude_names=exclude)
+    spec, report = emit.discover(
+        args.workspace, exclude_names=exclude,
+        analyzer_root=args.analyzer_root or None)
     targets_path, report_path = emit.write_stage1(args.out, spec, report)
     print(f"{len(spec.repos)} target repo(s), "
           f"{len(spec.integration_candidates)} integration candidate(s)")
@@ -191,7 +200,9 @@ def _new_run(args: argparse.Namespace) -> int:
     from . import lifecycle
     from .discovery import emit
     exclude = [x.strip() for x in args.exclude.split(",") if x.strip()]
-    spec, report = emit.discover(args.workspace, exclude_names=exclude)
+    spec, report = emit.discover(
+        args.workspace, exclude_names=exclude,
+        analyzer_root=args.analyzer_root or None)
     overview_root = (Path(args.skill_root).expanduser().resolve()
                      / "output" / report["project_id"] / "overview")
     run_id = lifecycle.mint_run_id(
