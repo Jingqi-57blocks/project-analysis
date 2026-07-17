@@ -48,4 +48,54 @@ PyDriller is primary for history analysis and bootstrap installs the pinned 2.10
 release into the virtual environment. If the wrapper is deliberately run outside
 that environment, set `PROJECT_DOCTOR_PYDRILLER_PYTHON` to an isolated Python
 containing PyDriller 2.10; otherwise the lane uses the disclosed plain-Git fallback
-and reports `partial`.
+and reports `partial`. Commit traversal and per-file modification data come from
+PyDriller; the co-change / ownership / author-roster / sampling AGGREGATION on top
+of it is a tested, thin doctor-owned layer (`git_history/worker.py`,
+`git_history/identity.py`) — not a re-implementation of history parsing.
+
+## Doctor-owned Node toolchain, ast-grep, and SQLGlot
+
+`bootstrap` (the one approved network step) additionally sets up a pinned,
+lockfile-frozen Node toolchain under `node_tools/` via pnpm —
+**dependency-cruiser 18.1.0 + typescript 5.9.3**, committed `package.json` +
+`pnpm-lock.yaml`, `node_modules/` gitignored. The dependency-cruiser signal uses
+only this env binary (`node_env.py`), never a global or target-resolved one; if
+the env lacks `.tsx` support a TypeScript target's dependency signal is recorded
+`unavailable` (fail-closed). `bootstrap --skip-node-tools` opts out.
+
+For TS/Vite repos the depcruise lane (`depcruise_lane.py`) runs a per-run
+preparation step: `node_helpers/resolve-ts-config.mjs` reads tsconfig
+(baseUrl/paths/references) with the official TypeScript compiler API and
+statically extracts vite `resolve.alias` from the config AST (literal mappings
+only; dynamic ones reported unresolved — target config is never executed), and
+`resolvers/ts_aliases.py` writes a doctor-owned depcruise + tsconfig config
+UNDER THE RUN OUTPUT DIR. The manifest records depcruise + typescript versions,
+the config inputs used, and BOTH total and internal edge-resolution metrics; the
+bounded view lists distinct dependency-cycle member files.
+
+`ast-grep` (brew; validated 0.44.1) drives declarative structural rules under
+`rules/` (route registration, HTTP call sites, client construction, host-fragment
+constants, ORM/table usage), each shipping domain-neutral positive/negative
+fixtures under `rules/fixtures/`. `astgrep.py` is the thin runner; import edges
+are NEVER read from ast-grep (that is dependency-cruiser / `go list`). When
+ast-grep is absent the route lane falls back to the transparent regex and the
+integration/table/access-model producers fail closed (disclosed). New discovery
+producers: `discovery/integrations.py` (assembled-URL host fragments + integration
+packages); `discovery/tables.py` (table access-type ladder — declaration / write /
+read / join-ref / same-name / unresolved — with a Go typed-constant registry and an
+exact-identifier structural join for `.Table(constant.X)` accesses); an
+`discovery/access_model.py` locate-and-count view (role catalogs, authz checks,
+middleware, route guards, casbin policy files, identity comparisons, plus a
+cross-repo role-catalog summary); and `discovery/deploy_units.py` (deployable-unit
+candidates — Dockerfile / compose services / Go `package main` / CI deploy —
+status `inferred` or `unknown`, never claiming completeness). `SQLGlot 30.12.0`
+(bootstrap `[sql]` extra) parses raw SQL DDL for the table lane; SQL coverage
+(dialect, parse failures, unparsed files) is explicit and never reported complete
+on failure.
+
+The offline Go lane records GOOS/GOARCH/CGO_ENABLED and build-tag scope in every
+manifest; a cold cache / missing dep / load failure fails loudly. Warm the module
+cache first under approval: `python3 -m doctor_wrapper.bootstrap --warm-go <repo>`
+(`go list -deps -json` with network allowed, still `-mod=readonly`). The
+git-history co-change pass takes an optional `--coupling-sample-cap` (0 = no cap,
+unchanged; when exceeded, an evenly-spaced, disclosed sample is used).
