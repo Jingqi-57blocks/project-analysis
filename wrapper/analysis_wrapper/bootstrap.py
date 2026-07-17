@@ -110,6 +110,13 @@ def parser() -> argparse.ArgumentParser:
              "closed (SKIPPED/unavailable) until it is installed",
     )
     result.add_argument(
+        "--skip-go-tools",
+        action="store_true",
+        help="do not install the pinned Go call-graph tool "
+             "(golang.org/x/tools/cmd/callgraph) into go_tools/bin — the Go "
+             "call-graph lane then fails closed (unavailable) until it is installed",
+    )
+    result.add_argument(
         "--warm-go",
         action="append",
         default=[],
@@ -148,6 +155,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"WARNING: node tool env not installed ({exc}); the "
                   "dependency-cruiser signal will be SKIPPED/unavailable until "
                   "`pnpm install` succeeds in node_tools", file=sys.stderr)
+
+    # Analyzer-owned pinned Go call-graph tool (golang.org/x/tools/cmd/callgraph).
+    # One approved network install (`go install pkg@version`) into an
+    # analyzer-owned GOBIN; a failure is disclosed but non-fatal — the Go
+    # call-graph lane then fails closed (unavailable) downstream.
+    if not args.skip_go_tools:
+        from . import go_tools
+        try:
+            binary = go_tools.setup()
+            print(f"go tools: {binary} "
+                  f"({go_tools.CALLGRAPH_PKG}@{go_tools.CALLGRAPH_VERSION})")
+        except (OSError, RuntimeError) as exc:
+            print(f"WARNING: Go call-graph tool not installed ({exc}); the Go "
+                  "call-graph lane will be unavailable until "
+                  f"`go install {go_tools.CALLGRAPH_PKG}@{go_tools.CALLGRAPH_VERSION}` "
+                  "succeeds into go_tools/bin", file=sys.stderr)
 
     # ast-grep is a brew binary (not installed here); the structural rules for
     # route/HTTP/client/host extraction fall back or fail closed without it.

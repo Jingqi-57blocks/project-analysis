@@ -122,6 +122,12 @@ def parser() -> argparse.ArgumentParser:
                      help="explicitly authorize a network-capable tool")
     sweep = sub.add_parser("sweep", help="run all applicable validated tools")
     sweep.add_argument("--include-network", action="store_true")
+    cg = sub.add_parser(
+        "callgraph", help="extract function/method call edges (57B-30) into "
+                          "<out>/callgraph/<repo_id>.jsonl + callgraph-coverage.json")
+    cg.add_argument("--include-network", action="store_true",
+                    help="authorize the Go module-cache warm for a cold cache "
+                         "(offline-first; without it a cold cache fails closed)")
     disc = sub.add_parser(
         "discover", help="produce the stage-1 run checkpoint "
                          "(targets.json + discovery-report.json)")
@@ -295,6 +301,21 @@ def _new_drilldown(args: argparse.Namespace) -> int:
     return 0
 
 
+def _callgraph(args: argparse.Namespace, spec: TargetSpec, out: Path) -> int:
+    from .callgraph import emit as cg_emit
+    report = cg_emit.run_callgraph(
+        spec, out, args.scan_date, allow_network=args.include_network)
+    for cov in sorted(report.repos, key=lambda c: (c.repo_id, c.lang)):
+        suffix = f": {cov.reason}" if cov.reason else ""
+        print(f"{cov.repo_id} [{cov.lang}] {cov.status} "
+              f"(edges={cov.edges_emitted}, resolved={cov.call_sites.resolved})"
+              f"{suffix}")
+    if not report.repos:
+        print("no Go/JS/TS repositories in the TargetSpec — nothing to analyze")
+        return 0
+    return 3 if cg_emit.aggregate_status(report) is Status.FAILED else 0
+
+
 def _lifecycle_cmd(args: argparse.Namespace) -> int:
     from . import lifecycle
     run_dir = Path(args.run).expanduser().resolve()
@@ -358,6 +379,8 @@ def main(argv: list[str] | None = None) -> int:
                 [str(Path(r.path).expanduser().resolve()) for r in spec.repos]
             )
         out = prepare_output_directory(args.out, spec.repos)
+        if args.command == "callgraph":
+            return _callgraph(args, spec, out)
         results = _run_one(args, spec, out) if args.command == "run" else _sweep(args, spec, out)
         _record_summary(out, results)
         for item in results:
