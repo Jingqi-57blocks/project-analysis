@@ -1,4 +1,4 @@
-# {{project_name}} — Project Overview & Diagnosis
+# {{project_name}} — Project Overview
 
 > This report is derived from **repository evidence only** — code, configuration, and
 > git history in the analyzed snapshot (clean commit, dirty worktree, or non-git folder,
@@ -7,108 +7,138 @@
 > is live in production; and it is not a comprehensive security or license audit.
 > Findings labeled `status unresolved` need human confirmation.
 
-## Contents
+<!--
+This is the PRIMARY, human-facing document: a reader with no prior context should
+understand the system and its biggest changeability risks in ~10 minutes, WITHOUT
+opening any other file. Keep it simple — plain sentences a PM can act on. Every claim
+is grounded in code (never invented) and is verifiable from its own citation; do not
+make the reader cross-check multiple documents to understand one point. The exhaustive
+evidence, full findings, and metrics live in technical-overview.md — link to it, don't
+inline it. Run language governs the prose AND the section headings of this document
+(default zh-CN); code identifiers, UI labels, citations, and the fixed status
+vocabulary (`confirmed concern`/`no concern observed`/`unknown`, `included`/`unresolved`,
+`status unresolved`, priorities) stay verbatim. For a zh-CN run, render the disclaimer
+above as its faithful zh-CN translation (same scope claims).
+-->
 
-{{table_of_contents — one line per `##` section below, in order, as markdown anchor
-links; generate it LAST so it matches the final document exactly}}
+## 1. Analysis basis
 
-<!-- ONLY when any target was dirty or non-git, add this second blockquote: -->
+- **Run:** `{{run_id}}` · {{analyzed_at}} · language `{{language}}` · full detail:
+  [`technical-overview.md`](technical-overview.md)
+- **Analyzed:** {{repos_with_short_commit_vintage — one line per repo: name, short HEAD,
+  HEAD date; NOT the full provenance table (that is in technical-overview.md)}}
+- **Coverage limits that shape what follows:** {{the few coverage gaps a reader must
+  keep in mind — e.g. a skipped network scan, a partially-resolved dependency graph, a
+  reduced-support stack — one clause each; the complete list is section 9}}
+
+<!-- ONLY when any target was dirty or non-git: -->
 > **Inspection-only run:** one or more targets were dirty worktrees (or non-git folders)
-> at analysis time. Citations use `repo@WORKTREE:`/`repo@NON-GIT:` forms, this run cannot
-> be accepted as `current`, and drill-downs will not reuse it.
+> at analysis time; citations use `repo@WORKTREE:`/`repo@NON-GIT:` forms and this run
+> cannot be accepted as `current`.
 
-## Run provenance
+## 2. Project snapshot
 
-- **Run:** `{{run_id}}` · analyzed at {{analyzed_at_utc}} · language `{{language}}`
-- **Doctor:** version {{doctor_version}} · wrapper {{wrapper_version}} · model `{{model_id}}`
-- **Workspace:** `{{workspace_label — basename/logical name ONLY; absolute machine paths
-  must never appear in persisted reports}}` → project-id `{{project_id}}`
+- **What it is / who it's for:** {{purpose in plain product language}}
+- **Business capabilities:** {{the capabilities the product delivers — business terms,
+  not module IDs}}
+- **Platform & shared components:** {{the shared/technical pieces that serve those
+  capabilities — frontend app, auth service, schedulers, storage — kept SEPARATE from
+  the business capabilities above, never listed at the same level}}
+- **User roles:** {{roles ONLY when backed by evidence — permission checks, route
+  guards, menu/role definitions, approval relations (cite in technical-overview.md);
+  otherwise write `unresolved` — never infer a role from a module or folder name}}
+- **System evolution:** {{INCLUDE ONLY when evidence detects one — parallel
+  implementations of the same capability, a partial replacement, a compatibility layer;
+  state plainly which side carries what, citing the evidence. OMIT this line entirely if
+  no such state is observed — do not assume a migration}}
 
-| repo | HEAD | branch | describe | HEAD date | remote (redacted) | dirty | history |
-|---|---|---|---|---|---|---|---|
-| {{repo_id}} | {{head_short}} | {{branch}} | {{git_describe}} | {{head_timestamp}} | {{remote_redacted}} | {{dirty_detail}} | {{history_completeness}} |
+## 3. Capability & system map
 
-Submodule pins: {{submodule_pins_or_none}}
-
-## Executive summary
-
-{{three_to_six_sentences: what this project is, its shape, and the 2–4 problems that
-matter most — written for someone deciding where to invest engineering time. Every
-factual claim carries a citation (source or `signals/<view>:<row>`), or restates a
-cited finding/table row below — no uncited claims}}
-
-## Analysis scope
-
-**Analyzed:** {{analyzed_repos_roots_and_source_universe}}
-**Referenced but NOT analyzed:** {{referenced_not_analyzed — systems/repos/paths that
-evidence points to but that were absent or excluded, each with the pointing evidence}}
-**Exclusions applied:** {{tier1_and_tier2_exclusions_per_repo — disclosed, with the
-evidence that derived each Tier-2 entry}}
-
-## Project map
+{{one or two plain sentences framing the diagram}}
 
 ```mermaid
-{{topology_diagram — business-language labels with identifiers parenthesized;
-UI→API, API→persistence, cross-service, scheduler, external systems. The diagram only
-visualizes relationships cited in project_map.md — it introduces no new edges}}
+{{simplified_topology — business-language labels with identifiers parenthesized; show
+capabilities, the platform/shared components that serve them, and external systems on
+the boundary. NO bare status codes, route paths, or table names in labels. Only edges
+backed by project-map.md relationship rows}}
 ```
 
-| module | classification | one-line purpose | evidence | confidence |
-|---|---|---|---|---|
-| `{{module_id}}` | {{business/platform/shared-infra/unresolved}} | {{purpose}} | {{evidence_citations}} | {{high/medium/low}} |
+Full topology, relationship labels, and shared data: [`project-map.md`](project-map.md).
 
-Full map with relationship labels: [`project_map.md`](project_map.md)
+## 4. Overall changeability diagnosis
 
-## External systems (candidate disposition)
+{{the 3–5 strongest SYSTEMIC causes of change difficulty, told as ONE coherent story:
+name each cause in a plain sentence, then say explicitly HOW THEY REINFORCE one another
+(e.g. a still-live parallel implementation × duplicated logic × no test net compound
+into a single risk). Not a bulleted list of unrelated defects — a diagnosis. Each cause
+restates a finding from section 7 / technical-overview.md; no new uncited claims}}
 
-| candidate | signal kind(s) | disposition | evidence |
-|---|---|---|---|
-| {{system}} | {{one_or_more_of: import / client_init / outbound_endpoint / config / env / oauth_provider / ci_resource — or `dependency-only` when dependency/lockfile entries are the ONLY signals}} | {{included / unresolved / excluded}} | {{citations}} |
+## 5. Representative change paths
 
-Dependency-only or lockfile-only signals never prove an active integration; such rows are
-`unresolved` unless corroborated.
+{{2–3 PROJECT-LEVEL worked examples — one business-rule change, one API/data change,
+optionally one UI change — SELECTED where the evidence is strongest (co-change ∩
+complexity ∩ missing safety net) and citing that evidence. For each: the components a
+change crosses, the responsibilities involved, the side effects to expect, what
+verification it would require, and why it is expensive today. Keep each to a short
+paragraph; per-module tracing detail lives in the module drill-down, not here.}}
 
-## Top problems
+### {{path_name — e.g. "changing an approval rule"}}
+{{crosses …; involves …; side effects …; verification …; expensive because … (cite)}}
 
-{{ordered by priority; each rendered from the shared finding shape:}}
+## 6. Module changeability table
 
-### {{n}}. {{claim}} — `{{priority}}`
-- **Lens:** {{lens}} · **Confidence:** {{confidence}}
-- **Affected modules:** {{module_ids}}
-- **Evidence:** {{citations_with_one_line_each}}
-- **Impact:** {{why_this_matters}}
-- **Limitations:** {{what_this_finding_cannot_see}}
-- **Suggested direction:** {{direction_not_prescription}}
+One row per business/platform module. Cells use EXACTLY this vocabulary — never
+"healthy" or any wellness word inferred from the absence of a finding:
+- `confirmed concern` — a cited finding says this is hard/risky to change (name the basis).
+- `no concern observed` — signals for THIS cell ran and surfaced nothing (state the
+  basis inline, e.g. "tests present", "low churn").
+- `unknown` — the signal for THIS cell did not run or could not resolve. A gap in one
+  lens makes only its own cell `unknown`; it never turns unrelated cells into concerns
+  or clears them.
 
-## Module health table
+| module | responsibility clarity | change spread | hidden coupling | safety net | confidence |
+|---|---|---|---|---|---|
+| {{business_module_name (`module-id`)}} | {{...}} | {{...}} | {{...}} | {{...}} | {{high/medium/low}} |
 
-| module | complexity | duplication | churn×complexity | ownership concentration | dependency risk | notable |
-|---|---|---|---|---|---|---|
-| `{{module_id}}` | {{...}} | {{...}} | {{...}} | {{...}} | {{...}} | {{one_liner}} |
+<!-- business + platform modules; roll shared-infra modules with no findings into one
+closing row, but NEVER collapse a module that has a finding into such a row -->
 
-## Lens coverage
+## 7. Prioritized findings
 
-A lens's status is the WORST status among its signals
-(`failed > partial > skipped > complete`); the lens→signal mapping comes from the lens
-definitions. A skipped or failed lens means **unknown**, not healthy.
+Ordered **systemic first, then local, then coverage gaps** — this is
+**engineering-risk** priority (what makes change hard or dangerous), NOT a
+business-roadmap priority. Full finding detail and all evidence are in
+[`technical-overview.md`](technical-overview.md).
 
-| lens | signals (tool × repo) | status | summary |
-|---|---|---|---|
-| {{lens}} | {{signal_list}} | {{worst_signal_status}} | {{one_line — what is and is not covered}} |
+{{for each: a one-line claim; **impact** in plain terms; **evidence** (one citation or a
+link to the technical-overview finding number); **confidence**; **direction** (a
+direction, not a prescription). Systemic findings that span repos appear ONCE with their
+per-repo evidence beneath — never N separate rows for one root cause.}}
 
-### Per-signal detail
+### {{n}}. {{claim}}
+- **Impact:** {{plain-language consequence}}
+- **Evidence:** {{citation / technical-overview.md#finding-n}} · **Confidence:** {{...}}
+- **Direction:** {{...}}
 
-Statuses and reasons copied **verbatim** from `signals/run-summary.json` — one row per
-signal, no omissions.
+## 8. External systems & boundaries
 
-| signal | repo | status | reason (verbatim) |
-|---|---|---|---|
-| {{tool}} | {{repo_id}} | {{status}} | {{reason_or_empty}} |
+{{plain-language summary of what the product relies on that it does not own — storage,
+mail, chat, issue tracking, directory, etc. — noting anything with only weak signals as
+"signs present, not confirmed" (`unresolved`). This is a SUMMARY; the per-candidate
+disposition with evidence is in technical-overview.md, and the topology is in
+project-map.md.}}
 
-## Assumptions & open questions
+## 9. Open questions & limitations
 
-{{numbered; each: the assumption/question, why it matters, what evidence would resolve
-it, and — where applicable — the `status unresolved` findings that hinge on it}}
+**Questions code cannot answer** — each states WHY the repository cannot answer it. If a
+re-run knob, a producer, or more evidence COULD answer it, it does not belong here (it
+is a coverage gap for the technical-overview backlog, not an open question):
+
+{{numbered; each: the question, and the reason the repository is silent on it}}
+
+**What code cannot know (product context):** {{ownership, real-world usage, SLAs,
+criticality, and roadmap are outside repository evidence — list the ones this project
+raises so a human owner can supply them}}
 
 ---
 <!-- ONLY for clean (non-inspection-only) runs, end with the acceptance offer: -->

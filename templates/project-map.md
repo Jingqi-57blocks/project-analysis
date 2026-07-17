@@ -7,7 +7,10 @@
 > is live in production; and it is not a comprehensive security or license audit.
 > Findings labeled `status unresolved` need human confirmation.
 
-Run `{{run_id}}`; full provenance block in `overview.md`.
+Run `{{run_id}}`; full provenance block in `technical-overview.md`. This is the reusable
+topology: modules and their boundaries, how they connect, what data they share, and the
+external systems on the boundary. A simplified version is embedded in `overview.md`; the
+per-candidate integration disposition and all findings are in `technical-overview.md`.
 
 ## Modules
 
@@ -35,7 +38,8 @@ insufficient), `user-confirmed` (from `confirmed_facts.md`, with record referenc
 ```mermaid
 {{full_topology — business-language labels with identifiers parenthesized; group by
 repo/service; external systems on the boundary; mark unresolved edges with dashed
-lines. Only edges from the relationships table above — the diagram introduces no new
+lines. Only edges from the relationships table above (or module→external-system
+boundary edges backed by an external-systems row) — the diagram introduces no new
 claims}}
 ```
 
@@ -57,12 +61,36 @@ orphan list and nothing here is "dead").
 |---|---|---|---|
 | `{{repo}}` | {{ui_called_count}} | {{ledger_path_count_for_its_base}} | {{one line — e.g. "still a live backend: N UI paths" or "carries the bulk of traffic"}} |
 
-{{when a parallel rewrite exists: state plainly which domains still route to
-the legacy backend vs the successor, citing the ledger — this is the migration
-picture. Caveat mount-prefix limits; never call the legacy service dead.}}
+{{when parallel implementations of the same capability exist: state plainly which
+domains still route to which implementation, citing the ledger. Caveat mount-prefix
+limits; never call a still-referenced service dead. This is the evidence behind the
+overview's system-evolution line — describe it generically (parallel implementation /
+partial replacement), never assume a "migration".}}
 
 ## Co-change coupling (history signal)
 
 | module pair | shared commits (window) | interpretation | evidence |
 |---|---|---|---|
 | `{{a}}` ↔ `{{b}}` | {{n}} | {{one_line — coupling vs coincidence, bulk changesets excluded}} | {{git-history signal ref}} |
+
+## External systems
+
+The systems on the boundary that this codebase integrates with (topology view). The full
+mechanical accounting of every integration candidate — including excluded noise, with
+counts that sum to the candidate total — is in `technical-overview.md`.
+
+| system | disposition | kind | evidence |
+|---|---|---|---|
+| {{system}} | {{included / unresolved}} | {{storage / mail / chat / issue-tracker / directory / push / payments / …}} | {{citations}} |
+
+`included` systems draw solid boundary edges in the topology; `unresolved` (signs present
+but active use unproven) draw dashed edges. Excluded candidates are not boundary systems
+and are accounted for only in `technical-overview.md`.
+
+## Referenced but NOT analyzed
+
+Any configured endpoint / base URL whose serving source is not among the analyzed repos.
+
+| endpoint / base URL | referenced from | why it's flagged | status |
+|---|---|---|---|
+| {{endpoint}} | {{repo@commit:path:line — the config/call site that references it}} | {{why its owner cannot be confirmed from analyzed evidence}} | unresolved |

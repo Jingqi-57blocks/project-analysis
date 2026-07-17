@@ -13,12 +13,14 @@ explicitly disclosed reduced coverage.
 
 ## Status
 
-**Phase 1 in progress.** Phase 0 (toolchain spike) is signed off — see `spike/` for
-evidence and `tools/README.md` for the validated toolchain. The tool wrapper (57B-10)
-is done and live-sweep validated; the skill scaffold (SKILL.md, templates, state/output
-layout — 57B-9) is built and pending sign-off. Next: discovery (57B-11), lenses,
-synthesis, lifecycle. The skill command is `/project-doctor` (`/doctor` is a Claude
-Code built-in).
+**Phase 1 build complete through lifecycle.** Phase 0 (toolchain spike) is signed off —
+see `spike/` for evidence and `tools/README.md` for the validated toolchain. The tool
+wrapper (57B-10), discovery (57B-11), the lenses, synthesis, and the run lifecycle are
+built and live-sweep validated. The v3.5 overview restructure is applied: `overview.md`
+is the PM-primary document (nine sections, readable in ~10 minutes),
+`technical-overview.md` is its full-detail companion, and `project-map.md` is the
+reusable topology. The Phase-1 exit run is pending. The skill command is
+`/project-doctor` (`/doctor` is a Claude Code built-in).
 
 ## Design
 

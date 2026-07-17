@@ -6,7 +6,10 @@ Everything under `output/` except this README is gitignored: run artifacts descr
 ```
 output/<project-id>/
   overview/<run-id>/
-    overview.md  project_map.md  module_candidates.md
+    overview.md              PM-primary document (nine sections, ~10-min read)
+    technical-overview.md    full-detail companion (findings, metrics, disposition, coverage)
+    project-map.md           reusable topology
+    module_candidates.md     preliminary, pre-lens
     signals/                 wrapper output: views + manifests + run-summary.json
       raw/                   contained raw tool output (self-gitignored, never
                              model-read, never packaged)

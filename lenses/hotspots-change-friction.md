@@ -21,6 +21,12 @@ Look for, with evidence:
   unmerged).
 - **Change friction** — files whose changes cluster with reverts/fix-ups
   (subject lines in the view), or hotspots that keep reappearing.
+- **Change-spread packaging (for the overview's representative change paths)** —
+  where the evidence intersects (a hot file that is also complex and has no
+  co-changing test, or a cross-directory co-change cluster spanning several top-
+  level dirs), say so plainly and cite all sides. Synthesis SELECTS the strongest
+  such intersections as worked change-path examples, so name the directories a
+  change crosses rather than only ranking single files.
 
 Rules:
 - History window and completeness (shallow flag, oldest commit vs window)

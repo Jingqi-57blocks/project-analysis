@@ -203,20 +203,23 @@ anchored):
 3. **Run tools once** through the wrapper (signals + per-signal manifests; network lanes
    only with explicit authorization). Grouped lens agents analyze the bounded views and
    return findings in the shared shape against candidate module IDs.
-4. **Finalize `project_map.md`** — follow `synthesis.md` step 4: module formation from
+4. **Finalize `project-map.md`** — follow `synthesis.md` step 4: module formation from
    candidates, classification, stable IDs + aliases, relationship labels
-   (`observed | inferred | unresolved | user-confirmed`), and the disposition of EVERY
-   integration candidate (`included | unresolved | excluded`, evidence each, none
-   silently dropped).
+   (`observed | inferred | unresolved | user-confirmed`), external systems and
+   referenced-but-not-analyzed endpoints, and the disposition of EVERY integration
+   candidate (`included | unresolved | excluded`, evidence each, none silently dropped).
 5. **Assign findings** to finalized module IDs (`synthesis.md` step 5).
-6. **Write `overview.md` AND `pm-overview.md`** (templates: `templates/overview.md`,
-   `templates/overview-pm.md`; rules: `synthesis.md` step 6): overview.md opens with a
-   table of contents and carries the executive summary, Mermaid topology, top problems
-   by priority, module health table, lens coverage (per-lens aggregate + per-signal
-   detail), external-systems disposition table, assumptions & open questions;
-   pm-overview.md is the non-technical companion for PMs — business language only,
-   same facts, same citations discipline. Synthesis reorganizes cited material — it
-   never creates new uncited claims.
+6. **Write `technical-overview.md` then `overview.md`** (templates:
+   `templates/technical-overview.md`, `templates/overview.md`; rules: `synthesis.md`
+   step 6). `technical-overview.md` is the full-detail companion: full provenance,
+   complete analysis scope, every finding in the shared shape, per-module health
+   metrics, the integration-candidate disposition table, and lens coverage (per-lens
+   aggregate + per-signal detail). `overview.md` is the PRIMARY, human-facing document —
+   nine sections a PM reads in ~10 minutes (analysis basis; project snapshot; capability
+   & system map; overall changeability diagnosis; representative change paths; module
+   changeability table; prioritized findings; external systems; open questions) — derived
+   from technical-overview.md, business-simple, same citation discipline. Synthesis
+   reorganizes cited material — it never creates new uncited claims.
 7. **Offer acceptance** (sets the `current` pointer on the user's yes). Skip the offer
    for inspection-only runs.
 
@@ -258,7 +261,7 @@ observed code, surface the conflict in the report — never silently prefer eith
 ```
 SKILL.md            this file
 lenses/             lens prompt definitions (analysis dimensions)
-templates/          overview, overview-pm, project_map, module_candidates, module-prd, module-health
+templates/          overview (PM primary), technical-overview, project-map, module_candidates, module-prd, module-health
 wrapper/            Python tool-execution wrapper (see wrapper/README.md)
 state/<project-id>/     pointers.json, confirmed_facts.md   (runtime, per target)
 output/<project-id>/    overview/<run-id>/, drilldown/<run-id>/   (runtime, per target)

@@ -8,8 +8,8 @@
 > Findings labeled `status unresolved` need human confirmation.
 
 > **PRELIMINARY** — produced by mechanical discovery before any lens ran. Candidate
-> boundaries and names WILL change in `project_map.md`; nothing here is a conclusion.
-> Run `{{run_id}}`; provenance in `overview.md`.
+> boundaries and names WILL change in `project-map.md`; nothing here is a conclusion.
+> Run `{{run_id}}`; provenance in `technical-overview.md`.
 
 ## Module candidates
 
