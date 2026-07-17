@@ -38,7 +38,14 @@ def test_typed_constant_registry_join():
 
 def test_distinct_tables_survive_before_view_caps():
     ev = tables.generate(str(FIXDB), "db-fix")
-    assert ev.to_dict()["distinct_table_count"] == len(ev.tables) >= 3
+    # Dedup to distinct table NAMES happens at the evidence layer (to_dict),
+    # before any downstream view cap — this identity holds in every environment.
+    assert ev.to_dict()["distinct_table_count"] == len(ev.tables)
+    # ast-grep alone declares widgets + gadgets; the SQL-only `sprockets`
+    # (SELECT ... FROM sprockets, with no ORM/const binding anywhere) can only be
+    # contributed by sqlglot. So the meaningful multi-table floor is 3 with
+    # sqlglot present and 2 without it — the SQL lane is optional (`[sql]` extra).
+    assert len(ev.tables) >= (3 if _HAS_SQLGLOT else 2)
 
 
 def test_every_bucket_is_on_the_ladder():
