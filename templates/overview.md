@@ -51,7 +51,9 @@ to dip into per question; the ~10-minute read is layered on top of §2.*
 architectural shape at a glance, whether it is broadly easy or hard to change and why,
 the systemic causes and HOW THEY REINFORCE one another, and the top remaining evidence
 gaps. Conditions and observed impact ONLY — no fixes, no directions. Each claim traces
-to a later section / technical-overview.md.}}
+to a later section / technical-overview.md. If a shared-schema/shared-table claim first
+appears here, the same sentence carries the same-name-only qualifier (the §8 ladder only
+restates it).}}
 
 ## 3. Product snapshot
 
@@ -83,7 +85,9 @@ proven enforced). Per-role permission matrices belong in the module PRDs, not he
 
 {{2–3 journeys — one normal, one approval-or-rule-heavy, one background-or-integration.
 Each traced: actor → UI entry (label quoted VERBATIM from source) → action → API/service
-→ rule applied → data touched → notification / final state. A capability with no
+→ rule applied → data touched (persisted store named from the handler's own model /
+TableName evidence, never inferred from the domain name) → notification / final state.
+A capability with no
 independent UI is labeled `embedded` / `background` / `API-only`. Verbatim labels come
 from bounded reads of only the 2–3 entry files.}}
 

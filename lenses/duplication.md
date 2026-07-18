@@ -20,6 +20,12 @@ Look for, with evidence:
 Rules:
 - Clone claims cite the jscpd view rows (file pairs + line ranges) and, when
   arguing impact, the source lines of at least one copy.
+- **Attribute each clone to the module of its FULL path, never a shared
+  basename.** Same-named files (a `service.go` or `index.js` living in several
+  different packages/directories) are DIFFERENT modules — read the whole path of
+  each cited file and name the module it actually sits in. A clone pair whose two
+  copies fall in different modules is a cross-module finding: name both, and
+  never fold it onto one module because the filenames match.
 - jscpd is same-language only (Phase-0 verdict): silence about cross-language
   duplication is a coverage limit — state it, never imply "no duplication
   across languages".

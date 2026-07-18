@@ -29,6 +29,12 @@ Look for, with evidence:
   change crosses rather than only ranking single files.
 
 Rules:
+- **Attribute each co-change pair to the module of its FULL path, never a
+  shared basename.** Files that share a basename (a per-type `handler.go`, a
+  per-feature `index.ts`) across different packages/directories belong to
+  different modules — read the whole path and name the module each cited file
+  actually sits in before calling a pair "lockstep" or "co-changing". A pair
+  split across two modules is cross-module coupling, reported as such.
 - History window and completeness (shallow flag, oldest commit vs window)
   come from the view; when the window is truncated or the repo is shallow,
   CAP confidence and state it in limitations.

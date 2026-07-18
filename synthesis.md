@@ -47,7 +47,11 @@ context):**
 - **Verify before you write:** any count, cap, status, superlative, or per-repo
   attribution you state must be re-checked against `discovery-report.json` /
   `run-summary.json` at writing time — do not repeat another document's
-  paraphrase of a number when the source artifact is available.
+  paraphrase of a number when the source artifact is available. Every count,
+  quantifier, and superlative in `overview.md` must EQUAL the number in the
+  evidence it cites; when the evidence count differs, use the evidence count or
+  narrow the claim to what the rows show (`N of M`) — never round a partial up to
+  a total ("all", "every", "N copies") past what the cited evidence contains.
 - **`ui→api` edges need a call-site check:** before writing the evidence for a
   frontend→backend edge, read the actual frontend call site and the config
   that binds its base URL; `observed` requires both sides cited, and evidence
@@ -71,7 +75,11 @@ context):**
   `unresolved` dashed).
 - **Simplicity is a rule, not a preference.** Prefer plain sentences a PM can
   act on. In `overview.md` the main text carries no source paths, raw metrics, or
-  tool names — a claim is stated plainly and links to `technical-overview.md`,
+  tool names — name a capability by its FUNCTION, not the scanner that produced
+  it (write "dependency-vulnerability scanning", never `osv` / `osv-scanner`;
+  "duplication", never `jscpd`; "complexity", never `lizard`), and every tool and
+  scanner name lives in `technical-overview.md`. A claim is stated plainly and
+  links to `technical-overview.md`,
   where it is verifiable from its citation alone; the reader never has to assemble
   evidence from several places to understand one point. Minimize what a human must
   verify without omitting what shouldn't be omitted. Facts come from code — never
@@ -163,6 +171,27 @@ never turns unrelated cells into concerns or clears them.
   `deprecated` in a name is not evidence of a migration or replacement state —
   cite behavior (parallel implementations, route-liveness, shared tables), never
   the name.
+- **Module attribution is path-exact; clone and co-change stay separate.**
+  Attribute a clone or co-change claim to the module named by the FULL path of
+  each cited file, never by a shared basename — same-named files (a `service.go`
+  / `index.js` in different packages/directories) are DIFFERENT modules. When
+  clone evidence (jscpd) and co-change evidence (git-history) point at different
+  modules, keep the two claims separate and attribute each to its own module;
+  never merge them onto one module because the filenames match, and never let a
+  lens's basename slip carry through into the overview.
+- **A journey's write step cites the store it actually writes.** For the
+  data-touched step of a representative journey (overview.md §5), name the
+  persisted store only from the handler's own model / `TableName` reference (or
+  the table_evidence for that handler) — never infer the table from the
+  journey's domain name or an adjacent capability. If the handler's model refs
+  don't resolve to a store, write `store unresolved`, not a domain-guessed name.
+- **Shared-table claims are hedged at FIRST mention.** The first time
+  `overview.md` states that two modules/services share a schema or table —
+  wherever that first lands (often §2 or §3, not only §8) — the same sentence
+  names the strongest distinction actually reached; a bare name match is
+  `same-name-only` and is never presented as confirmed shared persistence. The
+  §8 ladder restates the distinction; it is not allowed to be the first place
+  the caveat appears.
 
 ## Output budget & generation constraints
 
