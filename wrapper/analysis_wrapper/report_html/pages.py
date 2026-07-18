@@ -154,8 +154,11 @@ def full_document_page(inputs: RunInputs, doc: DocSource, rendered: MarkdownDoc)
             f'<li class="{cls}"><a href="#{attr(sec.anchor)}">{esc(sec.text)}</a></li>'
         )
     toc = (
-        f'<nav class="doc-toc" aria-label="table of contents"><h2>{esc(c["on_this_page"])}</h2>'
-        f'<ul class="outline">{"".join(toc_items)}</ul></nav>'
+        f'<nav class="doc-toc" aria-label="table of contents">'
+        f'<button class="doc-toc-toggle" aria-expanded="true" aria-controls="doc-toc-panel">'
+        f'{esc(c["on_this_page"])}</button>'
+        f'<div class="doc-toc-panel" id="doc-toc-panel">'
+        f'<ul class="outline">{"".join(toc_items)}</ul></div></nav>'
         if toc_items else ""
     )
     body = toc + f'<article class="doc-body">{rendered.html}</article>'

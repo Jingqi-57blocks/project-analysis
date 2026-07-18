@@ -10,6 +10,7 @@ component says so honestly rather than fabricating content.
 from __future__ import annotations
 
 import collections
+import re
 from dataclasses import dataclass, field
 
 from .htmlutil import attr, esc
@@ -121,18 +122,26 @@ def system_snapshot(inputs: RunInputs) -> StructuredComponent:
         ("symbols", by_kind.get("symbol", 0), ""),
     ])
 
+    # HEAD revision per repo, joined by repo_id (the stable id's trailing
+    # path-hash suffix is dropped for a clean name; the real commit gets its
+    # own column).
+    heads = {p.repo_id: (p.head[:8] if p.head else "—") for p in inputs.provenance()}
     rows = []
     for r in repos:
         a = r.get("attrs", {})
+        rid = r.get("repo_id", "")
+        name = re.sub(r"-[0-9a-f]{6,}$", "", rid) or rid
         rows.append([
-            esc(r.get("repo_id", "")),
+            esc(name),
+            esc(heads.get(rid, "—")),
             esc(", ".join(a.get("stacks", [])) or "—"),
             esc(", ".join(a.get("frameworks", [])) or "—"),
             esc(a.get("package_manager", "—")),
             esc(a.get("commit_count", "—")),
         ])
     table = _table(
-        ["repository", "stacks", "frameworks", "package manager", "commits"], rows
+        ["repository", "commit", "stacks", "frameworks", "package manager", "commits"],
+        rows,
     )
     html = tiles + table
     return StructuredComponent(

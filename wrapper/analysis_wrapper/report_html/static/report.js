@@ -90,12 +90,23 @@
     });
   }
 
+  /* ---- floating TOC toggle ---- */
+  function bindTocToggle() {
+    document.querySelectorAll(".doc-toc-toggle").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var collapsed = btn.parentNode.classList.toggle("collapsed");
+        btn.setAttribute("aria-expanded", String(!collapsed));
+      });
+    });
+  }
+
   /* ---- init ---- */
   function init() {
     collectSources();
     renderDiagrams(currentTheme());
     bindZoom();
     bindFilters();
+    bindTocToggle();
     var toggle = document.querySelector(".theme-toggle");
     if (toggle) {
       toggle.addEventListener("click", function () {
