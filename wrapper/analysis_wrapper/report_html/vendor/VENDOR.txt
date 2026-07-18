@@ -1,0 +1,16 @@
+Vendored third-party assets bundled verbatim into generated offline reports.
+
+mermaid.min.js
+  library:  mermaid
+  version:  11.4.1
+  source:   npm mermaid@11.4.1 -> package/dist/mermaid.min.js (UMD, self-contained)
+  sha256:   a43bc1afd446f9c4cc66ac5dd45d02e8d65e26fc5344ec0ef787f88d6ddb6f9e
+  license:  MIT (see mermaid.LICENSE.txt)
+  why:      renders authored mermaid diagram blocks in the browser, fully
+            offline over file:// (no dynamic import()/chunk fetches).
+
+markdown-it-py (build-time only; not bundled into the report)
+  version:  3.0.0  (pinned in pyproject `report` extra)
+  license:  MIT
+  why:      canonical-markdown -> HTML AST for lossless full-document rendering,
+            section anchoring, and mermaid-block location.

@@ -28,7 +28,7 @@ def environment_python(environment: Path) -> Path:
 
 
 def editable_install_target(wrapper_root: Path, include_dev: bool) -> str:
-    extras = "history,sql,dev" if include_dev else "history,sql"
+    extras = "history,sql,report,dev" if include_dev else "history,sql,report"
     return f"{wrapper_root.resolve()}[{extras}]"
 
 

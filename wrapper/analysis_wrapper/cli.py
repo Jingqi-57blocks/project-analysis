@@ -178,6 +178,13 @@ def parser() -> argparse.ArgumentParser:
              "+ discovery-report.json + callgraph/); import maps under imports/ "
              "are consumed when present")
     sysmodel.add_argument("--run", required=True, help="completed run directory")
+    htmlrep = sub.add_parser(
+        "html-report",
+        help="render a self-contained offline HTML report from a completed run "
+             "dir into <run>/report/ (deterministic; no network, no LLM)")
+    htmlrep.add_argument("--run", required=True, help="completed run directory")
+    htmlrep.add_argument("--out", default="",
+                         help="output dir (default: <run>/report)")
     mark = sub.add_parser("mark-stage", help="record a stage checkpoint as done")
     mark.add_argument("--run", required=True, help="run directory")
     mark.add_argument("--stage", required=True)
@@ -369,6 +376,21 @@ def _system_model(args: argparse.Namespace) -> int:
     return 0
 
 
+def _html_report(args: argparse.Namespace) -> int:
+    from .report_html.generate import generate
+    run = Path(args.run).expanduser().resolve()
+    result = generate(run, out_dir=(args.out or None))
+    print(f"wrote {result.report_dir}")
+    print(f"pages: {len(result.pages)} · documents: {len(result.documents)} · "
+          f"sections: {result.section_count} · diagrams: {result.diagram_count}")
+    if result.missing_artifacts:
+        print("missing optional artifacts (rendered as unavailable): "
+              + ", ".join(result.missing_artifacts))
+    print("module drill-down: "
+          + ("available" if result.drilldown_available else "stub (Phase 2)"))
+    return 0
+
+
 def _lifecycle_cmd(args: argparse.Namespace) -> int:
     from . import lifecycle
     run_dir = Path(args.run).expanduser().resolve()
@@ -415,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
             return _lifecycle_cmd(args)
         if args.command == "system-model":
             return _system_model(args)
+        if args.command == "html-report":
+            return _html_report(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)

@@ -18,7 +18,16 @@ project-analysis-wrapper = "analysis_wrapper.cli:main"
 [project.optional-dependencies]
 history = ["pydriller==2.10"]
 sql = ["sqlglot==30.12.0"]
+report = ["markdown-it-py==3.0.0"]
 dev = ["pytest", "jsonschema"]
+
+[tool.setuptools.package-data]
+analysis_wrapper = [
+    "report_html/static/*.css",
+    "report_html/static/*.js",
+    "report_html/vendor/*.js",
+    "report_html/vendor/*.txt",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
