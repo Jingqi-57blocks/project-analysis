@@ -57,10 +57,9 @@ first-class confidence.
 
 All skill-local paths in this file are relative to `<skill-dir>`.
 
-**Private fixtures:** `<skill-dir>` may also contain `spike/`, `benchmark/`, and
-`tools/README.md` — private development fixtures about specific projects. NEVER read
-them during a run; they are not skill assets, and using them would contaminate analysis
-of unrelated targets.
+**Private fixtures:** `<skill-dir>` may contain private development or acceptance
+fixtures about specific projects. NEVER read such fixtures during a run; they are not
+skill assets, and using them would contaminate analysis of unrelated targets.
 
 ## Standing scope disclaimer (every report header)
 

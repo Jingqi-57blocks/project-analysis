@@ -1,7 +1,7 @@
 """Redaction + bounded views — the single sanitization implementation.
 
-Ported from the Phase 0 spike (`spike/_sanitize.py`), whose fixture cases are
-this module's floor (57B-10 acceptance). Scope (plan §10, raw-at-rest policy):
+Ported from the Phase 0 toolchain spike (57B-10 acceptance), whose fixture cases
+are this module's floor. Scope (plan §10, raw-at-rest policy):
 everything that persists in git, enters model context, or ships is sanitized
 through here; RAW tool output is protected by containment instead (local-only,
 gitignored, never read by a model, never packaged).

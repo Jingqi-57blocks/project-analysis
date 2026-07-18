@@ -12,11 +12,10 @@ state/*
 output/*
 !output/README.md
 
-# oversized raw tool outputs — only trimmed samples are committed
-spike/results/**/raw/
-
-# 57B-30 call-graph spike: raw edge dumps + installed spike tools (trimmed samples committed)
+# analyzer-owned installed Go tool dir (populated by bootstrap; never committed).
+# node_tools/node_modules is covered by the node_modules/ rule above; its pinned
+# package.json + lockfile stay tracked.
 wrapper/go_tools/
+
+# 57B-30 call-graph spike node tooling (not shipped)
 wrapper/node_tools_spike/
-spike/callgraph/**/edges-*.tsv
-spike/callgraph/**/jelly-callgraph-*.json

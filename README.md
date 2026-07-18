@@ -13,14 +13,12 @@ explicitly disclosed reduced coverage.
 
 ## Status
 
-**Phase 1 build complete through lifecycle.** Phase 0 (toolchain spike) is signed off —
-see `spike/` for evidence and `tools/README.md` for the validated toolchain. The tool
-wrapper (57B-10), discovery (57B-11), the lenses, synthesis, and the run lifecycle are
-built and live-sweep validated. The v3.5 overview restructure is applied: `overview.md`
-is the PM-primary document (nine sections, readable in ~10 minutes),
-`technical-overview.md` is its full-detail companion, and `project-map.md` is the
-reusable topology. The Phase-1 exit run is pending. The skill command is
-`/project-analysis` (see [Skill registration](#skill-registration)).
+**Phase 1 complete.** The static-analysis foundation (call graphs for JS/TS + Go,
+dependency edges, a deterministic `system-model.json`), the tool wrapper, discovery,
+the lenses, synthesis, and the run lifecycle are built and accepted. `tools/README.md`
+documents the validated toolchain (generic). `overview.md` is the PM-primary document,
+`technical-overview.md` its full-detail companion, and `project-map.md` the reusable
+topology. The skill command is `/project-analysis` (see [Skill registration](#skill-registration)).
 
 ## Design
 
@@ -30,24 +28,21 @@ reusable topology. The Phase-1 exit run is pending. The skill command is
 - No schemas, no gates, no checker scripts in v1. The tool wrapper invokes
   allowlisted tools, applies safe flags, redacts, bounds output, and records
   manifests — it never interprets findings or scores reports.
-- Zero target-project literals outside `benchmark/` and `spike/` (fixture areas).
+- Zero target-project literals in tracked files (the analyzer is general-purpose).
 
 ## Privacy & packaging
 
-`spike/` and (future) `benchmark/` contain **private target-project evidence** — real author
-names and emails, internal architecture, dependency versions, and vulnerability details from the
-WCP repositories. They are **local development fixtures only** and must **NEVER** be included when
-the skill is packaged or published.
+Per-target analysis output is never committed: runs write to gitignored `output/` and
+`state/`. The tracked tree is **target-neutral** — `SKILL.md`, the lens definitions, the
+templates, the tool wrapper, and the generic `tools/README.md`.
 
-**`tools/README.md` is ALSO private-until-scrubbed**, not a ship candidate: it embeds
-WCP-derived evidence throughout (repo names, vuln/outdated counts, architecture, file names). A
-**sanitized public toolchain doc is a Phase 3 release deliverable**, derived from it. The only
-**ship-candidate** artifacts are the generic, evidence-free ones: `SKILL.md`, the lens
-definitions, the templates, and the tool wrapper. Everything under `spike/`, `benchmark/`, and
-`tools/README.md` stays in this repository until deliberately scrubbed for release. The repo is
-hosted on a **private remote at the owner's direction** (added 2026-07-16); because the tracked
-tree contains WCP-derived evidence, this repository must **never be made public as-is** —
-publishing happens only via the scrubbed Phase-3 release artifacts.
+Per-target **acceptance evidence** (spike bake-offs, benchmark checklists, and validation
+runs against real repositories — which contain real author names, internal architecture,
+and vulnerability details) is kept in a **private acceptance store outside this repository**,
+reachable for our own reproducibility but never shipped. Git history is likewise clean of
+that evidence: it was removed with `git filter-repo`. (Commit messages and tags may still
+reference a target project by name — that was an explicit scope choice; the requirement is
+that no target's evidence *content* is tracked or retrievable from history.)
 
 ## Skill registration
 
