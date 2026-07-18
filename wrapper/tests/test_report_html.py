@@ -319,3 +319,35 @@ def test_report_dir_may_not_be_run_dir(tmp_path):
     run = make_run(tmp_path)
     with pytest.raises(ValueError):
         generate(run, out_dir=run)
+
+
+def test_light_theme_and_no_toggle(tmp_path):
+    run = make_run(tmp_path)
+    result = generate(run)
+    for name in ("index.html", "coverage.html", "doc-overview.html"):
+        html = (result.report_dir / name).read_text(encoding="utf-8")
+        assert 'data-theme="light"' in html
+        assert "theme-toggle" not in html
+
+
+def test_toc_drawer_on_section_pages_including_non_document(tmp_path):
+    run = make_run(tmp_path)
+    result = generate(run)
+    # designed sub-page (not a full-document view) with >= 2 sections
+    coverage = (result.report_dir / "coverage.html").read_text(encoding="utf-8")
+    assert 'class="toc-drawer"' in coverage and 'class="toc-handle"' in coverage
+    # full-document view too
+    doc = (result.report_dir / "doc-overview.html").read_text(encoding="utf-8")
+    assert 'class="toc-drawer"' in doc
+    # findings (section-aware narrative page) too
+    findings = (result.report_dir / "findings.html").read_text(encoding="utf-8")
+    assert 'class="toc-drawer"' in findings
+
+
+def test_toc_drawer_needs_two_sections(tmp_path):
+    from analysis_wrapper.report_html import pages, run_inputs
+    inputs = run_inputs.load(make_run(tmp_path))
+    one = pages.shell(inputs, "x", "T", "s", "<p>b</p>", [("a", "A")])
+    assert "toc-drawer" not in one
+    two = pages.shell(inputs, "x", "T", "s", "<p>b</p>", [("a", "A"), ("b", "B")])
+    assert "toc-drawer" in two and "toc-panel" in two

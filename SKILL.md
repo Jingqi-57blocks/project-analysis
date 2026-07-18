@@ -231,6 +231,14 @@ anchored):
    material — it never creates new uncited claims.
 7. **Offer acceptance** (sets the `current` pointer on the user's yes). Skip the offer
    for inspection-only runs.
+8. **Export the HTML report (default).** After the markdown reports are written, run
+   `project-analysis-wrapper export --run <run-dir> --skill-root <skill-root>` (format
+   defaults to `html`) to render the offline, self-contained HTML report into
+   `<skill-root>/exported/{project}-analysis/html/` (gitignored, regenerable). This is
+   the default. Skip it only when the user opted out with `--no-export` / `--export none`
+   — the markdown reports are always produced regardless. The export is deterministic,
+   fully offline (no network, no LLM), and adds no analysis passes; `export --format`
+   with no value lists the available formats.
 
 Target wall-clock is 10–15 minutes; quality is the gate, not the clock.
 

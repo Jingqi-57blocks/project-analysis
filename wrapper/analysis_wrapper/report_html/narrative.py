@@ -13,7 +13,7 @@ content-map destinations they create.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .content_map import Destination
 from .htmlutil import attr, esc, slugify
@@ -26,6 +26,14 @@ class NarrativeBlock:
     html: str
     # (source_doc_id, source_anchor, Destination) for the content map.
     destinations: list[tuple[str, str, Destination]]
+    # (anchor, title) entries for this page's TOC drawer.
+    toc: list[tuple[str, str]] = field(default_factory=list)
+
+
+_MODULE_LABELS = {
+    "en": {"drilldown": "Module drill-down", "map": "System module map"},
+    "zh-CN": {"drilldown": "模块下钻", "map": "系统模块图"},
+}
 
 
 def document_outline(rendered: MarkdownDoc, full_page: str, *, max_level: int = 3) -> str:
@@ -56,6 +64,7 @@ def narrative_cards(
     """
     cards = []
     destinations: list[tuple[str, str, Destination]] = []
+    toc: list[tuple[str, str]] = []
     for sec in rendered.sections:
         if sec.level != card_level:
             continue
@@ -70,11 +79,12 @@ def narrative_cards(
         destinations.append(
             (rendered.doc_id, sec.anchor, Destination(this_page, sec.anchor, "markdown-section"))
         )
+        toc.append((sec.anchor, sec.text))
     if not cards:
         return NarrativeBlock('<p class="muted">No narrative sections.</p>', [])
 
     search = (
-        '<div class="filter-bar"><input type="search" name="narrative-filter" '
+        '<div class="filter-bar"><input type="text" name="narrative-filter" '
         'class="filter-input" data-filter-target="narrative-cards" '
         'placeholder="filter sections…" aria-label="filter sections"></div>'
     )
@@ -89,7 +99,7 @@ def narrative_cards(
         grouping_note + search
         + f'<div class="cards" id="narrative-cards">{"".join(cards)}</div>'
     )
-    return NarrativeBlock(html, destinations)
+    return NarrativeBlock(html, destinations, toc)
 
 
 def module_entrance(
@@ -105,11 +115,11 @@ def module_entrance(
     state. The system-level module map (authored narrative in the Project Map) is
     always linked so the entrance is useful even in the stub state.
     """
+    labels = _MODULE_LABELS.get(inputs.language, _MODULE_LABELS["en"])
     modules = inputs.drilldown_modules
-    parts: list[str] = []
 
     if not modules:
-        parts.append(
+        drill = (
             '<div class="note note-stub"><p><strong>Module drill-down is not yet '
             "available for this run.</strong> Per-module PM PRDs and developer "
             "health reports are Phase 2 artifacts. This entrance lights up "
@@ -128,7 +138,7 @@ def module_entrance(
                 f"<tr><td>{esc(m.module_id)}</td>"
                 f'<td>{" · ".join(links) or "—"}</td></tr>'
             )
-        parts.append(
+        drill = (
             '<div class="note note-live"><p><strong>Module drill-down available.'
             "</strong> PM-facing PRDs and developer-facing health reports render "
             "as lossless documents below.</p></div>"
@@ -138,11 +148,24 @@ def module_entrance(
         )
 
     if project_map and project_map_page:
-        parts.append(
+        map_html = (
             '<p class="muted">The system-level module map (authored narrative) '
             f'lives in the <a href="{attr(project_map_page)}">Project Map</a>.</p>'
         )
-    return NarrativeBlock("".join(parts), [])
+    else:
+        map_html = '<p class="muted">No project map document present in this run.</p>'
+
+    html = (
+        f'<section class="section" id="module-drilldown">'
+        f'<h2 class="doc-h">{esc(labels["drilldown"])}</h2>{drill}</section>'
+        f'<section class="section" id="module-map">'
+        f'<h2 class="doc-h">{esc(labels["map"])}</h2>{map_html}</section>'
+    )
+    toc = [
+        ("module-drilldown", labels["drilldown"]),
+        ("module-map", labels["map"]),
+    ]
+    return NarrativeBlock(html, [], toc)
 
 
 def drilldown_page_id(module: DrilldownModule, kind: str) -> str:

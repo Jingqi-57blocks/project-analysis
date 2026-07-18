@@ -105,16 +105,44 @@ def _nav(active: str, inputs: RunInputs) -> str:
         f'<p class="project-id">{esc(c["subtitle"])}</p>'
         f'<div class="nav-group">{"".join(links)}</div>'
         f"{full_docs_group}"
-        f'<button type="button" class="theme-toggle">{esc(c["theme"])}</button>'
         "</nav>"
     )
 
 
-def shell(inputs: RunInputs, active: str, title: str, subtitle: str, body: str) -> str:
-    """Wrap a page body in the shared shell (nav + head + scripts)."""
+def _toc_drawer(toc: list[tuple[str, str]] | None, language: str) -> str:
+    """Right-edge floating table-of-contents drawer for the current page.
+
+    Rendered only when the page has at least two anchored sections. The drawer
+    docks open by default and slides off to a small half-visible round handle
+    when closed (behaviour + animation live in report.css / report.js).
+    """
+    if not toc or len(toc) < 2:
+        return ""
+    c = chrome(language)
+    items = "".join(f'<li><a href="#{attr(a)}">{esc(t)}</a></li>' for a, t in toc)
+    label = attr(c["on_this_page"])
+    return (
+        f'<aside class="toc-drawer" aria-label="{label}">'
+        f'<button type="button" class="toc-handle" aria-expanded="true" '
+        f'aria-controls="toc-panel" aria-label="{label}">&#9776;</button>'
+        f'<nav class="toc-panel" id="toc-panel">'
+        f'<p class="toc-title">{esc(c["on_this_page"])}</p>'
+        f'<ul class="toc-list">{items}</ul></nav></aside>'
+    )
+
+
+def shell(
+    inputs: RunInputs, active: str, title: str, subtitle: str, body: str,
+    toc: list[tuple[str, str]] | None = None,
+) -> str:
+    """Wrap a page body in the shared shell (nav + head + TOC drawer + scripts).
+
+    The theme is fixed to light for now (dark variables remain in the stylesheet
+    but are not exposed via a toggle).
+    """
     return (
         "<!doctype html>\n"
-        f'<html lang="{attr(inputs.language)}">\n<head>\n'
+        f'<html lang="{attr(inputs.language)}" data-theme="light">\n<head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{esc(title)} · {esc(inputs.project_id)}</title>\n"
@@ -126,6 +154,7 @@ def shell(inputs: RunInputs, active: str, title: str, subtitle: str, body: str) 
         '<header class="page-head">'
         f"<h1>{esc(title)}</h1>"
         f'<p class="subtitle">{esc(subtitle)}</p></header>\n'
+        f"{_toc_drawer(toc, inputs.language)}\n"
         f"{body}\n"
         "</main>\n</div>\n"
         f'<script src="{attr(MERMAID_SCRIPT)}"></script>\n'
@@ -143,25 +172,9 @@ def section(anchor: str, title: str, html: str) -> str:
 
 
 def full_document_page(inputs: RunInputs, doc: DocSource, rendered: MarkdownDoc) -> Page:
-    """A lossless full-document view with an in-page table of contents."""
-    c = chrome(inputs.language)
-    toc_items = []
-    for sec in rendered.sections:
-        if sec.level > 3:
-            continue
-        cls = f"outline-item outline-l{sec.level}"
-        toc_items.append(
-            f'<li class="{cls}"><a href="#{attr(sec.anchor)}">{esc(sec.text)}</a></li>'
-        )
-    toc = (
-        f'<nav class="doc-toc" aria-label="table of contents">'
-        f'<button class="doc-toc-toggle" aria-expanded="true" aria-controls="doc-toc-panel">'
-        f'{esc(c["on_this_page"])}</button>'
-        f'<div class="doc-toc-panel" id="doc-toc-panel">'
-        f'<ul class="outline">{"".join(toc_items)}</ul></div></nav>'
-        if toc_items else ""
-    )
-    body = toc + f'<article class="doc-body">{rendered.html}</article>'
+    """A lossless full-document view; its headings feed the shell TOC drawer."""
+    toc = [(sec.anchor, sec.text) for sec in rendered.sections if sec.level <= 3]
+    body = f'<article class="doc-body">{rendered.html}</article>'
     filename = doc_page(doc.doc_id)
-    html = shell(inputs, f"doc-{doc.doc_id}", doc.title, doc.filename, body)
+    html = shell(inputs, f"doc-{doc.doc_id}", doc.title, doc.filename, body, toc)
     return Page(f"doc-{doc.doc_id}", filename, html)

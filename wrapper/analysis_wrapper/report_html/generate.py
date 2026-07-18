@@ -125,8 +125,20 @@ def _leak_check(report_dir: Path, run_dir: Path) -> None:
 
 
 def generate(run_dir: str | Path, out_dir: str | Path | None = None) -> GenerateResult:
+    """Load a completed run directory and render the report into ``out_dir``.
+
+    Thin wrapper over :func:`generate_from_inputs` so the exporter framework can
+    share the same source layer (:class:`RunInputs`).
+    """
     inputs = run_inputs.load(run_dir)
     report_dir = Path(out_dir) if out_dir else inputs.run_dir / "report"
+    return generate_from_inputs(inputs, report_dir)
+
+
+def generate_from_inputs(
+    inputs: run_inputs.RunInputs, report_dir: str | Path
+) -> GenerateResult:
+    report_dir = Path(report_dir)
     if report_dir.resolve() == inputs.run_dir.resolve():
         raise ValueError("report output directory must not be the run directory")
 
@@ -157,7 +169,12 @@ def generate(run_dir: str | Path, out_dir: str | Path | None = None) -> Generate
     structured_registry: list[dict] = []
     extra_dests: dict[tuple[str, str], list] = {}
 
-    def place(comp, page_file: str) -> str:
+    # Each page is a list of (anchor, title, section_html); _compose derives the
+    # body and the TOC-drawer entries from it so the two always agree.
+    def sec(anchor: str, title: str, html: str) -> tuple[str, str, str]:
+        return (anchor, title, pages.section(anchor, title, html))
+
+    def place(comp, page_file: str) -> tuple[str, str, str]:
         structured_registry.append(
             {
                 "component": comp.key,
@@ -167,7 +184,12 @@ def generate(run_dir: str | Path, out_dir: str | Path | None = None) -> Generate
                 "sources": comp.sources,
             }
         )
-        return pages.section(comp.anchor, comp.title, comp.html)
+        return sec(comp.anchor, comp.title, comp.html)
+
+    def compose(items: list[tuple[str, str, str]]) -> tuple[str, list[tuple[str, str]]]:
+        body = "".join(h for _, _, h in items)
+        toc = [(a, t) for a, t, _ in items]
+        return body, toc
 
     # ---- structured components (built once) ----
     snapshot = components.system_snapshot(inputs)
@@ -183,23 +205,23 @@ def generate(run_dir: str | Path, out_dir: str | Path | None = None) -> Generate
     out_pages: list[pages.Page] = []
     P = pages.PAGE_FILES
 
+    ch = pages.chrome(inputs.language)
+
     # ---- main page ----
-    main_body = "".join([
+    main_body, main_toc = compose([
         place(provenance, P["index"]),
         place(snapshot, P["index"]),
-        pages.section("coverage-status", "Coverage status",
-                      _coverage_status_summary(inputs)),
-        pages.section(
-            "diagnosis",
-            "Findings & diagnosis",
+        sec("coverage-status", "Coverage status", _coverage_status_summary(inputs)),
+        sec(
+            "diagnosis", "Findings & diagnosis",
             _diagnosis_outline(inputs, rendered.get(primary_doc.doc_id), primary_doc.doc_id)
             if primary_doc else '<p class="muted">No narrative document present.</p>',
         ),
     ])
     out_pages.append(pages.Page(
         "index", P["index"],
-        pages.shell(inputs, "index", inputs.project_id,
-                    pages.chrome(inputs.language)["subtitle"], main_body),
+        pages.shell(inputs, "index", inputs.project_id, ch["subtitle"],
+                    main_body, main_toc),
     ))
 
     # ---- findings & diagnosis (section-aware narrative) ----
@@ -209,19 +231,18 @@ def generate(run_dir: str | Path, out_dir: str | Path | None = None) -> Generate
         )
         for doc_id, anchor, dest in block.destinations:
             extra_dests.setdefault((doc_id, anchor), []).append(dest)
-        findings_body = block.html
+        findings_body, findings_toc = block.html, block.toc
     else:
-        findings_body = '<p class="muted">No narrative document present.</p>'
+        findings_body, findings_toc = '<p class="muted">No narrative document present.</p>', []
     out_pages.append(pages.Page(
         "findings", P["findings"],
-        pages.shell(inputs, "findings",
-                    pages.chrome(inputs.language)["findings"],
+        pages.shell(inputs, "findings", ch["findings"],
                     primary_doc.filename if primary_doc else "",
-                    findings_body),
+                    findings_body, findings_toc),
     ))
 
     # ---- evidence & coverage ----
-    coverage_body = "".join([
+    coverage_body, coverage_toc = compose([
         place(coverage, P["coverage"]),
         place(legend, P["coverage"]),
         place(cg_cov, P["coverage"]),
@@ -230,22 +251,25 @@ def generate(run_dir: str | Path, out_dir: str | Path | None = None) -> Generate
     ])
     out_pages.append(pages.Page(
         "coverage", P["coverage"],
-        pages.shell(inputs, "coverage", pages.chrome(inputs.language)["coverage"],
-                    "observed · inferred · unresolved · unavailable", coverage_body),
+        pages.shell(inputs, "coverage", ch["coverage"],
+                    "observed · inferred · unresolved · unavailable",
+                    coverage_body, coverage_toc),
     ))
 
     # ---- system topology ----
     authored = _authored_diagrams_section(doc_entries)
-    topo_body = place(topo, P["topology"])
+    topo_items = [place(topo, P["topology"])]
     if authored:
-        topo_body += pages.section("authored-topology",
-                                   "Authored topology (synthesis narrative)", authored)
-    topo_body += place(externals, P["topology"])
-    topo_body += place(datastores, P["topology"])
+        topo_items.append(sec("authored-topology",
+                              "Authored topology (synthesis narrative)", authored))
+    topo_items.append(place(externals, P["topology"]))
+    topo_items.append(place(datastores, P["topology"]))
+    topo_body, topo_toc = compose(topo_items)
     out_pages.append(pages.Page(
         "topology", P["topology"],
-        pages.shell(inputs, "topology", pages.chrome(inputs.language)["topology"],
-                    "structured edges · authored diagrams · boundaries", topo_body),
+        pages.shell(inputs, "topology", ch["topology"],
+                    "structured edges · authored diagrams · boundaries",
+                    topo_body, topo_toc),
     ))
 
     # ---- modules entrance ----
@@ -257,25 +281,29 @@ def generate(run_dir: str | Path, out_dir: str | Path | None = None) -> Generate
     )
     out_pages.append(pages.Page(
         "modules", P["modules"],
-        pages.shell(inputs, "modules", pages.chrome(inputs.language)["modules"],
-                    "PM PRD + developer health per module", module_block.html),
+        pages.shell(inputs, "modules", ch["modules"],
+                    "PM PRD + developer health per module",
+                    module_block.html, module_block.toc),
     ))
 
     # ---- documents hub ----
-    doc_hub = []
-    for entry in doc_entries:
-        doc_hub.append(pages.section(
+    doc_items = [
+        sec(
             f"doc-{entry.doc_id}-outline",
             entry.rendered.sections[0].text if entry.rendered.sections else entry.filename,
             f'<p class="muted">{esc(entry.filename)} · '
             f'<a href="{attr(pages.doc_page(entry.doc_id))}">open full document →</a></p>'
             + narrative.document_outline(entry.rendered, pages.doc_page(entry.doc_id)),
-        ))
-    docs_body = "".join(doc_hub) or '<p class="muted">No canonical documents present.</p>'
+        )
+        for entry in doc_entries
+    ]
+    docs_body, docs_toc = compose(doc_items)
+    if not doc_items:
+        docs_body = '<p class="muted">No canonical documents present.</p>'
     out_pages.append(pages.Page(
         "documents", P["documents"],
-        pages.shell(inputs, "documents", pages.chrome(inputs.language)["documents"],
-                    "lossless full-document views", docs_body),
+        pages.shell(inputs, "documents", ch["documents"],
+                    "lossless full-document views", docs_body, docs_toc),
     ))
 
     # ---- full-document lossless views ----

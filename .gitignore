@@ -12,6 +12,9 @@ state/*
 output/*
 !output/README.md
 
+# generated exports (html report, future formats) — regenerable, never tracked
+exported/
+
 # analyzer-owned installed Go tool dir (populated by bootstrap; never committed).
 # node_tools/node_modules is covered by the node_modules/ rule above; its pinned
 # package.json + lockfile stay tracked.

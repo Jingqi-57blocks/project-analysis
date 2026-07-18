@@ -80,10 +80,6 @@ code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; font
 .nav a.nav-link:hover { background: var(--surface-2); text-decoration: none; }
 .nav a.nav-link.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
 .main { flex: 1 1 auto; min-width: 0; padding: 32px 40px 80px; max-width: 1100px; }
-.theme-toggle {
-  margin-top: 18px; background: var(--surface-2); border: 1px solid var(--border);
-  color: var(--text); border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 13px;
-}
 
 /* ---- headings / prose ---- */
 .main > header.page-head { margin-bottom: 8px; }
@@ -155,51 +151,60 @@ blockquote { margin: 12px 0; padding: 4px 16px; border-left: 3px solid var(--bor
 details { margin: 6px 0; }
 summary { cursor: pointer; color: var(--accent); }
 
-/* ---- doc TOC (full-document pages) ---- */
-.doc-toc { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 20px; }
-.doc-toc h2 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margin: 0 0 8px; }
+/* ---- floating table-of-contents drawer (right edge, all section pages) ----
+   Open by default; closed slides off to a small half-visible round handle.
+   Hovering the handle peeks the panel; clicking toggles it (report.js). */
+.toc-drawer {
+  position: fixed; right: 0; top: 50%;
+  display: flex; align-items: center; z-index: 60;
+  transform: translate(0, -50%);
+  transition: transform .25s ease;
+  pointer-events: none;                 /* only the handle/panel are clickable */
+}
+.toc-drawer > * { pointer-events: auto; }
+.toc-drawer.toc-closed { transform: translate(270px, -50%); }   /* 250 panel + 20 half-handle */
+.toc-drawer.toc-closed:hover { transform: translate(0, -50%); } /* hover peek */
+
+.toc-handle {
+  flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--accent); font-size: 17px; line-height: 1; cursor: pointer;
+  box-shadow: var(--shadow); z-index: 2; margin-right: -1px;
+}
+.toc-panel {
+  width: 250px; max-height: 72vh; overflow-y: auto;
+  background: var(--surface); border: none; padding: 6px 10px;
+  border-radius: var(--radius) 0 0 var(--radius); box-shadow: var(--shadow);
+}
+.toc-title { margin: 2px 4px 6px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--text-muted); }
+.toc-list { list-style: none; margin: 0; padding: 0; }
+.toc-list li { padding: 2px 0; }
+.toc-list a { display: block; padding: 3px 6px; border-radius: 5px; font-size: 13px;
+  color: var(--text); }
+.toc-list a:hover { background: var(--surface-2); text-decoration: none; }
 
 /* ---- responsive ---- */
+@media (max-width: 1100px) {
+  /* Static fallback: the drawer drops into the content flow, no overlay. */
+  .toc-drawer { position: static; transform: none !important; display: block;
+    pointer-events: auto; margin: 0 0 20px; }
+  .toc-handle { display: none; }
+  .toc-panel { width: auto; max-height: none; box-shadow: none;
+    border: 1px solid var(--border); border-radius: var(--radius); }
+}
 @media (max-width: 860px) {
   .layout { flex-direction: column; }
   .nav { width: 100%; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--border); }
-  .nav { height: auto; }
   .main { padding: 24px 18px 64px; }
 }
 
 /* ---- print ---- */
 @media print {
-  .nav, .diagram-tools, .filter-bar, .theme-toggle { display: none !important; }
+  .nav, .diagram-tools, .filter-bar, .toc-drawer { display: none !important; }
   .layout { display: block; }
   .main { max-width: none; padding: 0; }
   .card, .tile, .table-scroll, .diagram { box-shadow: none; break-inside: avoid; }
   a { color: inherit; text-decoration: underline; }
   body { background: #fff; color: #000; }
-}
-
-/* ---- floating, collapsible in-page table of contents ---- */
-.doc-toc {
-  position: fixed; right: 16px; top: 50%; transform: translateY(-50%);
-  z-index: 40; width: 240px; max-width: 42vw;
-}
-.doc-toc-toggle {
-  display: block; width: 100%; text-align: left; cursor: pointer;
-  background: var(--surface-2); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0;
-  padding: 8px 12px; font-weight: 600; font-size: 0.9rem;
-}
-.doc-toc-toggle::after { content: "▾"; float: right; opacity: 0.7; }
-.doc-toc.collapsed .doc-toc-toggle { border-radius: var(--radius); }
-.doc-toc.collapsed .doc-toc-toggle::after { content: "▸"; }
-.doc-toc-panel {
-  max-height: 66vh; overflow-y: auto; background: var(--surface);
-  border: 1px solid var(--border); border-top: none;
-  border-radius: 0 0 var(--radius) var(--radius); box-shadow: var(--shadow);
-  padding: 8px 12px;
-}
-.doc-toc.collapsed .doc-toc-panel { display: none; }
-.doc-toc .outline { margin: 0; }
-@media print { .doc-toc { display: none; } }
-@media (max-width: 1100px) {
-  .doc-toc { position: static; transform: none; width: auto; max-width: none; margin: 0 0 16px; }
 }

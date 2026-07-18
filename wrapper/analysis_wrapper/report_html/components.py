@@ -65,7 +65,7 @@ def _searchable_table(
     """A table with a live client-side row filter (offline, no dependencies)."""
     table = _table(headers, rows)
     return (
-        f'<div class="filter-bar"><input type="search" name="{attr(table_id)}-filter" '
+        f'<div class="filter-bar"><input type="text" name="{attr(table_id)}-filter" '
         f'class="filter-input" data-filter-target="{attr(table_id)}" '
         f'placeholder="{attr(placeholder)}" aria-label="{attr(placeholder)}"></div>'
         f'<div id="{attr(table_id)}">{table}</div>'

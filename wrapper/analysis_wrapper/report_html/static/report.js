@@ -1,28 +1,8 @@
 /* Project Analysis offline report — presentation glue only.
    No network, no dependencies beyond the vendored mermaid runtime.
-   Everything degrades gracefully if mermaid or localStorage is unavailable. */
+   Everything degrades gracefully if mermaid is unavailable. Theme is light. */
 (function () {
   "use strict";
-
-  /* ---- theme ---- */
-  var root = document.documentElement;
-  function storedTheme() {
-    try { return localStorage.getItem("pa-report-theme"); } catch (e) { return null; }
-  }
-  function systemTheme() {
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark" : "light";
-  }
-  function currentTheme() {
-    return root.getAttribute("data-theme") || storedTheme() || systemTheme();
-  }
-  function applyTheme(theme) {
-    root.setAttribute("data-theme", theme);
-    try { localStorage.setItem("pa-report-theme", theme); } catch (e) {}
-    renderDiagrams(theme);
-  }
-  var initial = storedTheme();
-  if (initial) { root.setAttribute("data-theme", initial); }
 
   /* ---- mermaid ---- */
   var sources = [];
@@ -33,7 +13,7 @@
       nodes[i].setAttribute("data-mermaid-index", String(i));
     }
   }
-  function renderDiagrams(theme) {
+  function renderDiagrams() {
     if (typeof window.mermaid === "undefined") { return; }
     var nodes = document.querySelectorAll("pre.mermaid");
     for (var i = 0; i < nodes.length; i++) {
@@ -47,7 +27,7 @@
       window.mermaid.initialize({
         startOnLoad: false,
         securityLevel: "antiscript",
-        theme: theme === "dark" ? "dark" : "default"
+        theme: "default"
       });
       window.mermaid.run({ querySelector: "pre.mermaid" });
     } catch (e) { /* leave the source visible on failure */ }
@@ -90,12 +70,14 @@
     });
   }
 
-  /* ---- floating TOC toggle ---- */
-  function bindTocToggle() {
-    document.querySelectorAll(".doc-toc-toggle").forEach(function (btn) {
+  /* ---- floating TOC drawer: click the handle to open/close (hover peeks via CSS) ---- */
+  function bindTocDrawer() {
+    document.querySelectorAll(".toc-drawer .toc-handle").forEach(function (btn) {
+      var drawer = btn.closest(".toc-drawer");
+      if (!drawer) { return; }
       btn.addEventListener("click", function () {
-        var collapsed = btn.parentNode.classList.toggle("collapsed");
-        btn.setAttribute("aria-expanded", String(!collapsed));
+        var closed = drawer.classList.toggle("toc-closed");
+        btn.setAttribute("aria-expanded", String(!closed));
       });
     });
   }
@@ -103,16 +85,10 @@
   /* ---- init ---- */
   function init() {
     collectSources();
-    renderDiagrams(currentTheme());
+    renderDiagrams();
     bindZoom();
     bindFilters();
-    bindTocToggle();
-    var toggle = document.querySelector(".theme-toggle");
-    if (toggle) {
-      toggle.addEventListener("click", function () {
-        applyTheme(currentTheme() === "dark" ? "light" : "dark");
-      });
-    }
+    bindTocDrawer();
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
