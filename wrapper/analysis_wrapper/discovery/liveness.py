@@ -7,6 +7,12 @@ still real". This module RECORDS and MATCHES with disclosed heuristics; it
 never concludes "dead". A route with no caller found in the ANALYZED repos is
 `no-caller-found` (candidate unused) — mobile apps, external API consumers,
 and ops scripts are invisible to repository evidence (standing disclaimer).
+
+A path-shape match alone does NOT credit a backend: each `${base}/path` call's
+base identifier is resolved to the backend it actually targets (``base_map``,
+evidence-based), and a route is `ui-called` only when a caller whose resolved
+base maps to THAT backend hits it — so a route shared by two parallel backends
+is not falsely credited to the one the caller does not bind (57B-15).
 """
 
 from __future__ import annotations
@@ -16,16 +22,30 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from .. import astgrep
+from .base_map import resolve_base_backends
 
 _SKIP_DIRS = {"node_modules", "vendor", ".git", "dist", "build", "coverage"}
 _MAX_FILES = 6000
 _MAX_BYTES = 262_144
 _SOURCE_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go"}
 
-# Frontend HTTP call sites: `${base}/path...` or `base + '/path'` inside a
-# template literal — capture the base identifier and the literal path head.
+# Frontend HTTP call sites: `${base}/path...` — capture whether the base was
+# written `config.X` (explicit global base) vs a bare `X` (which may be a LOCAL
+# alias of a config base, resolved per-file below), plus the literal path head.
 _UI_CALL = re.compile(
-    r"\$\{\s*(?:config\.)?(\w+)\s*\}(/[A-Za-z0-9_\-./:${}]*)")
+    r"\$\{\s*(config\.)?(\w+)\s*\}(/[A-Za-z0-9_\-./:${}]*)")
+# Per-file rebindings of a config base to a local name — a `${localName}/path`
+# call binds to the REAL underlying config base, not to a global identifier that
+# shares the local name (57B-15: `const x = config.someBase` and `const {
+# someBase: x } = config` both make a bare `${x}` resolve to `someBase`). Only
+# right-hand sides that are the imported `config` object are captured; the config
+# identifier and base names are discovered from the frontend, never allowlisted.
+_ALIAS_ASSIGN = re.compile(r"(?:const|let|var)\s+(\w+)\s*=\s*config\.(\w+)")
+_ALIAS_ASSIGN_TMPL = re.compile(
+    r"(?:const|let|var)\s+(\w+)\s*=\s*`\$\{\s*config\.(\w+)")
+_ALIAS_DESTRUCTURE = re.compile(
+    r"(?:const|let|var)\s*\{([^{}]*)\}\s*=\s*config\b(?!\s*\.)", re.DOTALL)
+_DESTR_ITEM = re.compile(r"(\w+)\s*(?::\s*(\w+))?")
 # Server route registrations (Express/Koa + gin/echo/chi/mux).
 _JS_ROUTE = re.compile(
     r"(?:router|app)\s*\.\s*(get|post|put|patch|delete|use)\s*\(\s*['\"]([/][^'\"]*)['\"]")
@@ -158,6 +178,26 @@ def _matches(route: list[str], call: list[str]) -> bool:
     return concrete_agree
 
 
+def _config_aliases(text: str) -> dict[str, str]:
+    """Local name -> underlying config base, for this file only. Covers simple
+    assignment (`const x = config.base`), a template rebind (`const x =
+    `${config.base}/v2``), and object destructuring with or without rename
+    (`const { base, other: x } = config`; unrenamed maps a name to itself)."""
+    aliases: dict[str, str] = {}
+    for m in _ALIAS_ASSIGN.finditer(text):
+        aliases[m.group(1)] = m.group(2)
+    for m in _ALIAS_ASSIGN_TMPL.finditer(text):
+        aliases[m.group(1)] = m.group(2)
+    for m in _ALIAS_DESTRUCTURE.finditer(text):
+        for item in m.group(1).split(","):
+            got = _DESTR_ITEM.match(item.strip())
+            if not got:
+                continue
+            key, renamed = got.group(1), got.group(2)
+            aliases[renamed or key] = key
+    return aliases
+
+
 def ui_call_sites(repo_path: str | Path, stats: dict | None = None) -> list[CallHit]:
     root = Path(repo_path).expanduser().resolve()
     hits: list[CallHit] = []
@@ -166,10 +206,14 @@ def ui_call_sites(repo_path: str | Path, stats: dict | None = None) -> list[Call
         if "${" not in text:
             continue
         rel = path.relative_to(root).as_posix()
+        aliases = _config_aliases(text)
         for m in _UI_CALL.finditer(text):
-            base, raw = m.group(1), m.group(2)
+            cfg_prefix, name, raw = m.group(1), m.group(2), m.group(3)
             if len(_norm_segments(raw)) == 0:
                 continue
+            # An explicit `config.X` is always the global base X. A bare `${X}`
+            # binds to a per-file alias when one exists, else stands as written.
+            base = name if cfg_prefix else aliases.get(name, name)
             hits.append(CallHit(base=base, path=raw,
                                 evidence=f"{rel}:{_line_of(text, m.start())}"))
     return hits
@@ -238,6 +282,17 @@ def _route_registrations_regex(repo_path: str | Path, tier2: set[str],
     return hits
 
 
+def _paths_by_base(calls: list[CallHit]) -> dict:
+    """{base: set of normalized concrete-bearing call-path tuples} — the per-base
+    call inventory the association is computed from (all-wildcard paths dropped)."""
+    by_base: dict[str, set] = {}
+    for c in calls:
+        segs = _norm_segments(c.path)
+        if any(s != "*" for s in segs):
+            by_base.setdefault(c.base, set()).add(tuple(segs))
+    return by_base
+
+
 def liveness(frontend_repo, backends: list[tuple],
              internal_callers: dict | None = None) -> LivenessReport:
     """frontend_repo: path (or None). backends: list of (repo_id, path,
@@ -252,8 +307,11 @@ def liveness(frontend_repo, backends: list[tuple],
         "match` is NOT an orphan/dead list — many such routes are live under a "
         "mount prefix this pass does not resolve. `match-ambiguous` = route "
         "normalized to all-wildcard (e.g. leaf `/:id`), unmatchable without the "
-        "prefix. Nothing here is ever labeled 'dead': mobile/external/ops "
-        "callers are invisible to repository evidence (standing disclaimer).",
+        "prefix. `base-unresolved` = a frontend call matches the route's path "
+        "shape, but the caller's resolved base binds to a DIFFERENT backend or "
+        "to none, so this backend is not credited (path shape alone never "
+        "implies a caller). Nothing here is ever labeled 'dead': mobile/external/"
+        "ops callers are invisible to repository evidence (standing disclaimer).",
         "match heuristic: version-prefix-tolerant, param wildcards, route is a "
         "prefix of the call, at least one concrete segment must agree.",
     ])
@@ -272,10 +330,31 @@ def liveness(frontend_repo, backends: list[tuple],
     norm_calls = [(_norm_segments(c.path), c) for c in calls]
     internal_callers = internal_callers or {}
 
+    # Pass 1: extract each backend's routes once and collect its concrete-bearing
+    # segments, so base->backend association sees the full route inventory before
+    # any route is classified.
+    backend_hits: dict[str, list] = {}
+    backend_routes: list[tuple] = []
+    for repo_id, path, tier2 in backends:
+        routes = route_registrations(path, tier2, scan_stats)
+        backend_hits[repo_id] = routes
+        concrete = []
+        for r in routes:
+            rsegs = _norm_segments(r.path)
+            if any(s != "*" for s in rsegs):
+                concrete.append(rsegs)
+        backend_routes.append((repo_id, concrete))
+    base_backend, base_notes = resolve_base_backends(
+        _paths_by_base(calls), backend_routes, _matches)
+    if backends and frontend_repo:
+        report.notes.extend(base_notes)
+
+    # Pass 2: classify, crediting `ui-called` only to the backend the matching
+    # caller's resolved base actually maps to.
     for repo_id, path, tier2 in backends:
         internal = internal_callers.get(repo_id, [])
         norm_internal = [(_norm_segments(c.path), c) for c in internal]
-        for route in route_registrations(path, tier2, scan_stats):
+        for route in backend_hits[repo_id]:
             rsegs = _norm_segments(route.path)
             # A route with no concrete segment (e.g. leaf `/:id` shorn of its
             # router mount prefix) cannot be matched reliably — report it as
@@ -285,17 +364,25 @@ def liveness(frontend_repo, backends: list[tuple],
                     repo_id, route.method, route.path, route.evidence,
                     "match-ambiguous", []))
                 continue
-            ui_hits = [c.evidence for segs, c in norm_calls if _matches(rsegs, segs)]
-            if ui_hits:
+            matching = [c for segs, c in norm_calls if _matches(rsegs, segs)]
+            here = sorted(c.evidence for c in matching
+                          if base_backend.get(c.base) == repo_id)
+            if here:
                 report.rows.append(LivenessRow(
                     repo_id, route.method, route.path, route.evidence,
-                    "ui-called", ui_hits[:3]))
+                    "ui-called", here[:3]))
                 continue
             int_hits = [c.evidence for segs, c in norm_internal if _matches(rsegs, segs)]
             if int_hits:
                 report.rows.append(LivenessRow(
                     repo_id, route.method, route.path, route.evidence,
                     "internal-called", int_hits[:3]))
+                continue
+            # Path shape matches, but the caller's base binds elsewhere/nowhere.
+            if matching:
+                report.rows.append(LivenessRow(
+                    repo_id, route.method, route.path, route.evidence,
+                    "base-unresolved", []))
                 continue
             report.rows.append(LivenessRow(
                 repo_id, route.method, route.path, route.evidence,
