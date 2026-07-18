@@ -153,7 +153,7 @@ def generate(repo_path: str | Path, repo_id: str, *,
                       for value in sorted(host_evidence)]
 
     # 2) integration packages: distinctively-named dirs with HTTP call sites,
-    # merged across dirs that share a leaf name (handlers/beisen + tasks/beisen).
+    # merged across dirs that share a leaf name (e.g. handlers/<vendor> + tasks/<vendor>).
     by_leaf: dict[str, dict] = {}
     for match in call_matches:
         if _excluded(match.file, tier2):
