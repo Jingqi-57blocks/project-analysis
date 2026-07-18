@@ -123,7 +123,7 @@ def _toc_drawer(toc: list[tuple[str, str]] | None, language: str) -> str:
     label = attr(c["on_this_page"])
     return (
         f'<aside class="toc-drawer" aria-label="{label}">'
-        f'<button type="button" class="toc-handle" aria-expanded="true" '
+        f'<button type="button" class="toc-handle" aria-expanded="false" '
         f'aria-controls="toc-panel" aria-label="{label}">&#9776;</button>'
         f'<nav class="toc-panel" id="toc-panel">'
         f'<p class="toc-title">{esc(c["on_this_page"])}</p>'

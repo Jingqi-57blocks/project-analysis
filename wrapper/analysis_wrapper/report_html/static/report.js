@@ -70,14 +70,27 @@
     });
   }
 
-  /* ---- floating TOC drawer: click the handle to open/close (hover peeks via CSS) ---- */
+  /* ---- floating TOC drawer ----
+     Default closed = only the menu button. Mouse opens on hover (CSS); for
+     touch/keyboard, clicking the button pins it open (.toc-open) and a tap
+     outside closes it. Open = only the TOC, button hidden. */
   function bindTocDrawer() {
     document.querySelectorAll(".toc-drawer .toc-handle").forEach(function (btn) {
       var drawer = btn.closest(".toc-drawer");
       if (!drawer) { return; }
-      btn.addEventListener("click", function () {
-        var closed = drawer.classList.toggle("toc-closed");
-        btn.setAttribute("aria-expanded", String(!closed));
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var open = drawer.classList.toggle("toc-open");
+        btn.setAttribute("aria-expanded", String(open));
+      });
+    });
+    document.addEventListener("click", function (e) {
+      document.querySelectorAll(".toc-drawer.toc-open").forEach(function (d) {
+        if (!d.contains(e.target)) {
+          d.classList.remove("toc-open");
+          var h = d.querySelector(".toc-handle");
+          if (h) { h.setAttribute("aria-expanded", "false"); }
+        }
       });
     });
   }

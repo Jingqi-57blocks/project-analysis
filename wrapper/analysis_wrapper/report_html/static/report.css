@@ -152,29 +152,40 @@ details { margin: 6px 0; }
 summary { cursor: pointer; color: var(--accent); }
 
 /* ---- floating table-of-contents drawer (right edge, all section pages) ----
-   Open by default; closed slides off to a small half-visible round handle.
-   Hovering the handle peeks the panel; clicking toggles it (report.js). */
+   Closed by default: only the round menu button shows. Hovering opens the TOC
+   and hides the button (open = only the TOC); leaving closes it. Touch: click to
+   pin open, tap outside to close (report.js). */
 .toc-drawer {
-  position: fixed; right: 0; top: 50%;
-  display: flex; align-items: center; z-index: 60;
-  transform: translate(0, -50%);
-  transition: transform .25s ease;
-  pointer-events: none;                 /* only the handle/panel are clickable */
+  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+  z-index: 60; pointer-events: none;    /* only the handle/panel are interactive */
 }
 .toc-drawer > * { pointer-events: auto; }
-.toc-drawer.toc-closed { transform: translate(270px, -50%); }   /* 250 panel + 20 half-handle */
-.toc-drawer.toc-closed:hover { transform: translate(0, -50%); } /* hover peek */
 
+/* CLOSED (default): only the round menu button is shown. */
 .toc-handle {
-  flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%;
+  width: 40px; height: 40px; border-radius: 50% 0 0 50%;
   border: 1px solid var(--border); background: var(--surface);
   color: var(--accent); font-size: 17px; line-height: 1; cursor: pointer;
-  box-shadow: var(--shadow); z-index: 2; margin-right: -1px;
+  box-shadow: var(--shadow); transition: opacity .18s ease;
 }
+/* the panel is hidden (slid off + faded) until the drawer opens. */
 .toc-panel {
+  position: absolute; right: 0; top: 50%;
   width: 250px; max-height: 72vh; overflow-y: auto;
   background: var(--surface); border: none; padding: 6px 10px;
   border-radius: var(--radius) 0 0 var(--radius); box-shadow: var(--shadow);
+  opacity: 0; pointer-events: none; transform: translate(12px, -50%);
+  transition: opacity .22s ease, transform .22s ease;
+}
+/* OPEN (hover for mouse, .toc-open for touch/keyboard): only the TOC shows;
+   the menu button is hidden. */
+.toc-drawer:hover .toc-panel,
+.toc-drawer.toc-open .toc-panel {
+  opacity: 1; pointer-events: auto; transform: translate(0, -50%);
+}
+.toc-drawer:hover .toc-handle,
+.toc-drawer.toc-open .toc-handle {
+  opacity: 0; pointer-events: none;
 }
 .toc-title { margin: 2px 4px 6px; font-size: 11px; text-transform: uppercase;
   letter-spacing: .06em; color: var(--text-muted); }
