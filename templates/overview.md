@@ -27,6 +27,13 @@ citations live; UI labels are quoted verbatim and module IDs may be parenthesize
 Facts come from code, never invented, never inferred from a name. Run language governs
 the prose AND section headings (default zh-CN); render the disclaimer as a faithful
 zh-CN translation for a zh-CN run.
+Use plain Unicode and normal Markdown punctuation. Do not HTML-entity-encode prose,
+percent-encode local `.md` links, insert invisible characters, or otherwise obfuscate
+text to satisfy a gate. Mermaid uses standard edge tokens; never replace dots or dashes
+with semicolons or encoded punctuation. Valid examples are `A -->|sync API| B` and
+`A -. unresolved .-> B`; local links use literal names such as
+`[technical overview](technical-overview.md)`. Every Mermaid block must parse in the
+final `audit-overview` check.
 -->
 
 *How to read this: **§2 Executive diagnosis** is the complete diagnosis in summary form —

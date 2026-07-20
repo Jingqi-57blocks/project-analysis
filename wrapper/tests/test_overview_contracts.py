@@ -194,6 +194,27 @@ def test_final_audit_rejects_html_entity_obfuscation(tmp_path):
                for row in result["checks"])
 
 
+@pytest.mark.parametrize("bad_text", [
+    "[details](technical-overview%2Emd)",
+    "```mermaid\nflowchart LR\nA -; unresolved ;-> B\n```",
+    "```mermaid\nflowchart LR\nA -->|unterminated B\n```",
+])
+def test_final_audit_rejects_encoded_links_and_malformed_mermaid(tmp_path, bad_text):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    _complete_map(run)
+    sm.dump(sm.assemble(run), run)
+    module_render.write(run)
+    synthesis_input.write(run)
+    (run / "project-map.md").write_text("# Map\n\n" + module_render.render(run), "utf-8")
+    (run / "overview.md").write_text("# Overview\n\n" + bad_text + "\n", "utf-8")
+    (run / "technical-overview.md").write_text(
+        "# Technical\n\n" + coverage_render.render(run), "utf-8")
+    result = overview_audit.audit(run, require_module_map=True, require_reports=True)
+    assert result["status"] == "failed"
+    assert any(row["check"] in {"pm-text-integrity", "mermaid-text-integrity"}
+               and row["status"] == "fail" for row in result["checks"])
+
+
 def test_synthesis_packet_bounds_large_inventories_with_disclosure(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True))
     doc = json.loads((run / "module-candidates.json").read_text())

@@ -32,6 +32,14 @@ context):**
 - **No absolute machine paths anywhere** in any document: refer to the
   workspace by its basename label, repos by name, files by repo-relative
   citations.
+- **Plain Markdown punctuation only.** Do not HTML-entity-encode prose,
+  percent-encode local `.md` links, insert invisible characters, or substitute
+  punctuation to evade a report constraint. Mermaid uses canonical edge tokens
+  (`-->`, `-.->`, `==>`; labeled dotted edges use `-. label .->`) and never
+  semicolon substitutions. Use ordinary local links such as
+  `[technical overview](technical-overview.md)`. Before completion, every
+  Mermaid block must pass `audit-overview`, which parses it with the same
+  vendored Mermaid runtime used by the HTML report.
 - **Run language governs EVERY output of this stage (default `zh-CN`).** All
   interpretive prose (readings, "reading" columns, evolution narrative, notes,
   section intros) is in the run language; only UI labels, code identifiers,

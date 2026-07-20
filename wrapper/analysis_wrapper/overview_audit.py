@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from . import coverage_render, module_map, module_render
@@ -19,9 +21,13 @@ from .targetspec import TargetSpec
 SCHEMA_VERSION = "1.0.0"
 _CITATION = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*)@([0-9a-fA-F]{7,40}):")
 _FENCE = re.compile(r"```.*?```", re.S)
+_MERMAID_FENCE = re.compile(r"```mermaid\s*\n(.*?)```", re.S | re.IGNORECASE)
 _HTML_ENTITY = re.compile(r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);")
+_ENCODED_LOCAL_LINK = re.compile(
+    r"\]\((?!https?://)[^\s)]*%[0-9A-Fa-f]{2}[^)]*\)", re.IGNORECASE)
 _CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _WORD = re.compile(r"\b[A-Za-z0-9][A-Za-z0-9'-]*\b")
+_MERMAID_VALIDATOR = Path(__file__).parent / "report_html" / "validate_mermaid.js"
 
 
 def _load(path: Path) -> dict:
@@ -38,6 +44,42 @@ def _pm_reading_minutes(markdown: str) -> float:
     cjk = len(_CJK.findall(prose))
     latin = len(_WORD.findall(_CJK.sub(" ", prose)))
     return cjk / 500.0 + latin / 250.0
+
+
+def _mermaid_integrity_problems(name: str, markdown: str) -> list[str]:
+    problems: list[str] = []
+    blocks = _MERMAID_FENCE.findall(markdown)
+    for index, body in enumerate(blocks, 1):
+        if "-;" in body or ";->" in body:
+            problems.append(f"{name} mermaid block {index}: invalid edge token")
+        if _HTML_ENTITY.search(body) or re.search(r"%[0-9A-Fa-f]{2}", body):
+            problems.append(f"{name} mermaid block {index}: encoded punctuation")
+    if not blocks:
+        return problems
+
+    node = shutil.which("node")
+    if not node:
+        return problems + [f"{name}: Mermaid parser unavailable (node not found)"]
+    try:
+        proc = subprocess.run(
+            [node, str(_MERMAID_VALIDATOR)],
+            input=json.dumps(blocks), text=True, capture_output=True,
+            timeout=15, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return problems + [f"{name}: Mermaid parser failed: {exc}"]
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "unknown parser error").strip()
+        return problems + [f"{name}: Mermaid parser failed: {detail[:300]}"]
+    try:
+        results = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return problems + [f"{name}: Mermaid parser returned malformed output"]
+    for index, result in enumerate(results, 1):
+        if not result.get("valid", False):
+            detail = str(result.get("error", "parse failed")).replace("\n", " ")
+            problems.append(f"{name} mermaid block {index}: {detail[:300]}")
+    return problems
 
 
 def audit(run_dir: str | Path, *, require_module_map: bool = False,
@@ -246,10 +288,21 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         overview = (run / "overview.md").read_text(
             "utf-8", errors="replace") if (run / "overview.md").is_file() else ""
         entities = sorted(set(_HTML_ENTITY.findall(overview)))
-        check("pm-text-integrity", not entities,
+        encoded_links = _ENCODED_LOCAL_LINK.findall(overview)
+        check("pm-text-integrity", not entities and not encoded_links,
               "PM overview uses plain Unicode/Markdown text"
-              if not entities else
-              "HTML entities are forbidden in PM Markdown: " + ", ".join(entities[:20]))
+              if not entities and not encoded_links else
+              (("HTML entities are forbidden in PM Markdown: "
+                + ", ".join(entities[:20])) if entities else
+               "percent-encoded local Markdown links are forbidden"))
+        mermaid_problems = (
+            _mermaid_integrity_problems("overview.md", overview)
+            + _mermaid_integrity_problems("project-map.md", project_map)
+            + _mermaid_integrity_problems("technical-overview.md", technical)
+        )
+        check("mermaid-text-integrity", not mermaid_problems,
+              "Mermaid blocks use unencoded standard edge punctuation"
+              if not mermaid_problems else "; ".join(mermaid_problems[:20]))
         minutes = _pm_reading_minutes(overview)
         check("pm-reading-budget", minutes <= 10.5,
               f"estimated prose reading time={minutes:.1f} minutes (limit 10.5)")
