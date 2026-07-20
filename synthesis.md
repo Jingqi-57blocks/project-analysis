@@ -133,6 +133,11 @@ never turns unrelated cells into concerns or clears them.
   import / call-site evidence shows what the CODE references — write "code
   references" / "call paths", never "production traffic", "real usage", or
   "traffic". Whether a path runs in production is unknowable (the disclaimer).
+- **An unresolved provider stays unresolved at first mention.** A caller and a
+  base identifier do not prove which analyzed service receives the request. Do
+  not say the client "reaches", "uses", or "connects to" a named provider when
+  route linkage keeps that provider unresolved; describe the unresolved API
+  reference and its capability instead.
 - **Evidence basis limits the verb.** `static-reference`, `declaration`,
   `configuration`, `history`, and `inferred-linkage` support only claims at that
   level. Only `runtime-observation` can establish execution/traffic, and only
@@ -205,6 +210,11 @@ never turns unrelated cells into concerns or clears them.
   `same-name-only` and is never presented as confirmed shared persistence. The
   §8 ladder restates the distinction; it is not allowed to be the first place
   the caveat appears.
+- **Table access does not establish a source of truth.** Reads, application
+  writes, schema writes, and joins establish only those access distinctions.
+  Name an authoritative source of truth or exclusive owner only when explicit
+  repository evidence or a user-confirmed fact establishes it; otherwise show
+  the observed persistence and write `source of truth unresolved`.
 
 ## Output budget & generation constraints
 
@@ -250,7 +260,23 @@ the report still states mechanical candidate accounting separately from added ju
 1. **Form modules from candidates.** Merge/split the preliminary candidates
    using the signals: route-prefix cohesion, folder cohesion, table
    ownership, import clustering (dependency views), and co-change pairs
-   (history view). Every module row carries evidence + confidence.
+   (history view). Every module row carries evidence + confidence. Apply this
+   project-agnostic granularity contract consistently at every effort level:
+   - A repository, deployable, language tree, or runtime/delivery wrapper is
+     not by itself a business module. Do not create one platform module per
+     backend merely because the repositories are separate; group shared runtime
+     infrastructure by responsibility and keep product capabilities distinct.
+   - Do not merge independently navigable or independently callable product
+     capabilities merely because they share a repository or broad umbrella
+     name. Merge only when at least two available signals support one boundary
+     (for example shared journey/actors, route family, persistence ownership,
+     import cluster, or co-change cluster).
+   - Do not split a subflow into its own module unless each resulting side has
+     a coherent standalone responsibility and at least two available evidence
+     families. If evidence is insufficient, keep the boundary `unresolved`
+     rather than choosing a granularity by writing style.
+   - Evaluate the whole candidate universe with these rules before naming any
+     module. Model effort may change explanation depth, not the boundary test.
 2. **Classify** each module: `business | platform | shared-infra |
    unresolved`. `unresolved` is a real status for the user — never force a
    guess. Business capabilities and technical/platform components are DISTINCT
@@ -369,8 +395,9 @@ exact order (they MUST match the template headings and the SKILL.md step-6 list)
 7. **Interface & consumer boundaries** — public/internal/legacy/versioned; known
    consumers; providers a caller references but that could not be located;
    parallel old+new interfaces for one capability. NO endpoint inventory.
-8. **Data ownership & lifecycle** — per IMPORTANT domain: source of truth,
-   writers, readers, multi-service direct access, shared-via-API vs shared-DB,
+8. **Data ownership & lifecycle** — per IMPORTANT domain: observed persistence
+   and source-of-truth status, writers, readers, multi-service direct access,
+   shared-via-API vs shared-DB,
    known lifecycle, coverage confidence; state the distinction reached on the
    ladder (declaration / schema-write / read / write / join-reference / same-name-only /
    unresolved-dynamic). A name match ALONE is never confirmed shared persistence.

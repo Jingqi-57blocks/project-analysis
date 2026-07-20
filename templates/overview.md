@@ -123,19 +123,22 @@ Relationship labels, shared data, and evidence: [`project-map.md`](project-map.m
 {{which interfaces are public / internal / legacy / versioned; the known consumers of
 each; any provider that a caller references but that could not be located; parallel
 old+new interfaces serving one capability. NO endpoint inventory — that is in
-technical-overview.md.}}
+technical-overview.md. A base identifier with an unresolved provider remains unresolved
+at first mention; do not describe the client as reaching a named service.}}
 
 ## 8. Data ownership & lifecycle
 
-{{per IMPORTANT domain only: source of truth · writers · readers · any multi-service
-direct access · shared-via-API vs shared-DB · known lifecycle (create → archive/delete
+{{per IMPORTANT domain only: observed persistence and source-of-truth status · writers ·
+readers · any multi-service direct access · shared-via-API vs shared-DB · known lifecycle (create → archive/delete
 where visible) · coverage confidence. State the strongest distinction reachable on the
 ladder: declaration / schema-write / read / write / join-reference / same-name-only / unresolved-dynamic.
 Schema-write evidence changes table structure; it does NOT make a service an application
 data writer.
-A name match ALONE is never confirmed shared persistence.}}
+A name match ALONE is never confirmed shared persistence. Reads and writes do not by
+themselves prove an authoritative source of truth; use `source of truth unresolved`
+unless explicit repository evidence or a user-confirmed fact establishes it.}}
 
-| domain | source of truth | writers | readers | sharing | distinction reached | confidence |
+| domain | observed persistence / source-of-truth status | writers | readers | sharing | distinction reached | confidence |
 |---|---|---|---|---|---|---|
 | {{domain}} | {{owner}} | {{...}} | {{...}} | {{via-API / shared-DB / none}} | {{ladder level}} | {{high/medium/low}} |
 
