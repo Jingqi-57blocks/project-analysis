@@ -523,6 +523,7 @@ def _finalize_module_map(args: argparse.Namespace) -> int:
     from . import module_map, module_render, overview_audit, synthesis_input
     from .system_model.assemble import assemble, dump
     run = Path(args.run).expanduser().resolve()
+    module_map.expand_candidate_rules(run)
     module_map.validate(run)
     model = assemble(run)
     dump(model, run)

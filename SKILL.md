@@ -208,12 +208,13 @@ anchored):
    shared shape against candidate IDs. Model effort may change diagnostic depth, not
    deterministic capability coverage or the candidate universe.
 4. **Finalize the structured module map, then `project-map.md`.** First write
-   `module-map.json` using the contract in `synthesis.md`: every ID in
-   `module-candidates.json` appears exactly once in `candidate_dispositions`; module
-   rows carry stable IDs, classification, aliases, and confidence. Run
-   `project-analysis-wrapper finalize-module-map --run <run-dir>`; it refuses incomplete
-   accounting, materializes inferred module nodes in `system-model.json`, and renders
-   the exact `module-summary.md` block that `project-map.md` must copy. Then follow
+   `module-map.json` using the contract in `synthesis.md`: module rows carry stable IDs,
+   classification, aliases, and confidence; use compact structural `candidate_rules`
+   for a large universe (or explicit dispositions for small exceptions). Run
+   `project-analysis-wrapper finalize-module-map --run <run-dir>`; it deterministically
+   expands the rules so every candidate appears exactly once, refuses overlaps or
+   incomplete accounting, materializes inferred module nodes in `system-model.json`,
+   and renders the exact `module-summary.md` block that `project-map.md` must copy. Then follow
    `synthesis.md` step 4 for the human map: module formation from candidates,
    classification, stable IDs + aliases, relationship labels
    (`observed | inferred | unresolved | user-confirmed`), external systems and

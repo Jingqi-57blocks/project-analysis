@@ -244,14 +244,32 @@ Target: a fresh run stays within ~20% of the current baseline wall-clock.
 ## Step 4 — finalize `project-map.md` (template: templates/project-map.md)
 
 Before rendering Markdown, write `module-map.json` with `schema_version: "1.0.0"`,
-`modules`, optional `additional_candidates`, and `candidate_dispositions`. Every module has `module_id`, `name`,
+`modules`, optional `additional_candidates`, and either compact `candidate_rules`
+or explicit `candidate_dispositions`. Every module has `module_id`, `name`,
 `classification` (`business | platform | shared-infra | unresolved`), `confidence`
 (`high | medium | low`), and `aliases`. Every candidate ID from
-`module-candidates.json` appears exactly once with `disposition`
+`module-candidates.json` ultimately appears exactly once with `disposition`
 (`standalone | merged | platform | shared-infrastructure | excluded | unresolved`),
 `module_ids`, and a short evidence-bounded reason. The first four dispositions map to
 exactly one module; excluded/unresolved map to none. Then run the wrapper's
-`finalize-module-map`; do not hand-edit the system model.
+`finalize-module-map`; it expands compact rules into the canonical per-candidate rows
+before validation. Do not hand-edit the system model and do not create a temporary
+script or generator to manufacture the map or reports.
+
+For a large candidate universe, prefer `candidate_rules`. Each rule has a stable
+kebab-case `rule_id`, one or more `selectors`, `disposition`, `module_ids`, and one
+evidence-bounded `reason`. A selector filters exact structured candidate fields only:
+`candidate_ids`, `repo_ids`, `signal_kinds`, `values`, `value_prefixes`,
+`evidence_path_prefixes`, and `node_ids`; each field is a non-empty string list,
+fields combine with AND, and multiple selectors within a rule combine with OR.
+Rules may contain project vocabulary observed in THIS run's exact values, but project
+code and prompts never do. The wrapper fails closed when rules overlap, match nothing,
+or omit any candidate. When available evidence genuinely cannot place the leftovers,
+one final rule may use `"remaining": true`; it MUST use disposition `unresolved`, an
+empty `module_ids` list, no selectors, and a factual limitation reason. This is an
+honest unknown, never a catch-all module. Use a small explicit
+`candidate_dispositions` list only for exceptions; an explicit row must not also match
+a rule.
 An evidence-backed boundary not surfaced mechanically may be added only through
 `additional_candidates` with a stable `mc-added-<slug>` ID, repo ID, value, and at
 least one full citation. It is then subject to the same exactly-once disposition rule;

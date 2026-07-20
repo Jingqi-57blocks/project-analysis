@@ -29,6 +29,13 @@ CLASSIFICATIONS = ("business", "platform", "shared-infra", "unresolved")
 _MODULE_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _ADDED_CANDIDATE_ID = re.compile(
     r"^mc-added-[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+_RULE_SELECTOR_FIELDS = {
+    "candidate_ids", "repo_ids", "signal_kinds", "values",
+    "value_prefixes", "evidence_path_prefixes", "node_ids",
+}
+_RULE_FIELDS = {
+    "rule_id", "selectors", "remaining", "disposition", "module_ids", "reason",
+}
 
 
 def _load(path: Path) -> dict:
@@ -146,13 +153,8 @@ def write_candidates(run_dir: str | Path, model: dict | None = None) -> Path:
     return out
 
 
-def validate(run_dir: str | Path) -> tuple[dict, dict]:
-    run = Path(run_dir).expanduser().resolve()
-    candidates_doc = _load(run / "module-candidates.json")
-    module_doc = _load(run / "module-map.json")
-    if module_doc.get("schema_version") != MAP_SCHEMA_VERSION:
-        raise ValueError(
-            f"module-map.json schema_version must be {MAP_SCHEMA_VERSION!r}")
+def _candidate_universe(run: Path, candidates_doc: dict,
+                        module_doc: dict) -> tuple[dict[str, dict], int, int]:
     mechanical = {row["candidate_id"]: row
                   for row in candidates_doc.get("candidates", [])}
     repo_ids = {repo.repo_id for repo in TargetSpec.load(run / "targets.json").repos}
@@ -188,6 +190,172 @@ def validate(run_dir: str | Path) -> tuple[dict, dict]:
             "evidence": evidence,
             "node_ids": node_ids,
         }
+    return candidates, len(mechanical), len(additional)
+
+
+def _evidence_paths(candidate: dict) -> list[str]:
+    return [path for evidence in candidate.get("evidence", [])
+            if (path := ids.citation_file(str(evidence)))]
+
+
+def _selector_matches(selector: dict, candidate: dict) -> bool:
+    def string_list(field: str) -> list[str]:
+        value = selector.get(field, [])
+        if not isinstance(value, list) or not value or not all(
+                isinstance(item, str) and item for item in value):
+            raise ValueError(f"candidate rule selector {field!r} must be a non-empty string list")
+        return value
+
+    unknown = set(selector) - _RULE_SELECTOR_FIELDS
+    if unknown:
+        raise ValueError(f"candidate rule selector has unsupported fields: {sorted(unknown)}")
+    if not selector:
+        raise ValueError("candidate rule selector cannot be empty")
+    if "candidate_ids" in selector and candidate["candidate_id"] not in string_list(
+            "candidate_ids"):
+        return False
+    if "repo_ids" in selector and candidate.get("repo_id") not in string_list("repo_ids"):
+        return False
+    if "signal_kinds" in selector and candidate.get("signal_kind") not in string_list(
+            "signal_kinds"):
+        return False
+    value = str(candidate.get("value", ""))
+    if "values" in selector and value not in string_list("values"):
+        return False
+    if "value_prefixes" in selector and not any(
+            value.startswith(prefix) for prefix in string_list("value_prefixes")):
+        return False
+    if "evidence_path_prefixes" in selector and not any(
+            path.startswith(prefix)
+            for path in _evidence_paths(candidate)
+            for prefix in string_list("evidence_path_prefixes")):
+        return False
+    if "node_ids" in selector and not set(candidate.get("node_ids", [])).intersection(
+            string_list("node_ids")):
+        return False
+    return True
+
+
+def expand_candidate_rules(run_dir: str | Path) -> Path:
+    """Expand compact synthesis selectors into canonical per-candidate rows.
+
+    Selectors only filter exact structured candidate fields. They do not infer
+    business meaning. Every candidate must match exactly one explicit row or
+    exactly one rule; overlaps and omissions fail closed.
+    """
+    run = Path(run_dir).expanduser().resolve()
+    path = run / "module-map.json"
+    module_doc = _load(path)
+    rules = module_doc.get("candidate_rules")
+    if rules is None:
+        return path
+    if not isinstance(rules, list) or not rules:
+        raise ValueError("module-map.json candidate_rules must be a non-empty list")
+    candidates_doc = _load(run / "module-candidates.json")
+    candidates, _, _ = _candidate_universe(run, candidates_doc, module_doc)
+    explicit = module_doc.get("candidate_dispositions", [])
+    if not isinstance(explicit, list):
+        raise ValueError("module-map.json candidate_dispositions must be a list")
+    rows: dict[str, dict] = {}
+    for index, row in enumerate(explicit):
+        if not isinstance(row, dict) or row.get("candidate_id") not in candidates:
+            raise ValueError(f"candidate_dispositions[{index}] is invalid")
+        candidate_id = row["candidate_id"]
+        if candidate_id in rows:
+            raise ValueError(f"candidate {candidate_id!r} was dispositioned more than once")
+        rows[candidate_id] = row
+
+    rule_ids: set[str] = set()
+    remainder: dict | None = None
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            raise ValueError(f"candidate_rules[{index}] must be an object")
+        unknown_rule_fields = set(rule) - _RULE_FIELDS
+        if unknown_rule_fields:
+            raise ValueError(
+                f"candidate_rules[{index}] has unsupported fields: "
+                f"{sorted(unknown_rule_fields)}")
+        rule_id = rule.get("rule_id", "")
+        if not isinstance(rule_id, str) or not _MODULE_ID.fullmatch(rule_id):
+            raise ValueError(f"candidate_rules[{index}].rule_id must be kebab-case")
+        if rule_id in rule_ids:
+            raise ValueError(f"duplicate candidate rule_id {rule_id!r}")
+        rule_ids.add(rule_id)
+        disposition = rule.get("disposition", "")
+        module_ids = rule.get("module_ids", [])
+        reason = rule.get("reason", "")
+        if disposition not in DISPOSITIONS:
+            raise ValueError(f"candidate rule {rule_id!r} has unsupported disposition")
+        if not isinstance(module_ids, list) or not all(isinstance(x, str) for x in module_ids):
+            raise ValueError(f"candidate rule {rule_id!r}.module_ids must be a string list")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"candidate rule {rule_id!r} needs an evidence-bounded reason")
+        if rule.get("remaining") is True:
+            if remainder is not None:
+                raise ValueError("candidate_rules may contain only one remaining rule")
+            if "selectors" in rule:
+                raise ValueError(f"remaining candidate rule {rule_id!r} cannot have selectors")
+            if disposition != "unresolved" or module_ids:
+                raise ValueError(
+                    f"remaining candidate rule {rule_id!r} must be unresolved with no module")
+            remainder = {"rule_id": rule_id, "disposition": disposition,
+                         "module_ids": [], "reason": reason}
+            continue
+        if "remaining" in rule:
+            raise ValueError(f"candidate rule {rule_id!r}.remaining must be true or omitted")
+        selectors = rule.get("selectors")
+        if not isinstance(selectors, list) or not selectors:
+            raise ValueError(f"candidate rule {rule_id!r} needs selectors")
+        if not all(isinstance(selector, dict) for selector in selectors):
+            raise ValueError(f"candidate rule {rule_id!r} selectors must be objects")
+        matched = []
+        for candidate_id, candidate in candidates.items():
+            if any(_selector_matches(selector, candidate) for selector in selectors):
+                matched.append(candidate_id)
+        if not matched:
+            raise ValueError(f"candidate rule {rule_id!r} matched no candidates")
+        for candidate_id in matched:
+            if candidate_id in rows:
+                raise ValueError(
+                    f"candidate {candidate_id!r} matched multiple explicit rows/rules")
+            rows[candidate_id] = {
+                "candidate_id": candidate_id,
+                "disposition": disposition,
+                "module_ids": list(module_ids),
+                "reason": reason,
+            }
+    if remainder is not None:
+        unmatched = sorted(set(candidates) - set(rows))
+        if not unmatched:
+            raise ValueError(
+                f"remaining candidate rule {remainder['rule_id']!r} matched no candidates")
+        for candidate_id in unmatched:
+            rows[candidate_id] = {
+                "candidate_id": candidate_id,
+                "disposition": "unresolved",
+                "module_ids": [],
+                "reason": remainder["reason"],
+            }
+    missing = sorted(set(candidates) - set(rows))
+    if missing:
+        raise ValueError(
+            f"candidate rules omit {len(missing)} candidate(s): {missing[:5]}")
+    module_doc["candidate_dispositions"] = [rows[key] for key in sorted(rows)]
+    module_doc.pop("candidate_rules", None)
+    replace_artifact_text(path, sanitize_text(json.dumps(
+        module_doc, indent=2, sort_keys=True) + "\n"))
+    return path
+
+
+def validate(run_dir: str | Path) -> tuple[dict, dict]:
+    run = Path(run_dir).expanduser().resolve()
+    candidates_doc = _load(run / "module-candidates.json")
+    module_doc = _load(run / "module-map.json")
+    if module_doc.get("schema_version") != MAP_SCHEMA_VERSION:
+        raise ValueError(
+            f"module-map.json schema_version must be {MAP_SCHEMA_VERSION!r}")
+    candidates, mechanical_count, additional_count = _candidate_universe(
+        run, candidates_doc, module_doc)
     dispositions = module_doc.get("candidate_dispositions")
     modules = module_doc.get("modules")
     if not isinstance(dispositions, list) or not isinstance(modules, list):
@@ -258,8 +426,8 @@ def validate(run_dir: str | Path) -> tuple[dict, dict]:
     if empty:
         raise ValueError(f"module(s) have no candidate lineage: {empty}")
     universe = dict(candidates_doc)
-    universe["mechanical_candidate_count"] = len(mechanical)
-    universe["additional_candidate_count"] = len(additional)
+    universe["mechanical_candidate_count"] = mechanical_count
+    universe["additional_candidate_count"] = additional_count
     universe["candidate_count"] = len(candidates)
     universe["candidates"] = [candidates[key] for key in sorted(candidates)]
     return universe, module_doc

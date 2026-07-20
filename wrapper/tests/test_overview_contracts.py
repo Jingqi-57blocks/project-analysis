@@ -113,6 +113,101 @@ def test_every_candidate_must_be_dispositioned_exactly_once(tmp_path):
         module_map.validate(run)
 
 
+def _rule_map(run, rules):
+    payload = {
+        "schema_version": module_map.MAP_SCHEMA_VERSION,
+        "modules": [{"module_id": "sample-capability", "name": "Sample capability",
+                     "classification": "business", "confidence": "medium",
+                     "aliases": []}],
+        "candidate_dispositions": [],
+        "candidate_rules": rules,
+    }
+    (run / "module-map.json").write_text(json.dumps(payload), "utf-8")
+
+
+def test_compact_candidate_rules_expand_to_canonical_lineage(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    candidates = json.loads((run / "module-candidates.json").read_text())["candidates"]
+    _rule_map(run, [{
+        "rule_id": "all-sample-candidates",
+        "selectors": [{"candidate_ids": [row["candidate_id"] for row in candidates]}],
+        "disposition": "merged", "module_ids": ["sample-capability"],
+        "reason": "one evidence-backed fixture boundary",
+    }])
+    module_map.expand_candidate_rules(run)
+    written = json.loads((run / "module-map.json").read_text())
+    assert "candidate_rules" not in written
+    assert [row["candidate_id"] for row in written["candidate_dispositions"]] == sorted(
+        row["candidate_id"] for row in candidates)
+    _, mapping = module_map.validate(run)
+    assert len(mapping["candidate_dispositions"]) == len(candidates)
+
+
+def test_candidate_rules_reject_overlap_and_omission(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    candidate_ids = [row["candidate_id"] for row in json.loads(
+        (run / "module-candidates.json").read_text())["candidates"]]
+    duplicate = {
+        "selectors": [{"candidate_ids": candidate_ids}],
+        "disposition": "merged", "module_ids": ["sample-capability"],
+        "reason": "fixture boundary",
+    }
+    _rule_map(run, [dict(duplicate, rule_id="first-rule"),
+                    dict(duplicate, rule_id="second-rule")])
+    with pytest.raises(ValueError, match="matched multiple"):
+        module_map.expand_candidate_rules(run)
+
+    _rule_map(run, [{
+        "rule_id": "partial-rule",
+        "selectors": [{"candidate_ids": candidate_ids[:1]}],
+        "disposition": "merged", "module_ids": ["sample-capability"],
+        "reason": "partial fixture boundary",
+    }])
+    with pytest.raises(ValueError, match="omit"):
+        module_map.expand_candidate_rules(run)
+
+
+def test_candidate_rules_allow_an_honest_unresolved_remainder(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    candidate_ids = [row["candidate_id"] for row in json.loads(
+        (run / "module-candidates.json").read_text())["candidates"]]
+    _rule_map(run, [{
+        "rule_id": "known-boundary",
+        "selectors": [{"candidate_ids": candidate_ids[:1]}],
+        "disposition": "merged", "module_ids": ["sample-capability"],
+        "reason": "direct fixture boundary evidence",
+    }, {
+        "rule_id": "unresolved-remainder", "remaining": True,
+        "disposition": "unresolved", "module_ids": [],
+        "reason": "available evidence does not justify a stable boundary",
+    }])
+    module_map.expand_candidate_rules(run)
+    _, mapping = module_map.validate(run)
+    counts = {}
+    for row in mapping["candidate_dispositions"]:
+        counts[row["disposition"]] = counts.get(row["disposition"], 0) + 1
+    assert counts == {"merged": 1, "unresolved": len(candidate_ids) - 1}
+
+
+def test_candidate_rule_selectors_are_structural_and_fail_closed():
+    candidate = {
+        "candidate_id": "mc-123", "repo_id": "api-11111111",
+        "signal_kind": "route", "value": "/items/:id",
+        "evidence": [f"api-11111111@{'a' * 40}:internal/items.go:12"],
+        "node_ids": ["route:abc"],
+    }
+    assert module_map._selector_matches({
+        "repo_ids": ["api-11111111"], "signal_kinds": ["route"],
+        "value_prefixes": ["/items"],
+        "evidence_path_prefixes": ["internal/"],
+        "node_ids": ["route:abc"],
+    }, candidate)
+    with pytest.raises(ValueError, match="unsupported fields"):
+        module_map._selector_matches({"business_keywords": ["items"]}, candidate)
+    with pytest.raises(ValueError, match="cannot be empty"):
+        module_map._selector_matches({}, candidate)
+
+
 def test_valid_module_map_materializes_inferred_nodes_and_lineage(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True))
     count = _complete_map(run)
