@@ -46,6 +46,26 @@ def _pm_reading_minutes(markdown: str) -> float:
     return cjk / 500.0 + latin / 250.0
 
 
+def _is_source_path_label(label: str) -> bool:
+    """Return whether a graph ``file`` label is specific enough to gate prose.
+
+    Dependency producers are package-granular in some languages and therefore
+    also materialize labels such as ``.``, ``init`` and ``config`` as file-node
+    endpoints. Those are ordinary prose words, not safely matchable paths.
+    A slash, filename suffix, or conventional extensionless build filename is
+    required before an exact-label match can be treated as a source-path leak.
+    """
+    value = label.strip()
+    if not value or value in {".", "..", "(unknown)", "unknown"}:
+        return False
+    if "/" in value or "\\" in value:
+        return True
+    basename = Path(value).name
+    if basename in {"Dockerfile", "Makefile", "Procfile", "Rakefile"}:
+        return True
+    return bool(Path(basename).suffix) and not basename.startswith(".")
+
+
 def _mermaid_integrity_problems(name: str, markdown: str) -> list[str]:
     problems: list[str] = []
     blocks = _MERMAID_FENCE.findall(markdown)
@@ -311,12 +331,12 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
             pm_leaks.append("source citation present")
         file_labels = {str(node.get("label", "")) for node in model.get("nodes", [])
                        if node.get("kind") == "file"
-                       and node.get("label") not in {None, "", "(unknown)"}}
+                       and _is_source_path_label(str(node.get("label", "")))}
         for label in sorted(file_labels):
             # Match the exact mechanically observed path, regardless of
-            # Markdown quoting.  Limiting the candidate set to file-node labels
-            # avoids generic source-code keyword heuristics while still catching
-            # plain-text paths such as src/client.ts.
+            # Markdown quoting. File-node labels that are only package names or
+            # ordinary words are deliberately excluded because exact substring
+            # matching would turn the abstraction gate into a prose-word gate.
             if label in overview:
                 pm_leaks.append(f"source path present: {label}")
                 if len(pm_leaks) >= 20:

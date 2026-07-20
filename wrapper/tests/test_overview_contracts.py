@@ -179,6 +179,13 @@ def test_final_audit_rejects_plain_source_path_in_pm_overview(tmp_path):
                and row["status"] == "fail" for row in result["checks"])
 
 
+def test_pm_abstraction_path_labels_do_not_treat_package_words_as_paths():
+    for label in (".", "unknown", "config", "init", "path"):
+        assert not overview_audit._is_source_path_label(label)
+    for label in ("src/client.ts", "internal/handler", "app.js", "Dockerfile"):
+        assert overview_audit._is_source_path_label(label)
+
+
 def test_final_audit_rejects_html_entity_obfuscation(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True))
     _complete_map(run)
