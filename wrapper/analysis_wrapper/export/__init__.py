@@ -5,7 +5,8 @@ format exporters. New formats register an :class:`Exporter`; the CLI and callers
 go through :func:`export` / :func:`available_formats` and never import a specific
 exporter directly.
 
-Exports are written to ``<skill-root>/exported/{project-name}-analysis/{format}/``
+Exports are written to
+``<skill-root>/exported/{project-name}-analysis/{run-id}/{format}/``
 where ``{project-name}`` is the run's project id with its trailing ``-<hash>``
 stripped (e.g. ``myapp-1a2b3c4d`` -> ``myapp``). That tree is gitignored —
 generated artifacts never enter the repo.
@@ -52,10 +53,23 @@ def project_name(project_id: str) -> str:
     return stripped or (project_id or "project")
 
 
-def export_output_dir(skill_root: str | Path, project_id: str, fmt: str) -> Path:
-    """The canonical export destination for a project + format."""
+def _path_segment(value: str, field: str) -> str:
+    """Reject traversal/control characters while preserving Unicode names."""
+    if (not value or value in {".", ".."} or "/" in value or "\\" in value
+            or any(ord(char) < 32 for char in value)):
+        raise ValueError(f"invalid {field} for export path: {value!r}")
+    return value
+
+
+def export_output_dir(
+    skill_root: str | Path, project_id: str, run_id: str, fmt: str
+) -> Path:
+    """The canonical export destination for one immutable run + format."""
+    project = _path_segment(project_name(project_id), "project id")
+    run = _path_segment(run_id, "run id")
+    format_name = _path_segment(fmt, "format")
     return (
-        Path(skill_root) / "exported" / f"{project_name(project_id)}-analysis" / fmt
+        Path(skill_root) / "exported" / f"{project}-analysis" / run / format_name
     )
 
 
@@ -81,7 +95,9 @@ def export(
     if out_dir is None:
         if skill_root is None:
             raise ValueError("export needs either out_dir or skill_root")
-        out_dir = export_output_dir(skill_root, inputs.project_id, fmt)
+        out_dir = export_output_dir(
+            skill_root, inputs.project_id, inputs.run_id, fmt
+        )
     return exporter.export(inputs, Path(out_dir))
 
 

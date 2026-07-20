@@ -78,13 +78,15 @@ class MarkdownDoc:
 
 
 def mermaid_figure(source: str, dom_id: str = "") -> str:
-    """Wrap verbatim mermaid source in a zoomable figure (rendered client-side)."""
+    """Wrap source in a zoomable figure with an independent large-view dialog."""
     data = f' data-diagram="{dom_id}"' if dom_id else ""
     return (
         '<figure class="diagram"><div class="diagram-tools"' + data + ">"
         '<button type="button" class="zoom-out" aria-label="zoom out">-</button>'
         '<button type="button" class="zoom-reset" aria-label="reset zoom">reset</button>'
         '<button type="button" class="zoom-in" aria-label="zoom in">+</button>'
+        '<button type="button" class="diagram-expand" '
+        'aria-label="open diagram in large view" title="open large view">expand</button>'
         "</div>"
         '<div class="diagram-scroll">'
         f'<pre class="mermaid">{esc(source)}</pre>'

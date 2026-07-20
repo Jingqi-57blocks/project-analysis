@@ -21,7 +21,7 @@ first-class confidence.
 ## Invocation
 
 ```
-/project-analysis [path] [--language zh-CN|en]
+/project-analysis [path] [--language zh-CN|en] [--run-id <label>]
 /project-analysis module <module-id> [--from-run <run-id>] [--language zh-CN|en]
 ```
 
@@ -133,8 +133,10 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
 
 - Every overview run writes an **immutable snapshot** under
   `output/<project-id>/overview/<run-id>/`. Never edit a completed run.
-- **`<run-id>`** = UTC start timestamp + short input digest:
+- **`<run-id>`** = optional readable label (from `--run-id`) or UTC start timestamp,
+  plus the short input digest: `<label>-<6-hex digest>` when supplied, otherwise
   `YYYYMMDDThhmmssZ-<6-hex digest of ordered repo HEADs, dirty markers, and language>`.
+  The label is 1–48 portable filename characters and must start/end alphanumeric.
   Timestamp and digest are labels, not a uniqueness guarantee: uniqueness comes from the
   rule that an existing run directory is NEVER reused — if the computed name already
   exists, append the first free `-2`, `-3`, … suffix.
@@ -165,7 +167,7 @@ overview). Drive it with the wrapper CLI (all paths absolute, skill-dir
 anchored):
 
 - `new-run --workspace <target> --skill-root <skill-dir> [--language ...]
-  [--exclude ...]` — mints the run directory, runs discovery into it
+  [--run-id <label>] [--exclude ...]` — mints the run directory, runs discovery into it
   (stage 1 done), reports `inspection_only` and the next stage.
 - `status --run <run-dir>` — prints the resume point and staleness (exit 5 +
   a per-repo `old -> new` list when the workspace moved). **Fresh + incomplete
@@ -234,7 +236,8 @@ anchored):
 8. **Export the HTML report (default).** After the markdown reports are written, run
    `project-analysis-wrapper export --run <run-dir> --skill-root <skill-root>` (format
    defaults to `html`) to render the offline, self-contained HTML report into
-   `<skill-root>/exported/{project}-analysis/html/` (gitignored, regenerable). This is
+   `<skill-root>/exported/{project}-analysis/{run-id}/html/` (gitignored, regenerable).
+   Run scoping prevents a later analysis from overwriting an earlier export. This is
    the default. Skip it only when the user opted out with `--no-export` / `--export none`
    — the markdown reports are always produced regardless. The export is deterministic,
    fully offline (no network, no LLM), and adds no analysis passes; `export --format`

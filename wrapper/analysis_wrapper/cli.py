@@ -157,6 +157,11 @@ def parser() -> argparse.ArgumentParser:
     new_run.add_argument("--skill-root", required=True,
                          help="skill base directory (owns state/ and output/)")
     new_run.add_argument("--language", default="zh-CN", choices=["en", "zh-CN"])
+    new_run.add_argument(
+        "--run-id", default="", metavar="LABEL",
+        help="optional readable run label; the wrapper appends the 6-character "
+             "input digest and a collision suffix when needed",
+    )
     new_run.add_argument("--exclude", default="")
     new_run.add_argument("--analyzer-root", default="",
                          help="override the self-excluded analyzer checkout "
@@ -182,7 +187,8 @@ def parser() -> argparse.ArgumentParser:
         "export",
         help="export a completed run in a chosen format (deterministic; no "
              "network, no LLM). Default format: html. Written to "
-             "<skill-root>/exported/{project}-analysis/{format}/ (gitignored).")
+             "<skill-root>/exported/{project}-analysis/{run-id}/{format}/ "
+             "(gitignored).")
     exp.add_argument("--run", required=True, help="completed run directory")
     exp.add_argument("--format", nargs="?", const="__list__", default="html",
                      help="output format (default: html); pass --format with no "
@@ -242,7 +248,8 @@ def _new_run(args: argparse.Namespace) -> int:
                      / "output" / report["project_id"] / "overview")
     run_id = lifecycle.mint_run_id(
         [f"{r.repo_id}:{r.git.head}:{r.git.dirty_detail}" for r in spec.repos],
-        args.language, exists=lambda rid: (overview_root / rid).exists())
+        args.language, label=args.run_id,
+        exists=lambda rid: (overview_root / rid).exists())
     run_dir = overview_root / run_id
     emit.write_stage1(run_dir, spec, report)
     state = lifecycle.RunState.create(

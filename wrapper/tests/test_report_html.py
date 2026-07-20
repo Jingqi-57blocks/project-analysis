@@ -351,3 +351,31 @@ def test_toc_drawer_needs_two_sections(tmp_path):
     assert "toc-drawer" not in one
     two = pages.shell(inputs, "x", "T", "s", "<p>b</p>", [("a", "A"), ("b", "B")])
     assert "toc-drawer" in two and "toc-panel" in two
+
+
+def test_wide_screen_layout_centers_content_and_anchors_toc(tmp_path):
+    result = generate(make_run(tmp_path))
+    css = (result.report_dir / "assets" / "report.css").read_text(encoding="utf-8")
+    assert "--content-max: 1100px" in css
+    assert "margin-inline: auto" in css
+    assert "100vw - var(--nav-w) - var(--content-max)" in css
+    assert "width: 40px; height: 40px; border-radius: 50%;" in css
+
+
+def test_every_mermaid_has_independent_large_view_dialog(tmp_path):
+    result = generate(make_run(tmp_path))
+    diagram_count = 0
+    for page in result.report_dir.glob("*.html"):
+        html = page.read_text(encoding="utf-8")
+        figures = html.count('<figure class="diagram">')
+        diagram_count += figures
+        assert html.count('class="diagram-expand"') == figures, page.name
+    assert diagram_count > 0
+
+    script = (result.report_dir / "assets" / "report.js").read_text(encoding="utf-8")
+    css = (result.report_dir / "assets" / "report.css").read_text(encoding="utf-8")
+    assert 'document.createElement("dialog")' in script
+    assert "window.mermaid.render" in script
+    assert 'dialog.addEventListener("close"' in script
+    assert "availableWidth / baseWidth" in script
+    assert ".diagram-modal-scroll" in css and "overflow: auto" in css

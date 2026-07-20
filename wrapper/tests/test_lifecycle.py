@@ -27,6 +27,23 @@ def test_run_id_labels_plus_never_reuse_suffix():
     assert mint_run_id(heads, "zh-CN", when=WHEN) != first
 
 
+def test_custom_run_id_keeps_digest_and_never_reuse_suffix():
+    heads = ["r-1:abc:no"]
+    first = mint_run_id(heads, "en", label="low-effort", when=WHEN)
+    assert first.startswith("low-effort-")
+    assert len(first.rsplit("-", 1)[1]) == 6
+    assert mint_run_id(
+        heads, "en", label="low-effort", when=WHEN,
+        exists=lambda run_id: run_id == first,
+    ) == f"{first}-2"
+
+
+@pytest.mark.parametrize("label", ["../escape", "has spaces", ".hidden", "bad-"])
+def test_custom_run_id_rejects_non_portable_labels(label):
+    with pytest.raises(ValueError, match="invalid --run-id label"):
+        mint_run_id(["r-1:abc:no"], "en", label=label, when=WHEN)
+
+
 def test_run_state_stages_resume_point(tmp_path, target):
     spec = TargetSpec(repos=[target])
     state = RunState.create("rid-1", "proj-1", spec, when=WHEN)
@@ -110,6 +127,20 @@ def test_new_run_default_language_is_zh_cn(tmp_path, synthetic_repo, capsys):
     assert code == 0
     run_dir = capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1]
     assert RunState.load(run_dir).language == "zh-CN"
+
+
+def test_new_run_cli_uses_custom_readable_id(tmp_path, synthetic_repo, capsys):
+    skill_root = tmp_path / "skill"
+    argv = ["new-run", "--workspace", str(synthetic_repo.parent),
+            "--skill-root", str(skill_root), "--run-id", "comparison-low"]
+    assert main(argv) == 0
+    first_dir = capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1]
+    first_id = RunState.load(first_dir).run_id
+    assert first_id.startswith("comparison-low-")
+
+    assert main(argv) == 0
+    second_dir = capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1]
+    assert RunState.load(second_dir).run_id == f"{first_id}-2"
 
 
 def test_cli_full_lifecycle_flow(tmp_path, target, synthetic_repo, capsys):

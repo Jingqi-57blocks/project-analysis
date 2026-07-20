@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,16 +32,39 @@ from .targetspec import TargetSpec
 STAGES = ["discovery", "signals", "findings", "map", "overview"]
 DRILLDOWN_STAGES = ["resolve", "prd", "health"]
 
+# A run label becomes part of a directory name. Keep it portable across macOS,
+# Linux and common archive/file-server boundaries, and leave room for the input
+# digest plus a never-reuse suffix.
+_RUN_LABEL_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,46}[A-Za-z0-9])?$"
+)
 
-def mint_run_id(heads: list[str], language: str, *, when: datetime | None = None,
-                exists: "callable" = lambda run_id: False) -> str:
-    """Timestamp + input digest, uniqueness by never-reuse (-N on collision)."""
-    when = when or datetime.now(timezone.utc)
-    stamp = when.strftime("%Y%m%dT%H%M%SZ")
-    digest = hashlib.sha256(
+
+def _input_digest(heads: list[str], language: str) -> str:
+    return hashlib.sha256(
         ("\n".join(sorted(heads)) + f"\n{language}").encode("utf-8")
     ).hexdigest()[:6]
-    base = f"{stamp}-{digest}"
+
+
+def validate_run_label(label: str) -> str:
+    """Validate a human-readable run label before it reaches the filesystem."""
+    if not _RUN_LABEL_RE.fullmatch(label):
+        raise ValueError(
+            "invalid --run-id label: use 1-48 letters, digits, '.', '_' or '-'; "
+            "start and end with a letter or digit"
+        )
+    return label
+
+
+def mint_run_id(heads: list[str], language: str, *, label: str = "",
+                when: datetime | None = None,
+                exists: "callable" = lambda run_id: False) -> str:
+    """Readable label (or timestamp) + digest, with never-reuse uniqueness."""
+    when = when or datetime.now(timezone.utc)
+    stamp = when.strftime("%Y%m%dT%H%M%SZ")
+    digest = _input_digest(heads, language)
+    prefix = validate_run_label(label) if label else stamp
+    base = f"{prefix}-{digest}"
     candidate, n = base, 1
     while exists(candidate):
         n += 1

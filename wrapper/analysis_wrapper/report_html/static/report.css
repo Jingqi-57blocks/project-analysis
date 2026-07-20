@@ -18,6 +18,7 @@
   --muted-badge: #5a6572; --muted-badge-bg: #e7eaef;
   --radius: 8px;
   --nav-w: 250px;
+  --content-max: 1100px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -79,7 +80,10 @@ code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; font
 }
 .nav a.nav-link:hover { background: var(--surface-2); text-decoration: none; }
 .nav a.nav-link.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
-.main { flex: 1 1 auto; min-width: 0; padding: 32px 40px 80px; max-width: 1100px; }
+.main {
+  flex: 1 1 auto; width: 100%; min-width: 0; padding: 32px 40px 80px;
+  max-width: var(--content-max); margin-inline: auto;
+}
 
 /* ---- headings / prose ---- */
 .main > header.page-head { margin-bottom: 8px; }
@@ -138,9 +142,45 @@ td .wrap { white-space: normal; word-break: break-word; }
 .diagram { margin: 16px 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .diagram-tools { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); }
 .diagram-tools button { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 6px; padding: 2px 10px; cursor: pointer; font-size: 13px; min-width: 32px; }
+.diagram-tools .diagram-expand { margin-left: auto; }
 .diagram-scroll { overflow: auto; max-height: 78vh; padding: 12px; }
 .diagram-scroll pre.mermaid { margin: 0; transform-origin: top left; }
 pre.mermaid { background: transparent; }
+
+/* Large view is independent from the in-page diagram bounds. Its SVG is
+   resized by layout dimensions, so zoomed content expands the scroll area
+   instead of being clipped by a CSS transform. */
+body.diagram-modal-open { overflow: hidden; }
+.diagram-modal {
+  width: 94vw; height: 92vh; max-width: none; max-height: none; padding: 0;
+  overflow: hidden; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+}
+.diagram-modal::backdrop { background: rgba(12, 18, 28, .68); }
+.diagram-modal-shell { display: flex; flex-direction: column; height: 100%; }
+.diagram-modal-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  flex: 0 0 auto; padding: 10px 14px; border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.diagram-modal-actions { display: flex; align-items: center; gap: 6px; }
+.diagram-modal-toolbar button {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 6px; min-width: 36px; padding: 5px 10px; cursor: pointer;
+}
+.diagram-modal-toolbar .diagram-modal-close {
+  margin-left: 8px; font-size: 20px; line-height: 1; color: var(--accent);
+}
+.diagram-modal-scroll {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 24px;
+  background: var(--bg);
+}
+.diagram-modal-content { display: inline-block; min-width: min-content; }
+.diagram-modal-content svg { display: block; max-width: none !important; }
+.diagram-modal-source {
+  white-space: pre; padding: 16px; border-radius: var(--radius);
+  background: var(--code-bg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 /* ---- generic code blocks (fallback) ---- */
 pre { background: var(--code-bg); padding: 12px 14px; border-radius: var(--radius); overflow-x: auto; }
@@ -156,14 +196,16 @@ summary { cursor: pointer; color: var(--accent); }
    and hides the button (open = only the TOC); leaving closes it. Touch: click to
    pin open, tap outside to close (report.js). */
 .toc-drawer {
-  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+  position: fixed;
+  right: max(0px, calc((100vw - var(--nav-w) - var(--content-max)) / 2));
+  top: 50%; transform: translateY(-50%);
   z-index: 60; pointer-events: none;    /* only the handle/panel are interactive */
 }
 .toc-drawer > * { pointer-events: auto; }
 
 /* CLOSED (default): only the round menu button is shown. */
 .toc-handle {
-  width: 40px; height: 40px; border-radius: 50% 0 0 50%;
+  width: 40px; height: 40px; border-radius: 50%;
   border: 1px solid var(--border); background: var(--surface);
   color: var(--accent); font-size: 17px; line-height: 1; cursor: pointer;
   box-shadow: var(--shadow); transition: opacity .18s ease;
@@ -208,11 +250,16 @@ summary { cursor: pointer; color: var(--accent); }
   .layout { flex-direction: column; }
   .nav { width: 100%; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--border); }
   .main { padding: 24px 18px 64px; }
+  .diagram-modal { width: 100vw; height: 100vh; border: none; border-radius: 0; }
+  .diagram-modal-toolbar { gap: 8px; padding: 8px; }
+  .diagram-modal-toolbar > strong { display: none; }
+  .diagram-modal-actions { width: 100%; justify-content: flex-end; }
+  .diagram-modal-scroll { padding: 12px; }
 }
 
 /* ---- print ---- */
 @media print {
-  .nav, .diagram-tools, .filter-bar, .toc-drawer { display: none !important; }
+  .nav, .diagram-tools, .filter-bar, .toc-drawer, .diagram-modal { display: none !important; }
   .layout { display: block; }
   .main { max-width: none; padding: 0; }
   .card, .tile, .table-scroll, .diagram { box-shadow: none; break-inside: avoid; }
