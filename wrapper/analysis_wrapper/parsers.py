@@ -135,13 +135,13 @@ from .parsers_depcruise import (  # noqa: E402,F401
 
 _COMPILE_FAILURE = re.compile(
     r"\(compile\)|could not (?:load|analyze)|(?:^|\n)-: |no (?:Go|buildable Go) "
-    r"(?:source )?files",
+    r"(?:source )?files|matched no packages|no packages to analyze",
     re.I,
 )
 
 
 def staticcheck_degraded(_target: RepoTarget, combined: str, _exit: int) -> str:
-    return "compile/load failures detected; staticcheck coverage is incomplete" \
+    return "compile/load/no-analysis-object result detected; staticcheck coverage is incomplete" \
         if _COMPILE_FAILURE.search(combined) else ""
 
 

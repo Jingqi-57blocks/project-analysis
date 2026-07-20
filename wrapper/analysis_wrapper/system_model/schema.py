@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 # What a node can be. Only materialized where evidence exists (issue: "external
 # boundaries when evidence exists"); a kind with no evidence yields no nodes and
@@ -47,6 +47,19 @@ EDGE_TYPES = (
 # ``unresolved`` = a relationship whose target could not be resolved to a node.
 STATUSES = ("observed", "inferred", "unresolved")
 
+# What the evidence can establish.  This is deliberately orthogonal to status:
+# a mechanically observed config declaration is still configuration evidence,
+# not proof of runtime execution.
+EVIDENCE_BASES = (
+    "static-reference",
+    "declaration",
+    "configuration",
+    "history",
+    "inferred-linkage",
+    "runtime-observation",
+    "user-confirmed",
+)
+
 
 @dataclass
 class Node:
@@ -58,6 +71,7 @@ class Node:
     key: list[str] = field(default_factory=list)  # natural-key parts (ID source)
     producers: list[str] = field(default_factory=list)   # source producer(s)
     evidence: list[str] = field(default_factory=list)    # citations
+    evidence_basis: str = "static-reference"
     confidence: float | None = None
     attrs: dict = field(default_factory=dict)
 
@@ -66,6 +80,8 @@ class Node:
             raise ValueError(f"Node.kind unsupported: {self.kind!r}")
         if self.status not in STATUSES:
             raise ValueError(f"Node.status unsupported: {self.status!r}")
+        if self.evidence_basis not in EVIDENCE_BASES:
+            raise ValueError(f"Node.evidence_basis unsupported: {self.evidence_basis!r}")
 
     def to_dict(self) -> dict:
         out = {
@@ -74,6 +90,7 @@ class Node:
             "key": list(self.key),
             "producers": sorted(set(self.producers)),
             "evidence": sorted(set(self.evidence)),
+            "evidence_basis": self.evidence_basis,
             "attrs": self.attrs,
         }
         if self.confidence is not None:
@@ -90,6 +107,7 @@ class Edge:
     status: str
     producer: str = ""
     evidence: list[str] = field(default_factory=list)
+    evidence_basis: str = "static-reference"
     confidence: float | None = None
     attrs: dict = field(default_factory=dict)
     unresolved_target: dict | None = None        # natural key of dst when unresolved
@@ -99,12 +117,15 @@ class Edge:
             raise ValueError(f"Edge.type unsupported: {self.type!r}")
         if self.status not in STATUSES:
             raise ValueError(f"Edge.status unsupported: {self.status!r}")
+        if self.evidence_basis not in EVIDENCE_BASES:
+            raise ValueError(f"Edge.evidence_basis unsupported: {self.evidence_basis!r}")
 
     def to_dict(self) -> dict:
         out = {
             "id": self.id, "type": self.type, "src": self.src, "dst": self.dst,
             "status": self.status, "producer": self.producer,
             "evidence": sorted(set(self.evidence)),
+            "evidence_basis": self.evidence_basis,
             "attrs": self.attrs,
         }
         if self.confidence is not None:

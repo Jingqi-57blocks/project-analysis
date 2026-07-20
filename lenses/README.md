@@ -12,5 +12,5 @@ first, then its lens files, then the bounded signal views.
 | C — risk & open | dependency-risk, open-lens | osv-scanner, outdated (network lane; often skipped), all views |
 
 Inputs per agent: `signals/*.view.txt` + manifests + `run-summary.json` +
-`discovery-report.json` + `module_candidates.md`. Output per agent: findings
+the canonical `synthesis-input.json` + its named bounded signal views. Output per agent: findings
 in the shared shape + a per-signal coverage statement. Nothing else.

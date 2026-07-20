@@ -1,4 +1,4 @@
-"""Module-candidate SIGNALS (57B-11 S7 input for module_candidates.md).
+"""Module-candidate signals (input to the canonical module-candidates.json).
 
 Mechanical extraction of the four signal families the preliminary module list
 is built from: route registrations, source folder structure, persistence table

@@ -136,6 +136,28 @@ def write_new_text(path: Path, text: str) -> None:
         raise
 
 
+def replace_artifact_text(path: Path, text: str) -> None:
+    """Atomically write a regenerable run artifact without following symlinks.
+
+    Some deterministic projections are refreshed after module synthesis, so the
+    create-once helper is too strict.  Refuse symlink/non-file destinations,
+    write a sibling with O_EXCL, then atomically replace the regular file.
+    """
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise WrapperSafetyError(f"artifact path is a symlink or non-file: {path}")
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        raise WrapperSafetyError(f"artifact parent is unsafe: {path.parent}")
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+        os.replace(temp, path)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
+
+
 def _assert_output_outside_targets(out: Path, targets: list[RepoTarget]) -> None:
     resolved = out.expanduser().resolve()
     for target in targets:

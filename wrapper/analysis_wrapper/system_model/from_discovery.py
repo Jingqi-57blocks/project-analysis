@@ -75,6 +75,7 @@ def _repository(builder: ModelBuilder, target, block: dict) -> str:
     repo_id = builder.add_node(
         "repository", [target.repo_id], label=target.repo_id, status="observed",
         repo_id=target.repo_id, producer=REPO,
+        evidence_basis="declaration",
         evidence=[f"{target.repo_id}@{head or 'nogit'}"] if head else [],
         attrs=attrs)
     # Policy artifacts (casbin model/policy) are located as files — surface them.
@@ -152,6 +153,7 @@ def _tables(builder: ModelBuilder, repo_id: str, heads: dict, te: dict) -> None:
         table_id = builder.add_node(
             "data-store", [repo_id, name], label=name, status="observed",
             repo_id=repo_id, producer=TABLES,
+            evidence_basis="declaration",
             evidence=[first] if first else [],
             attrs={"table": name, "access_types": sorted(buckets.keys())})
         for access_type, sites in sorted(buckets.items()):
@@ -219,10 +221,16 @@ def _candidates(builder: ModelBuilder, spec: TargetSpec) -> None:
         ext_id = builder.add_node(
             "external-boundary", ["candidate", value], label=value,
             status="observed", producer=CANDIDATES,
+            evidence_basis=("configuration" if set(cand.signal_kind.split("+"))
+                            & {"config", "env", "oauth_provider", "ci_resource"}
+                            else "static-reference"),
             attrs={"kind": "integration-candidate"})
         repo_node = ids.stable_id("repository", cand.repo_id)
         builder.add_edge("boundary", repo_node, ext_id, status="observed",
                          producer=CANDIDATES, evidence=list(cand.evidence),
+                         evidence_basis=("configuration" if set(cand.signal_kind.split("+"))
+                                         & {"config", "env", "oauth_provider", "ci_resource"}
+                                         else "static-reference"),
                          attrs={"kind": "integration-candidate",
                                 "signal_kind": cand.signal_kind},
                          discriminator=cand.signal_kind)
@@ -246,9 +254,10 @@ def _deploy(builder: ModelBuilder, repo_id: str, heads: dict, du: dict) -> None:
         unit_id = builder.add_node(
             "deployable-unit", [repo_id, kind, name], label=f"{kind}:{name}",
             status="observed", repo_id=repo_id, producer=DEPLOY,
+            evidence_basis="configuration",
             evidence=[citation] if citation else [], attrs=attrs)
         builder.add_edge("containment", repo_node, unit_id, status="observed",
-                         producer=DEPLOY)
+                         producer=DEPLOY, evidence_basis="configuration")
         if evidence:
             builder.note_file(repo_id, ids.split_position(evidence)[0],
                               producer=DEPLOY, evidence=citation)

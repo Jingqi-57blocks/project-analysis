@@ -6,13 +6,24 @@ from pathlib import Path
 import pytest
 
 from analysis_wrapper import gitinfo
-from analysis_wrapper.executor import prepare_output_directory, run_tool
+from analysis_wrapper.executor import (WrapperSafetyError, prepare_output_directory,
+                                       replace_artifact_text, run_tool)
 from analysis_wrapper.status import Status
 from analysis_wrapper.tooldefs import ToolDef
 
 from test_executor import bash_tool, run  # reuse helpers
 
 SCAN_DATE = "2026-07-16"
+
+
+def test_replace_artifact_refuses_symlink_destination(tmp_path):
+    real = tmp_path / "real.txt"
+    real.write_text("keep\n")
+    link = tmp_path / "artifact.json"
+    link.symlink_to(real)
+    with pytest.raises(WrapperSafetyError):
+        replace_artifact_text(link, "changed\n")
+    assert real.read_text() == "keep\n"
 
 
 def test_allowlist_rejects_unapproved_argv0(target, tmp_path):

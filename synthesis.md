@@ -1,10 +1,10 @@
 # Synthesis (overview workflow steps 4–6)
 
 You are the synthesis stage of Project Analysis. Inputs: every lens group's
-findings, all bounded views + `run-summary.json`, `discovery-report.json`,
-and the preliminary `module_candidates.md`. Outputs, in this order:
-`project-map.md`, then `technical-overview.md`, then `overview.md` — each from
-its template.
+findings and the wrapper-owned `synthesis-input.json` (which points to the bounded
+views and carries the complete deterministic candidate universe). Outputs, in this
+order: `module-map.json`, `project-map.md`, `technical-overview.md`, then
+`overview.md` — Markdown outputs use their templates.
 
 `overview.md` is the **primary, human-facing document**: a reader with no prior
 context understands the system and its biggest changeability risks in ~10
@@ -125,6 +125,11 @@ never turns unrelated cells into concerns or clears them.
   import / call-site evidence shows what the CODE references — write "code
   references" / "call paths", never "production traffic", "real usage", or
   "traffic". Whether a path runs in production is unknowable (the disclaimer).
+- **Evidence basis limits the verb.** `static-reference`, `declaration`,
+  `configuration`, `history`, and `inferred-linkage` support only claims at that
+  level. Only `runtime-observation` can establish execution/traffic, and only
+  `user-confirmed` can add a human operational fact. The current static overview
+  normally contains neither; never promote one basis to another.
 - **Never render absence-of-findings as healthy.** No "healthy" / wellness
   label anywhere. Absence is `no concern observed` scoped to the signals that
   ran, or `unknown` when the signal didn't run.
@@ -202,7 +207,13 @@ in `technical-overview.md`). When a section exceeds its budget, keep the
 highest-impact items and move the remainder to `technical-overview.md`. The
 ~10-minute figure is the LAYERED read: §2 Executive diagnosis is a self-sufficient
 ~2–3 minute summary of the whole diagnosis, and §3–§16 are the reference a reader
-dips into per question.
+dips into per question. Treat ~2,500 prose words as the universal PM ceiling
+(tables and Mermaid syntax excluded). Adapt to project shape without dropping a
+required evidence category: an inapplicable or unavailable category is one honest
+line; a large inventory becomes a count plus representative rows in `overview.md`
+and remains complete in `technical-overview.md`; a small project is not padded.
+Never shorten by changing a fact, hiding a coverage gap, or omitting a module with
+a confirmed concern.
 
 **Generation constraints (this stage adds NO new LLM pass):** synthesis consumes
 the bounded structured summaries already produced (lens findings, signal views,
@@ -213,6 +224,20 @@ section as `partial` / `unknown` and say so — never compensate with broad read
 Target: a fresh run stays within ~20% of the current baseline wall-clock.
 
 ## Step 4 — finalize `project-map.md` (template: templates/project-map.md)
+
+Before rendering Markdown, write `module-map.json` with `schema_version: "1.0.0"`,
+`modules`, optional `additional_candidates`, and `candidate_dispositions`. Every module has `module_id`, `name`,
+`classification` (`business | platform | shared-infra | unresolved`), `confidence`
+(`high | medium | low`), and `aliases`. Every candidate ID from
+`module-candidates.json` appears exactly once with `disposition`
+(`standalone | merged | platform | shared-infrastructure | excluded | unresolved`),
+`module_ids`, and a short evidence-bounded reason. The first four dispositions map to
+exactly one module; excluded/unresolved map to none. Then run the wrapper's
+`finalize-module-map`; do not hand-edit the system model.
+An evidence-backed boundary not surfaced mechanically may be added only through
+`additional_candidates` with a stable `mc-added-<slug>` ID, repo ID, value, and at
+least one full citation. It is then subject to the same exactly-once disposition rule;
+the report still states mechanical candidate accounting separately from added judgment.
 
 1. **Form modules from candidates.** Merge/split the preliminary candidates
    using the signals: route-prefix cohesion, folder cohesion, table
@@ -285,6 +310,9 @@ data-ownership backing (per-store writers/readers with the distinction reached
 on the ladder). Findings here KEEP their `priority` and `suggested_direction` —
 the dev-facing detail `overview.md` omits. Generate its table of contents LAST.
 Topology lives in `project-map.md` — link, don't duplicate.
+Every source citation uses the full recorded revision; abbreviated revisions are
+allowed only in the PM-facing snapshot column explicitly labeled short HEAD, never
+inside an evidence citation.
 
 ### 6b. `overview.md` (template: templates/overview.md)
 
@@ -374,6 +402,8 @@ exact order (they MUST match the template headings and the SKILL.md step-6 list)
 
 ## After writing
 
-Update `run-state.json` stages (`map: done`, `overview: done`), set the
-project's `latest_completed` pointer, and offer acceptance (one word) unless
-the run is inspection-only.
+Run `audit-overview`; only a passing audit permits `overview: done`. Stage state is
+changed only through the wrapper commands (never by editing `run-state.json`): lens
+outputs checked → mark `findings`; `finalize-module-map` passed → mark `map`; final
+audit passed → mark `overview` (which sets `latest_completed`). Then offer acceptance
+(one word) unless the run is inspection-only.

@@ -89,10 +89,8 @@ class LivenessReport:
     astgrep: dict = field(default_factory=astgrep.unavailable_provenance)
 
     def calls_by_base(self) -> dict:
-        """The reliable migration ledger: how many distinct paths the frontend
-        calls per base identifier (mainApi vs appRunnerApi vs ...). Answers
-        'which backend is the UI actually using' without needing mount
-        prefixes."""
+        """Static-reference ledger: distinct frontend call paths per configured
+        base identifier. It establishes code references, never runtime use."""
         by_base: dict[str, set] = {}
         for c in self.ui_calls:
             by_base.setdefault(c.base, set()).add("/".join(_norm_segments(c.path)))

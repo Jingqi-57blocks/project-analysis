@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import sys
@@ -19,12 +20,25 @@ from .targetspec import TargetSpec
 
 
 def _record_summary(out: Path, results: list[SignalResult]) -> None:
+    manifests: dict[tuple[str, str, str], list[str]] = {}
+    for path in sorted(out.glob("*.manifest.json")):
+        if path.name.endswith(".manifest.normalized.json"):
+            continue
+        try:
+            doc = json.loads(path.read_text("utf-8"))
+            repo_id = (doc.get("repos") or [{}])[0].get("repo_id", "")
+            key = (doc.get("tool", ""), repo_id, doc.get("status", ""))
+            manifests.setdefault(key, []).append(path.name)
+        except (OSError, ValueError, KeyError, IndexError):
+            continue
     payload = {
         "aggregate_status": aggregate([x.status for x in results]).value,
         "signals": [
             {"tool": x.tool, "repo_id": x.repo_id, "status": x.status.value,
              "reason": x.reason,
-             "view": x.view_path.name if x.view_path else ""}
+             "view": x.view_path.name if x.view_path else "",
+             "manifest": manifests.get(
+                 (x.tool, x.repo_id, x.status.value), [""])[0]}
             for x in sorted(results, key=lambda r: (r.repo_id, r.tool))
         ],
     }
@@ -183,6 +197,24 @@ def parser() -> argparse.ArgumentParser:
              "+ discovery-report.json + callgraph/); import maps under imports/ "
              "are consumed when present")
     sysmodel.add_argument("--run", required=True, help="completed run directory")
+    prepare = sub.add_parser(
+        "prepare-overview",
+        help="run/resume the authoritative deterministic overview path into its "
+             "canonical artifact locations, then write capabilities, audit, and "
+             "bounded synthesis input")
+    prepare.add_argument("--run", required=True, help="overview run directory")
+    prepare.add_argument("--include-network", action="store_true",
+                         help="explicitly authorize network-capable signal lanes")
+    finalize_map = sub.add_parser(
+        "finalize-module-map",
+        help="validate complete candidate dispositions in module-map.json, "
+             "materialize inferred module nodes, and refresh synthesis input")
+    finalize_map.add_argument("--run", required=True, help="overview run directory")
+    audit_overview = sub.add_parser(
+        "audit-overview",
+        help="audit final structured artifacts and reports before marking the "
+             "overview stage done")
+    audit_overview.add_argument("--run", required=True, help="overview run directory")
     exp = sub.add_parser(
         "export",
         help="export a completed run in a chosen format (deterministic; no "
@@ -389,6 +421,133 @@ def _system_model(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_object(path: Path) -> dict:
+    value = json.loads(path.read_text("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path.name} must contain a JSON object")
+    return value
+
+
+def _prepare_overview(args: argparse.Namespace) -> int:
+    """Authoritative deterministic overview preparation (57B-47).
+
+    Existing canonical stage outputs are validated and reused; missing stages
+    run exactly once.  Producer paths never depend on model effort.
+    """
+    from . import (capabilities, coverage_render, lifecycle, module_map,
+                   overview_audit, synthesis_input)
+    from .callgraph import emit as cg_emit
+    from .depmap import emit as dm_emit
+    from .system_model.assemble import assemble, dump
+
+    run = Path(args.run).expanduser().resolve()
+    spec = TargetSpec.load(run / "targets.json")
+    use_existing_run_directory(run, spec.repos)
+    state = lifecycle.RunState.load(run)
+    stale = state.staleness()
+    if stale:
+        raise ValueError("run is stale; mint a new run: " + "; ".join(stale))
+    if spec.repos and not os.environ.get("WORKSPACE_ROOT"):
+        os.environ["WORKSPACE_ROOT"] = os.path.commonpath(
+            [str(Path(repo.path).expanduser().resolve()) for repo in spec.repos])
+
+    signals = run / "signals"
+    signal_summary = signals / "run-summary.json"
+    if signal_summary.is_file():
+        _load_object(signal_summary)
+        print("signals: reused canonical run-summary.json")
+    else:
+        if signals.exists():
+            raise ValueError("signals/ exists without run-summary.json; refuse partial reuse")
+        out = prepare_output_directory(signals, spec.repos)
+        results = _sweep(args, spec, out)
+        _record_summary(out, results)
+        print(f"signals: wrote {len(results)} result(s)")
+
+    need_callgraph = not (run / "callgraph-coverage.json").is_file()
+    if not need_callgraph:
+        _load_object(run / "callgraph-coverage.json")
+        print("callgraph: reused canonical coverage")
+    elif (run / "callgraph").exists():
+        raise ValueError("callgraph/ exists without canonical coverage; refuse partial reuse")
+
+    dep_marker = run / "imports" / "depmap-coverage.json"
+    need_depmap = not dep_marker.is_file()
+    if not need_depmap:
+        _load_object(dep_marker)
+        print("dependency-map: reused canonical coverage")
+    elif (run / "imports").exists():
+        raise ValueError("imports/ exists without canonical coverage; refuse partial reuse")
+
+    # These producers read the same immutable targets but own disjoint output
+    # trees, so running them together is safe and avoids a second cold traversal.
+    jobs = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        if need_callgraph:
+            jobs["callgraph"] = pool.submit(
+                cg_emit.run_callgraph, spec, run, args.scan_date,
+                allow_network=args.include_network)
+        if need_depmap:
+            jobs["dependency-map"] = pool.submit(
+                dm_emit.run_depmap, spec, run, args.scan_date,
+                allow_network=args.include_network)
+        completed = {name: future.result() for name, future in jobs.items()}
+    for name in ("callgraph", "dependency-map"):
+        if name in completed:
+            print(f"{name}: wrote {len(completed[name].repos)} lane result(s)")
+
+    model = assemble(run)
+    dump(model, run)
+    model_doc = model.to_dict()
+    module_map.write_candidates(run, model_doc)
+    capabilities_path = capabilities.write(run)
+    coverage_path = coverage_render.write(run)
+    packet_path = synthesis_input.write(run)
+    audit_path = overview_audit.write(run)
+    audit = _load_object(audit_path)
+    capability_doc = _load_object(capabilities_path)
+    print(f"wrote {capabilities_path}")
+    print(f"wrote {coverage_path}")
+    print(f"wrote {packet_path}")
+    print(f"audit: {audit['status']} ({audit['failed_count']} failed checks)")
+    if audit["status"] == "passed" and capability_doc["aggregate_status"] != "failed":
+        if state.stages.get("signals") != "done":
+            state.mark("signals")
+            state.save(run)
+        print(f"signals checkpoint: done; next: {state.next_stage() or '(complete)'}")
+        return 0
+    return 3
+
+
+def _finalize_module_map(args: argparse.Namespace) -> int:
+    from . import module_map, module_render, overview_audit, synthesis_input
+    from .system_model.assemble import assemble, dump
+    run = Path(args.run).expanduser().resolve()
+    module_map.validate(run)
+    model = assemble(run)
+    dump(model, run)
+    module_render.write(run)
+    synthesis_input.write(run)
+    audit_path = overview_audit.write(run, require_module_map=True)
+    audit = _load_object(audit_path)
+    modules = model.coverage["modules"]["counts"].get("modules", 0)
+    print(f"module map: {modules} inferred module node(s)")
+    print(f"audit: {audit['status']} ({audit['failed_count']} failed checks)")
+    return 0 if audit["status"] == "passed" else 3
+
+
+def _audit_overview(args: argparse.Namespace) -> int:
+    from . import overview_audit
+    run = Path(args.run).expanduser().resolve()
+    out = overview_audit.write(run, require_module_map=True, require_reports=True)
+    result = _load_object(out)
+    print(f"audit: {result['status']} ({result['failed_count']} failed checks)")
+    for row in result["checks"]:
+        if row["status"] == "fail":
+            print(f"failed {row['check']}: {row['detail']}")
+    return 0 if result["status"] == "passed" else 3
+
+
 def _find_skill_root(run: Path) -> Path:
     """Locate the skill root above a run dir (the dir holding SKILL.md).
 
@@ -477,6 +636,12 @@ def main(argv: list[str] | None = None) -> int:
             return _lifecycle_cmd(args)
         if args.command == "system-model":
             return _system_model(args)
+        if args.command == "prepare-overview":
+            return _prepare_overview(args)
+        if args.command == "finalize-module-map":
+            return _finalize_module_map(args)
+        if args.command == "audit-overview":
+            return _audit_overview(args)
         if args.command == "export":
             return _export(args)
         if not args.out:

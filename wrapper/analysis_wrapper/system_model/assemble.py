@@ -16,6 +16,8 @@ from pathlib import Path
 
 from .. import __version__
 from ..depmap import emit as depmap_emit
+from ..executor import replace_artifact_text
+from .. import module_map
 from ..sanitize import sanitize_text
 from ..targetspec import TargetSpec
 from . import (coverage, from_callgraph, from_discovery, from_go_imports,
@@ -64,10 +66,19 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
     imports = _merge_imports(spec,
                              from_imports.load(builder, run, heads),
                              from_go_imports.load(builder, run, heads))
+    dep_coverage = run / "imports" / "depmap-coverage.json"
+    if dep_coverage.is_file():
+        try:
+            imports["coverage_repos"] = json.loads(
+                dep_coverage.read_text("utf-8")).get("repos", [])
+        except (OSError, ValueError):
+            imports["coverage_repos"] = [{"status": "failed"}]
+    modules = module_map.load_into(
+        builder, run, report.get("project_id", ""))
     builder.resolve()
 
     resolved_scan_date = _resolve_scan_date(run, cg, scan_date)
-    cov = coverage.build(spec, report, builder, cg, disc, imports,
+    cov = coverage.build(spec, report, builder, cg, disc, imports, modules,
                          scan_date=resolved_scan_date)
     return SystemModel(
         scan_date=resolved_scan_date,
@@ -79,7 +90,7 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
 def dump(model: SystemModel, run_dir: str | Path) -> Path:
     """Serialize ``model`` (sanitized) to ``<run_dir>/system-model.json``."""
     out = Path(run_dir).expanduser().resolve() / FILENAME
-    out.write_text(sanitize_text(model.to_json()), "utf-8")
+    replace_artifact_text(out, sanitize_text(model.to_json()))
     return out
 
 

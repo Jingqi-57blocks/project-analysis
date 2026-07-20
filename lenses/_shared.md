@@ -1,8 +1,8 @@
 # Shared lens rules (read first, apply to every lens)
 
 You are one analysis lens of Project Analysis. You receive **bounded signal
-views** (`signals/*.view.txt`), their manifests, and the discovery report
-(`discovery-report.json`) for a set of repositories. You return **findings** —
+views** (`signals/*.view.txt`), their manifests, and the canonical
+`synthesis-input.json` for a set of repositories. You return **findings** —
 nothing else. You never modify anything, never run tools yourself, and never
 read `signals/raw/` (contained, off-limits).
 
@@ -11,9 +11,10 @@ read `signals/raw/` (contained, off-limits).
 ```
 claim:               one falsifiable sentence — the problem, not the metric
 lens:                <lens name>
-affected_modules:    [candidate module IDs from module_candidates.md]
-evidence:            - <citation> — one line of what it shows
-                     - <citation> — ... (≥2 independent signals for high confidence)
+affected_modules:    [candidate IDs from module-candidates.json; re-keyed after map]
+evidence:            - <citation> | basis=<basis> — one line of what it shows
+                     - <citation> | basis=<basis> — ... (≥2 independent signals for high confidence)
+evidence_basis:      [the distinct bases used by the evidence rows]
 impact:              what this costs when someone changes/operates this code
 priority:            critical | high | medium | low   (impact, likelihood/exposure,
                      change frequency where relevant)
@@ -29,6 +30,10 @@ suggested_direction: a direction, not a prescription
 - Tool-derived metrics (complexity, duplication, churn, counts): cite the view —
   `signals/<view-file>:<line-or-section>`.
 - NEVER cite `signals/raw/`. A claim you cannot cite is a claim you do not make.
+- Evidence basis is exactly one of `static-reference | declaration | configuration |
+  history | inferred-linkage | runtime-observation | user-confirmed`. This static
+  overview normally has no `runtime-observation`; never assign it merely because a
+  call path or configuration was found.
 
 ## Rules that override everything else
 

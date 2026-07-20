@@ -20,6 +20,9 @@ python3 -m analysis_wrapper.bootstrap --dev    # also install pytest
 # All applicable local tools; add --include-network only with explicit approval
 .venv/bin/project-analysis-wrapper --targets targets.json --out output/run/signals sweep
 
+# Canonical overview preparation (run dir must first be minted by `new-run`)
+.venv/bin/project-analysis-wrapper prepare-overview --run output/project/overview/run-id
+
 # Tests also use the isolated interpreter; shell activation is unnecessary
 .venv/bin/python -m pytest
 ```
@@ -43,6 +46,10 @@ The output directory must not already exist and must be outside every target rep
 Raw stdout/stderr stays under the self-gitignoring `signals/raw/` containment directory.
 Only `*.view.txt`, manifests, and the run summary may be read by an agent. The normalized
 manifest excludes volatile fields and supports byte-for-byte deterministic comparison.
+
+`run` and `sweep` are low-level diagnostic commands. A real overview must use
+`prepare-overview`, which owns the deterministic producer order and canonical artifact
+locations; invoking the individual producers manually is not an alternate overview path.
 
 PyDriller is primary for history analysis and bootstrap installs the pinned 2.10
 release into the virtual environment. If the wrapper is deliberately run outside

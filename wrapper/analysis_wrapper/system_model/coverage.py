@@ -1,7 +1,7 @@
 """Per-producer coverage metadata for the system model (57B-31).
 
 Every producer gets its OWN partition recording status
-(``complete|partial|failed|unavailable``), the caps the upstream producer
+(``complete|partial|failed|unavailable|not-applicable``), the caps the upstream producer
 applies (file/byte/row/evidence), the source universe it drew from and what it
 deliberately omitted, and the unresolved relationships it preserved. This is
 where the canonical-completeness rule is enforced in the open: a partition fed
@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from .builder import ModelBuilder
 
-PARTITION_STATES = ("complete", "partial", "failed", "unavailable")
+PARTITION_STATES = ("complete", "partial", "failed", "unavailable", "not-applicable")
 
 
 @dataclass
@@ -62,13 +62,18 @@ def _worst(states: list[str]) -> str:
         return "unavailable"
     if any(s == "failed" for s in states):
         return "failed"
-    if any(s in ("partial", "unavailable") for s in states):
+    active = [s for s in states if s != "not-applicable"]
+    if not active:
+        return "not-applicable"
+    if all(s == "unavailable" for s in active):
+        return "unavailable"
+    if any(s in ("partial", "unavailable") for s in active):
         return "partial"
     return "complete"
 
 
 def build(spec, report: dict, builder: ModelBuilder, cg: dict,
-          disc: dict, imports: dict, scan_date: str = "") -> dict:
+          disc: dict, imports: dict, modules: dict, scan_date: str = "") -> dict:
     """Assemble every coverage partition. ``cg`` is the from_callgraph summary,
     ``disc`` the from_discovery summary, ``imports`` the from_imports summary,
     ``scan_date`` the model's resolved scan date (empty when it could not be
@@ -77,14 +82,14 @@ def build(spec, report: dict, builder: ModelBuilder, cg: dict,
     parts = {
         "repositories": _repositories(builder, spec).to_dict(),
         "files": _files(builder).to_dict(),
-        "symbols_and_calls": _calls(builder, cg).to_dict(),
+        "symbols_and_calls": _calls(builder, cg, spec).to_dict(),
         "routes": _routes(builder, report, disc).to_dict(),
         "tables": _tables(builder, blocks).to_dict(),
         "access_model": _access(blocks).to_dict(),
         "external_boundaries": _boundaries(builder, blocks).to_dict(),
         "deployable_units": _deploy(builder, blocks).to_dict(),
         "dependency_imports": _imports(builder, imports).to_dict(),
-        "modules": _modules().to_dict(),
+        "modules": _modules(modules).to_dict(),
     }
     if not scan_date:
         parts["symbols_and_calls"]["notes"].append(
@@ -112,7 +117,15 @@ def _files(builder: ModelBuilder) -> Partition:
                         "an evidence-grounded set, not a full filesystem inventory.")
 
 
-def _calls(builder: ModelBuilder, cg: dict) -> Partition:
+def _calls(builder: ModelBuilder, cg: dict, spec) -> Partition:
+    from ..callgraph import emit as callgraph_emit
+    eligible = [r.repo_id for r in spec.repos if callgraph_emit.select_lanes(r)]
+    if not eligible:
+        return Partition(
+            status="not-applicable", producers=["callgraph"],
+            node_kinds=["symbol"], edge_types=["call"],
+            counts={"symbols": 0, "call_edges": 0, "repos_eligible": 0},
+            source_universe="no target repository has a supported call-graph lane.")
     if not cg.get("present"):
         return Partition(
             status="unavailable", producers=["callgraph"],
@@ -148,6 +161,14 @@ def _calls(builder: ModelBuilder, cg: dict) -> Partition:
 
 def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
     if not disc.get("routes_present"):
+        registered = sum(len(block.get("module_signals", {}).get("routes", []))
+                         for block in report.get("repos", []))
+        if registered == 0:
+            return Partition(
+                status="not-applicable", producers=["discovery/liveness"],
+                node_kinds=["route"], edge_types=["route-linkage"],
+                counts={"routes": 0},
+                source_universe="complete discovery observed no registered route surface.")
         note = ("no route_liveness artifact in the run dir (needs exactly one "
                 "detectable frontend + backends). The capped module_signals.routes "
                 "summary is deliberately NOT used as a canonical source, so no "
@@ -209,11 +230,14 @@ def _tables(builder: ModelBuilder, blocks: dict) -> Partition:
             sql_incomplete += 1
     evidence_capped = _capped(blocks, "table_evidence")
     if available == 0:
-        status = "failed" if total else "unavailable"
+        status = "unavailable"
     elif available < total or sql_incomplete or evidence_capped:
         status = "partial"
     else:
         status = "complete"
+    if (status == "complete" and _node_count(builder, "data-store") == 0
+            and unresolved_total == 0):
+        status = "not-applicable"
     notes = ["tables come from the UNCAPPED table_evidence map (deduped by name), "
              "not the capped module_signals.tables summary."]
     if available < total:
@@ -315,6 +339,15 @@ def _imports(builder: ModelBuilder, imports: dict) -> Partition:
     producers = ["dependency-cruiser", "go-list"]
     expected = imports.get("expected_repos", [])
     mapped = imports.get("mapped_repos", imports.get("repos", []))
+    producer_states = [row.get("status", "unavailable")
+                       for row in imports.get("coverage_repos", [])]
+    if not expected:
+        return Partition(
+            status="not-applicable", producers=producers,
+            node_kinds=["file"], edge_types=["dependency"],
+            counts={"dependency_edges": 0, "repos_with_maps": 0,
+                    "repos_eligible": 0},
+            source_universe="no target repository has a supported dependency-map lane.")
     if not imports.get("present"):
         note = ("import/dependency edges omitted (not fabricated). Run the "
                 "dependency-map stage to populate imports/<repo_id>."
@@ -322,8 +355,9 @@ def _imports(builder: ModelBuilder, imports: dict) -> Partition:
         if expected:
             note += (f" {len(expected)} dependency-map-eligible repo(s) produced "
                      f"no map: {', '.join(expected)}.")
+        absent_status = _worst(producer_states) if producer_states else "partial"
         return Partition(
-            status="partial", producers=producers,
+            status=absent_status, producers=producers,
             node_kinds=["file"], edge_types=["dependency"],
             counts={"dependency_edges": 0, "repos_with_maps": 0,
                     "repos_eligible": len(expected)},
@@ -338,12 +372,12 @@ def _imports(builder: ModelBuilder, imports: dict) -> Partition:
              "imports are counted, not emitted as edges.",
              "dependency-cruiser is file→file (JS/TS); go list is package→package "
              "(Go) — both the `dependency` type, kept SEPARATE from `call` edges."]
-    status = "complete"
+    status = _worst(producer_states) if producer_states else "complete"
     if missing:
-        status = "partial"
+        status = "failed" if status == "failed" else "partial"
         notes.append(f"{len(missing)} eligible repo(s) produced NO dependency map "
                      f"(partial): {', '.join(missing)}.")
-    elif unresolved:
+    elif unresolved and status != "failed":
         status = "partial"
         notes.append("external/third-party specifiers remain unresolved (expected "
                      "wherever a repo has third-party imports) — disclosed as partial.")
@@ -360,7 +394,17 @@ def _imports(builder: ModelBuilder, imports: dict) -> Partition:
         notes=notes)
 
 
-def _modules() -> Partition:
+def _modules(summary: dict) -> Partition:
+    if summary.get("present"):
+        return Partition(
+            status="complete", producers=["synthesis/module-map"],
+            node_kinds=["module"], edge_types=["containment"],
+            counts={"modules": summary.get("modules", 0),
+                    "module_candidates": summary.get("candidates", 0),
+                    "candidate_dispositions": summary.get("dispositions", {})},
+            source_universe="every mechanically surfaced module candidate in "
+                            "module-candidates.json is dispositioned exactly once; "
+                            "module boundaries remain inferred, not mechanically proven.")
     return Partition(
         status="unavailable", producers=["synthesis"], node_kinds=["module"],
         edge_types=["containment"], counts={"modules": 0},

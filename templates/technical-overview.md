@@ -89,7 +89,7 @@ findings (one root cause across repos) appear ONCE with per-repo evidence rows b
 Each rendered from the shared finding shape:}}
 
 ### {{n}}. {{claim}} — `{{priority}}`
-- **Lens:** {{lens}} · **Confidence:** {{confidence}}
+- **Lens:** {{lens}} · **Confidence:** {{confidence}} · **Evidence basis:** {{the distinct bases used}}
 - **Affected modules:** {{module_ids}}
 - **Evidence:** {{citations_with_one_line_each}}
 - **Impact:** {{why_this_matters}}
@@ -109,15 +109,16 @@ never "healthy". A cell whose signal did not run or resolve is `unknown`.
 
 The mechanical accounting of EVERY integration candidate: rows out = candidates in
 (group same-system candidates into one row). Disposition answers "does THIS codebase
-actively integrate with that system?" — not "did we analyze the external system's own
-source". Counts must sum to the candidate total.
+contain an implementation/configuration for that integration?" — not "is it enabled or
+exercised in production", and not "did we analyze the external system's own source".
+Counts must sum to the candidate total.
 
 | candidate | signal kind(s) | disposition | evidence |
 |---|---|---|---|
 | {{system}} | {{one_or_more_of: import / client_init / outbound_endpoint / config / env / oauth_provider / ci_resource — or `dependency-only` when dependency/lockfile entries are the ONLY signals}} | {{included / unresolved / excluded}} | {{citations}} |
 
-- `included` — client init, outbound calls, or config binding it into a live path
-  (production reachability stays unknowable per the disclaimer; that does NOT demote it).
+- `included` — client initialization, outbound call sites, or configuration structurally
+  bound to such code (production reachability stays unknowable per the disclaimer).
 - `unresolved` — signals exist but active use is unproven (dependency-only, env name
   without a call site, orphaned config). Never counted in `excluded`.
 - `excluded` — not an external integration (frameworks/libraries, CI base images,
@@ -127,6 +128,12 @@ Dependency-only or lockfile-only signals never prove an active integration; such
 `unresolved` unless corroborated. One disposition per candidate — no double-counting.
 
 ## Lens coverage
+
+{{copy `coverage-summary.md` here EXACTLY, including its BEGIN/END markers. This block is
+wrapper-rendered from `capabilities.json`; never translate, summarize, or edit it.}}
+
+The lens table below adds interpretive coverage detail; it cannot contradict the
+machine-rendered capability states above.
 
 A lens's status is the WORST status among its REQUIRED signals
 (`failed > partial > skipped > complete`); the lens→signal mapping comes from the lens

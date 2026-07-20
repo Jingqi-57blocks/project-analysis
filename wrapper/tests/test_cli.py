@@ -4,8 +4,11 @@ import argparse
 from pathlib import Path
 
 from analysis_wrapper.cli import _sweep, main
+from analysis_wrapper.callgraph.contract import CoverageReport, RepoCoverage
 from analysis_wrapper.depmap import emit as dm_emit
-from analysis_wrapper.depmap.contract import DepMapReport
+from analysis_wrapper.depmap.contract import DepMapReport, RepoDepCoverage
+from analysis_wrapper.executor import SignalResult
+from analysis_wrapper import lifecycle
 from analysis_wrapper.status import Status
 from analysis_wrapper.targetspec import TargetSpec
 from analysis_wrapper.tooldefs import ToolDef
@@ -119,3 +122,78 @@ def test_sweep_records_unauthorized_network_lanes_as_skipped(monkeypatch, tmp_pa
     assert len(results) == 1
     assert results[0].status is Status.SKIPPED
     assert "explicit authorization" in results[0].reason
+
+
+def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path, target):
+    run = tmp_path / "skill" / "output" / "sample" / "overview" / "run-1"
+    run.mkdir(parents=True)
+    TargetSpec([target], produced_by="cli-test").save(run / "targets.json")
+    discovery = {
+        "project_id": "sample", "workspace_root": str(tmp_path),
+        "repos": [{"repo_id": target.repo_id,
+                   "provenance": {"is_git": True, "head": target.git.head},
+                   "stacks": {"stacks": ["js"], "frameworks": [],
+                              "analysis_roots": [], "evidence": []},
+                   "package_manager": {"name": "npm", "lockfile": "", "evidence": ""},
+                   "module_signals": {"folders": [], "routes": [], "tables": [],
+                                      "api_configs": [], "notes": []},
+                   "table_evidence": {"available": False, "tables": {}, "notes": [],
+                                      "sql_coverage": {}},
+                   "access_model": {"available": False},
+                   "integration_evidence": {"available": False},
+                   "deployable_units": {"status": "unknown", "units": [], "notes": []}}],
+        "not_targeted": [], "reduced_coverage_targets": [],
+        "route_liveness": None, "role_catalog_by_repo": {},
+    }
+    (run / "discovery-report.json").write_text(json.dumps(discovery), "utf-8")
+    state = lifecycle.RunState.create("run-1", "sample", TargetSpec([target]))
+    state.mark("discovery")
+    state.save(run)
+
+    def sweep(_args, _spec, out):
+        view = Path(out) / f"fixture-{target.repo_id}.view.txt"
+        view.write_text("items: 0\n", "utf-8")
+        (Path(out) / f"fixture-{target.repo_id}.manifest.json").write_text(json.dumps({
+            "tool": "fixture", "status": "complete",
+            "repos": [{"repo_id": target.repo_id}],
+        }), "utf-8")
+        return [SignalResult(
+            tool="fixture", repo_id=target.repo_id, status=Status.COMPLETE,
+            reason="", manifest=None, raw_path=None, view_path=view)]
+    monkeypatch.setattr("analysis_wrapper.cli._sweep", sweep)
+
+    def callgraph(_spec, out, scan_date, allow_network=False):
+        (Path(out) / "callgraph").mkdir()
+        (Path(out) / "callgraph" / f"{target.repo_id}.jsonl").write_text("", "utf-8")
+        report = CoverageReport(scan_date=scan_date, repos=[RepoCoverage(
+            repo_id=target.repo_id, lang="js", status="complete",
+            tool="fixture", candidates_by_ext={}, analyzed_by_ext={})])
+        (Path(out) / "callgraph-coverage.json").write_text(report.to_json(), "utf-8")
+        return report
+
+    def depmap(_spec, out, scan_date, allow_network=False):
+        imports = Path(out) / "imports"
+        imports.mkdir()
+        map_name = f"{target.repo_id}.depcruise.json"
+        (imports / map_name).write_text('{"modules": []}\n', "utf-8")
+        report = DepMapReport(scan_date=scan_date, repos=[RepoDepCoverage(
+            repo_id=target.repo_id, lane="js", status="complete",
+            tool="fixture", map_file=map_name, units=0)])
+        (imports / "depmap-coverage.json").write_text(report.to_json(), "utf-8")
+        return report
+
+    monkeypatch.setattr("analysis_wrapper.callgraph.emit.run_callgraph", callgraph)
+    monkeypatch.setattr("analysis_wrapper.depmap.emit.run_depmap", depmap)
+    argv = ["--scan-date", "2026-07-20", "prepare-overview", "--run", str(run)]
+    assert main(argv) == 0
+    expected = {"signals/run-summary.json", "callgraph-coverage.json",
+                "imports/depmap-coverage.json", "system-model.json",
+                "capabilities.json", "module-candidates.json",
+                "coverage-summary.md", "synthesis-input.json",
+                "consistency-audit.json"}
+    assert all((run / rel).exists() for rel in expected)
+    assert not (run / "signals" / "callgraph-coverage.json").exists()
+    first = (run / "synthesis-input.json").read_bytes()
+    assert main(argv) == 0
+    assert (run / "synthesis-input.json").read_bytes() == first
+    assert lifecycle.RunState.load(run).stages["signals"] == "done"

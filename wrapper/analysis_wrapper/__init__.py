@@ -8,10 +8,10 @@ One component, separate concerns:
   tooldefs   — data-driven tool definitions (plain data, not a plugin system)
   executor   — safe subprocess execution, classification, immutability check
 
-Boundary rule (canonical, plan §2.7): this package invokes allowlisted tools,
-applies safe arguments, redacts, bounds output, and records manifests. It never
-interprets findings, validates documents, scores report quality, or decides
-whether a report passes.
+Boundary rule: this package invokes allowlisted tools, applies safe arguments,
+redacts, bounds output, records manifests, and validates STRUCTURED stage
+contracts. It never interprets business prose, scores diagnostic quality, or
+decides whether a diagnosis is correct.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -12,11 +12,8 @@ topology: modules and their boundaries, how they connect, what data they share, 
 external systems on the boundary. A simplified version is embedded in `overview.md`; the
 per-candidate integration disposition and all findings are in `technical-overview.md`.
 
-## Modules
-
-| module-id | name | classification | repos / roots | evidence | confidence | aliases |
-|---|---|---|---|---|---|---|
-| `{{module_id}}` | {{name}} | {{business / platform / shared-infra / unresolved}} | {{repo_relative_roots}} | {{citations}} | {{high/medium/low}} | {{prior_ids_or_none}} |
+{{copy `module-summary.md` here EXACTLY, including its BEGIN/END markers. This table is
+wrapper-rendered from the validated `module-map.json`; never translate or edit it.}}
 
 - Module IDs are stable slugs preserved across runs; renames/merges are recorded here as
   aliases, never by dropping the old ID.
@@ -54,21 +51,21 @@ with citations.
 |---|---|---|---|---|---|
 | {{table_or_store}} | {{module_ids}} | {{module_ids}} | {{declaration / read / write / join-reference / same-name-only / unresolved-dynamic}} | {{observed/inferred/unresolved}} | {{citations}} |
 
-## Backend liveness (which routes the frontend actually calls)
+## Static frontend-to-backend route references
 
 From `discovery-report.json:route_liveness` (present only for a UI + backend
 workspace). The **call ledger** is the reliable signal — it answers which
-backend the frontend actually uses; the per-route rows are best-effort (leaf
+backend routes the frontend code references; the per-route rows are best-effort (leaf
 routes lack their router mount prefix, so `no-direct-path-match` is NOT an
 orphan list and nothing here is "dead").
 
-| backend | UI-called routes | distinct UI call paths (ledger) | reading |
+| backend | routes matched to static UI call paths | distinct static UI call paths (ledger) | reading |
 |---|---|---|---|
-| `{{repo}}` | {{ui_called_count}} | {{ledger_path_count_for_its_base}} | {{one line — e.g. "still a live backend: N UI paths" or "carries the bulk of UI call paths"}} |
+| `{{repo}}` | {{ui_called_count}} | {{ledger_path_count_for_its_base}} | {{one line — e.g. "N static UI call paths reference this backend"}} |
 
 {{when parallel implementations of the same capability exist: state plainly which
-domains still route to which implementation, citing the ledger. Caveat mount-prefix
-limits; never call a still-referenced service dead. This is the evidence behind the
+static call paths reference which implementation, citing the ledger. Caveat mount-prefix
+limits; never call a referenced service active, live, or dead. This is evidence behind the
 overview's system-evolution line — describe it generically (parallel implementation /
 partial replacement), never assume a "migration".}}
 

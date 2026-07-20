@@ -24,6 +24,7 @@ class ModelBuilder:
 
     def add_node(self, kind: str, key: list[str], *, label: str, status: str,
                  repo_id: str = "", producer: str = "", evidence: list[str] | None = None,
+                 evidence_basis: str | None = None,
                  confidence: float | None = None, attrs: dict | None = None) -> str:
         """Materialize (or merge into) a node identified by ``kind`` + ``key``.
 
@@ -38,6 +39,9 @@ class ModelBuilder:
                 repo_id=repo_id, key=list(key),
                 producers=[producer] if producer else [],
                 evidence=list(evidence or []),
+                evidence_basis=(evidence_basis or
+                                ("inferred-linkage" if status == "inferred"
+                                 else "static-reference")),
                 confidence=confidence, attrs=dict(attrs or {}))
             return node_id
         if producer and producer not in existing.producers:
@@ -69,6 +73,7 @@ class ModelBuilder:
 
     def add_edge(self, edge_type: str, src: str, dst: str, *, status: str,
                  producer: str = "", evidence: list[str] | None = None,
+                 evidence_basis: str | None = None,
                  confidence: float | None = None, attrs: dict | None = None,
                  discriminator: str = "") -> str:
         """Add (or merge) an edge. ``discriminator`` distinguishes parallel edges
@@ -87,6 +92,9 @@ class ModelBuilder:
             self._edges[edge_id] = Edge(
                 id=edge_id, type=edge_type, src=src, dst=dst, status=status,
                 producer=producer, evidence=list(evidence or []),
+                evidence_basis=(evidence_basis or
+                                ("inferred-linkage" if status == "inferred"
+                                 else "static-reference")),
                 confidence=confidence, attrs=dict(attrs or {}))
             return edge_id
         for cite in evidence or []:
@@ -96,6 +104,7 @@ class ModelBuilder:
 
     def add_unresolved_edge(self, edge_type: str, src: str, target_key: dict, *,
                             producer: str = "", evidence: list[str] | None = None,
+                            evidence_basis: str = "static-reference",
                             attrs: dict | None = None, discriminator: str = "") -> str:
         """Record a relationship whose target is not a materialized node. The
         edge is kept with ``status = unresolved`` and the raw target key, so the
@@ -107,6 +116,7 @@ class ModelBuilder:
             self._edges[edge_id] = Edge(
                 id=edge_id, type=edge_type, src=src, dst="", status="unresolved",
                 producer=producer, evidence=list(evidence or []),
+                evidence_basis=evidence_basis,
                 attrs=dict(attrs or {}), unresolved_target=dict(target_key))
         return edge_id
 

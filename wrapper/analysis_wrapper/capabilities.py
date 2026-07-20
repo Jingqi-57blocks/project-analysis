@@ -1,0 +1,215 @@
+"""Canonical capability accounting for overview preparation.
+
+The wrapper, not the synthesis model, decides which deterministic producers are
+applicable, where they write, and what state they reached.  The manifest is a
+small stable hand-off: effort may change interpretation, but cannot change the
+facts that were available to interpretation.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from .callgraph import emit as callgraph_emit
+from .depmap import emit as depmap_emit
+from .executor import replace_artifact_text
+from .sanitize import sanitize_text
+from .targetspec import TargetSpec
+
+SCHEMA_VERSION = "1.0.0"
+STATES = ("complete", "partial", "unavailable", "not-applicable", "failed")
+_SEVERITY = {
+    "complete": 0,
+    "not-applicable": 0,
+    "unavailable": 1,
+    "partial": 2,
+    "failed": 3,
+}
+
+
+def _read_json(path: Path, default: dict | None = None) -> dict:
+    try:
+        value = json.loads(path.read_text("utf-8"))
+    except FileNotFoundError:
+        return dict(default or {})
+    if not isinstance(value, dict):
+        raise ValueError(f"{path.name} must contain a JSON object")
+    return value
+
+
+def _status(rows: list[dict], *, applicable: bool) -> str:
+    if not applicable:
+        return "not-applicable"
+    if not rows:
+        return "failed"
+    values = [str(row.get("status", "failed")) for row in rows]
+    normalized = ["unavailable" if value == "skipped" else value for value in values]
+    unknown = [value for value in normalized if value not in STATES]
+    if unknown:
+        raise ValueError(f"unsupported producer status: {unknown[0]!r}")
+    if all(value == "unavailable" for value in normalized):
+        return "unavailable"
+    if any(value == "failed" for value in normalized):
+        return "failed"
+    if any(value in {"partial", "unavailable"} for value in normalized):
+        return "partial"
+    return "complete"
+
+
+def _artifact_rows(run: Path, paths: list[str]) -> tuple[list[str], list[str]]:
+    observed = [path for path in paths if (run / path).exists()]
+    missing = [path for path in paths if path not in observed]
+    return observed, missing
+
+
+def _record(capability_id: str, *, status: str, applicable: bool,
+            expected: list[str], run: Path, details: list[dict] | None = None,
+            reason: str = "") -> dict:
+    if status not in STATES:
+        raise ValueError(f"unsupported capability status: {status!r}")
+    observed, missing = _artifact_rows(run, expected)
+    return {
+        "capability_id": capability_id,
+        "applicable": applicable,
+        "status": status,
+        "reason": reason,
+        "expected_artifacts": expected,
+        "observed_artifacts": observed,
+        "missing_artifacts": missing,
+        "details": sorted(details or [], key=lambda row: (
+            str(row.get("repo_id", "")), str(row.get("lang", row.get("lane", ""))),
+            str(row.get("tool", "")))),
+    }
+
+
+def build(run_dir: str | Path) -> dict:
+    run = Path(run_dir).expanduser().resolve()
+    spec = TargetSpec.load(run / "targets.json")
+    report = _read_json(run / "discovery-report.json")
+    signal_summary = _read_json(run / "signals" / "run-summary.json")
+    callgraph = _read_json(run / "callgraph-coverage.json")
+    depmap = _read_json(run / "imports" / "depmap-coverage.json")
+
+    signal_rows = list(signal_summary.get("signals", []))
+    call_rows = list(callgraph.get("repos", []))
+    dep_rows = list(depmap.get("repos", []))
+    call_applicable = any(callgraph_emit.select_lanes(repo) for repo in spec.repos)
+    dep_applicable = any(depmap_emit.select_lanes(repo) for repo in spec.repos)
+
+    records = [
+        _record(
+            "discovery", status="complete", applicable=True,
+            expected=["targets.json", "discovery-report.json"], run=run,
+            details=[{"repo_id": repo.repo_id, "status": "complete"}
+                     for repo in spec.repos],
+        ),
+        _record(
+            "signals", status=_status(signal_rows, applicable=bool(spec.repos)),
+            applicable=bool(spec.repos),
+            expected=["signals/run-summary.json"], run=run,
+            details=signal_rows,
+            reason="no target repositories" if not spec.repos else "",
+        ),
+        _record(
+            "callgraph", status=_status(call_rows, applicable=call_applicable),
+            applicable=call_applicable,
+            expected=["callgraph-coverage.json", "callgraph"], run=run,
+            details=call_rows,
+            reason="no supported language lane" if not call_applicable else "",
+        ),
+        _record(
+            "dependency-map", status=_status(dep_rows, applicable=dep_applicable),
+            applicable=dep_applicable,
+            expected=["imports/depmap-coverage.json", "imports"], run=run,
+            details=dep_rows,
+            reason="no supported language lane" if not dep_applicable else "",
+        ),
+        _record(
+            "system-model", status=("complete" if (run / "system-model.json").is_file()
+                                    else "failed"),
+            applicable=True, expected=["system-model.json"], run=run,
+        ),
+    ]
+
+    # These capability rows describe project shape, not mandatory framework
+    # assumptions.  Legitimate zero results become not-applicable only when the
+    # corresponding producer completed its source universe.
+    repos = report.get("repos", [])
+    liveness_doc = report.get("route_liveness")
+    route_rows = (liveness_doc or {}).get("rows", [])
+    backend_ids = {block.get("repo_id", "") for block in repos
+                   if block.get("module_signals", {}).get("routes")}
+    any_registered_routes = bool(backend_ids)
+    frontend_ids = set()
+    for block in repos:
+        stacks = {str(item).lower()
+                  for item in block.get("stacks", {}).get("stacks", [])}
+        folders = set(block.get("module_signals", {}).get("folders", []))
+        # A Node/TS repository may be a frontend, a backend, or a full-stack
+        # unit.  Route registrations do not prove it has no UI, so retain it as
+        # UI-capable and report unavailable linkage when discovery could not
+        # establish the pair.  Go-only/backend-only workspaces remain genuinely
+        # not-applicable.
+        if stacks & {"js", "ts", "tsx", "javascript", "typescript"} \
+                and "src" in folders:
+            frontend_ids.add(block.get("repo_id", ""))
+    route_status = ("complete" if liveness_doc is not None else
+                    "unavailable" if any_registered_routes else "not-applicable")
+    records.append(_record(
+        "route-inventory", status=route_status,
+        applicable=route_status != "not-applicable", expected=[], run=run,
+        details=[{"repo_id": row.get("repo_id", ""), "status": row.get("status", "")}
+                 for row in route_rows],
+        reason=("no registered route surface was discovered" if route_status == "not-applicable"
+                else "no canonical detailed route inventory" if route_status == "unavailable"
+                else ""),
+    ))
+    ui_applicable = bool(frontend_ids and backend_ids)
+    ui_status = ("not-applicable" if not ui_applicable else
+                 "complete" if liveness_doc is not None else "unavailable")
+    records.append(_record(
+        "ui-route-linkage", status=ui_status, applicable=ui_applicable,
+        expected=[], run=run,
+        details=[{"repo_id": row.get("repo_id", ""), "status": row.get("status", "")}
+                 for row in route_rows],
+        reason=("project shape has no UI/backend pair" if not ui_applicable else
+                "canonical UI-to-route linkage artifact unavailable"
+                if ui_status == "unavailable" else ""),
+    ))
+    table_count = sum(len(block.get("table_evidence", {}).get("tables", {}))
+                      for block in repos)
+    table_producers_complete = bool(repos) and all(
+        block.get("table_evidence", {}).get("available") for block in repos)
+    table_status = ("complete" if table_count else
+                    "not-applicable" if table_producers_complete else "unavailable")
+    records.append(_record(
+        "data-model", status=table_status,
+        applicable=table_status != "not-applicable", expected=[], run=run,
+        details=[{"repo_id": block.get("repo_id", ""),
+                  "status": ("complete" if block.get("table_evidence", {}).get("available")
+                             else "unavailable"),
+                  "data_store_count": len(block.get("table_evidence", {}).get("tables", {}))}
+                 for block in repos],
+        reason="complete extraction observed no data-store declarations"
+               if table_status == "not-applicable" else "",
+    ))
+
+    aggregate_rows = [r for r in records if r["status"] != "not-applicable"]
+    aggregate_status = max((r["status"] for r in aggregate_rows),
+                           key=lambda value: _SEVERITY[value], default="failed")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "project_id": report.get("project_id", ""),
+        "scan_date": callgraph.get("scan_date") or depmap.get("scan_date") or "",
+        "aggregate_status": aggregate_status,
+        "capabilities": sorted(records, key=lambda row: row["capability_id"]),
+    }
+
+
+def write(run_dir: str | Path) -> Path:
+    run = Path(run_dir).expanduser().resolve()
+    out = run / "capabilities.json"
+    replace_artifact_text(
+        out, sanitize_text(json.dumps(build(run), indent=2, sort_keys=True) + "\n"))
+    return out

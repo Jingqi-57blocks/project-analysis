@@ -18,7 +18,10 @@ technical-overview.md and the module reports). It presents per-module conditions
 enough fidelity that the READER decides where to drill down; it never identifies or
 recommends which modules deserve a drill-down.
 Readability budget: ONE system diagram, at most 2–3 user journeys, at most 2–3
-change-impact paths, at most 5–7 findings. Main text carries NO source paths, NO raw
+change-impact paths, at most 5–7 findings, and ~2,500 prose words (tables/Mermaid
+excluded). Every required category remains represented: an inapplicable or unavailable
+category is one honest line, a large inventory is summarized here and remains complete
+in technical-overview.md, and a small project is never padded. Main text carries NO source paths, NO raw
 metrics, and NO tool names — every claim links to technical-overview.md, where the
 citations live; UI labels are quoted verbatim and module IDs may be parenthesized.
 Facts come from code, never invented, never inferred from a name. Run language governs

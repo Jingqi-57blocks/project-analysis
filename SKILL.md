@@ -195,17 +195,27 @@ anchored):
    branch, credential-redacted remote URL, HEAD timestamp, `git describe`, dirty detail,
    submodule pins, history completeness (shallow flag, oldest commit, commit count);
    run-level — analyzer version, model id, language, analyzed-at.
-2. **Preliminary module candidates** from routes, folder structure, table names, and
-   committed API config → `module_candidates.md`, marked preliminary. Integration
-   candidates are generated mechanically (imports, client initialization, outbound
-   endpoints, config/env names, OAuth providers, CI resources) with evidence and signal
-   kind(s) — no activity classification yet; a candidate whose only signals are
-   dependency/lockfile entries is labeled `dependency-only`.
-3. **Run tools once** through the wrapper (signals + per-signal manifests; network lanes
-   only with explicit authorization). Grouped lens agents analyze the bounded views and
-   return findings in the shared shape against candidate module IDs.
-4. **Finalize `project-map.md`** — follow `synthesis.md` step 4: module formation from
-   candidates, classification, stable IDs + aliases, relationship labels
+2. **Prepare deterministic evidence through ONE wrapper-owned path.** Run
+   `project-analysis-wrapper prepare-overview --run <run-dir>` (put global flags such as
+   `--since` before the subcommand; add `--include-network` only with explicit user
+   authorization). The wrapper owns the stage plan and canonical locations for signals,
+   call graph, dependency map, system model, `capabilities.json`,
+   `module-candidates.json`, `consistency-audit.json`, and `synthesis-input.json`.
+   Never invoke or relocate those producers manually. Resume by rerunning this command;
+   it reuses only validated canonical checkpoints.
+3. **Run the grouped lenses** against the identical bounded
+   `synthesis-input.json` plus the signal views named there. Return findings in the
+   shared shape against candidate IDs. Model effort may change diagnostic depth, not
+   deterministic capability coverage or the candidate universe.
+4. **Finalize the structured module map, then `project-map.md`.** First write
+   `module-map.json` using the contract in `synthesis.md`: every ID in
+   `module-candidates.json` appears exactly once in `candidate_dispositions`; module
+   rows carry stable IDs, classification, aliases, and confidence. Run
+   `project-analysis-wrapper finalize-module-map --run <run-dir>`; it refuses incomplete
+   accounting, materializes inferred module nodes in `system-model.json`, and renders
+   the exact `module-summary.md` block that `project-map.md` must copy. Then follow
+   `synthesis.md` step 4 for the human map: module formation from candidates,
+   classification, stable IDs + aliases, relationship labels
    (`observed | inferred | unresolved | user-confirmed`), external systems and
    referenced-but-not-analyzed endpoints, and the disposition of EVERY integration
    candidate (`included | unresolved | excluded`, evidence each, none silently dropped).
@@ -231,7 +241,14 @@ anchored):
    state, (16) coverage & unknowns. Its main text carries no source paths, raw metrics,
    or tool jargon — claims link to technical-overview.md. Synthesis reorganizes cited
    material — it never creates new uncited claims.
-7. **Offer acceptance** (sets the `current` pointer on the user's yes). Skip the offer
+7. **Audit before completion.** After lens outputs are checked, mark `findings`; after
+   `finalize-module-map` passes, mark `map`. Then write the reports and run
+   `project-analysis-wrapper audit-overview --run <run-dir>`. It validates structured
+   producer/consumer consistency, complete module accounting, full revision citations,
+   the exact machine-rendered capability block, and artifact containment without
+   matching business prose. Only after it passes mark `overview` done. Then offer
+   acceptance (sets the
+   `current` pointer on the user's yes). Skip the offer
    for inspection-only runs.
 8. **Export the HTML report (default).** After the markdown reports are written, run
    `project-analysis-wrapper export --run <run-dir> --skill-root <skill-root>` (format
@@ -288,7 +305,7 @@ observed code, surface the conflict in the report — never silently prefer eith
 ```
 SKILL.md            this file
 lenses/             lens prompt definitions (analysis dimensions)
-templates/          overview (PM primary), technical-overview, project-map, module_candidates, module-prd, module-health
+templates/          overview (PM primary), technical-overview, project-map, module-prd, module-health
 wrapper/            Python tool-execution wrapper (see wrapper/README.md)
 state/<project-id>/     pointers.json, confirmed_facts.md   (runtime, per target)
 output/<project-id>/    overview/<run-id>/, drilldown/<run-id>/   (runtime, per target)
@@ -310,17 +327,17 @@ first bootstrap on a machine. Analysis itself touches no network unless
 
 ```
 "${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-analysis-wrapper" \
-    --targets "${CLAUDE_SKILL_DIR}/output/<project-id>/overview/<run-id>/targets.json" \
-    --out "${CLAUDE_SKILL_DIR}/output/<project-id>/overview/<run-id>/signals" \
-    sweep
+    --since <YYYY-MM-DD> prepare-overview \
+    --run "${CLAUDE_SKILL_DIR}/output/<project-id>/overview/<run-id>"
 ```
 
 (If `CLAUDE_SKILL_DIR` is unset in your shell, substitute the absolute skill base
 directory announced when this skill loaded — never a relative path: relative paths
 resolve against the target workspace and would write analyzer artifacts into it.)
 
-- The `--out` directory must be new (the wrapper refuses to overwrite) and must live
-  under `<skill-dir>/output/` — never inside the target workspace.
+- The run directory is minted by `new-run`; `prepare-overview` owns every deterministic
+  subdirectory beneath it and refuses partial or relocated checkpoints. It must live
+  under `<skill-dir>/output/`, never inside the target workspace.
 - Network-capable tools (vulnerability scan, outdated-dependency check) run only with
   `--include-network`, which requires the user's explicit authorization for the run.
   Dependency hosts outside the default registries additionally require
