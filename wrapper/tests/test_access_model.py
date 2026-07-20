@@ -34,6 +34,30 @@ def test_signal_records_astgrep_version_and_drift(monkeypatch):
     assert d2["version_drift"] == "validated 0.44.1, found ast-grep 9.9.9"
 
 
+def test_capped_samples_are_independent_of_astgrep_result_order(monkeypatch, tmp_path):
+    probe = astgrep.Probe(version="ast-grep 0.44.1", path="/opt/x/ast-grep")
+    matches = [
+        astgrep.Match(rule_id="authz-check-ts", file=f"src/p{i:02d}.ts",
+                      line=i + 1, text=f"canUse({i})")
+        for i in range(12)
+    ] + [
+        astgrep.Match(rule_id="role-enum-ts", file="src/roles.ts", line=4,
+                      text="enum ProjectRole { Member }")
+    ]
+    current = list(matches)
+    monkeypatch.setattr(astgrep, "available", lambda: True)
+    monkeypatch.setattr(astgrep, "probe", lambda **_k: probe)
+    monkeypatch.setattr(astgrep, "scan", lambda *_a, **_k: list(current))
+
+    forward = access_model.generate(tmp_path, "sample").to_dict()
+    current[:] = reversed(current)
+    reversed_result = access_model.generate(tmp_path, "sample").to_dict()
+
+    assert forward == reversed_result
+    assert forward["authz_checks"]["count"] == 12
+    assert len(forward["authz_checks"]["sample"]) == 8
+
+
 @pytest.mark.skipif(not astgrep.available(), reason="ast-grep not installed")
 def test_locates_all_access_categories():
     d = access_model.generate(str(FIX), "acc-fix").to_dict()

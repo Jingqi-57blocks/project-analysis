@@ -63,6 +63,17 @@ def _bucket(matches, rule_ids: set[str]) -> dict:
             "sample": [f"{m.file}:{m.line}" for m in hits[:_SAMPLE_CAP]]}
 
 
+def _match_key(match) -> tuple:
+    """Stable ordering before any capped sample is taken.
+
+    ast-grep does not promise result order.  Sorting on repository-relative
+    source coordinates and structural identity keeps discovery-report.json
+    byte-stable without interpreting the matched business text.
+    """
+    return (match.file, match.line, match.rule_id, match.text,
+            tuple(sorted(match.vars.items())))
+
+
 def _find_policy_files(root: Path, tier2: set[str]) -> tuple[list[dict], bool]:
     found: list[dict] = []
     stack = [root]
@@ -111,8 +122,12 @@ def generate(repo_path: str | Path, repo_id: str, *,
             notes=["ast-grep unavailable: access-model view SKIPPED (fail-closed)"],
             astgrep=provenance)
     root = Path(repo_path).expanduser().resolve()
-    matches = [m for m in astgrep.scan(repo_path, [astgrep.RULES_DIR / _RULE])
-               if not (PurePosixPath(m.file).parts and PurePosixPath(m.file).parts[0] in tier2)]
+    matches = sorted(
+        (m for m in astgrep.scan(repo_path, [astgrep.RULES_DIR / _RULE])
+         if not (PurePosixPath(m.file).parts
+                 and PurePosixPath(m.file).parts[0] in tier2)),
+        key=_match_key,
+    )
 
     role_catalog: list[dict] = []
     seen_roles: set[tuple[str, str]] = set()
