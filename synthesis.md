@@ -364,7 +364,7 @@ exact order (they MUST match the template headings and the SKILL.md step-6 list)
 8. **Data ownership & lifecycle** — per IMPORTANT domain: source of truth,
    writers, readers, multi-service direct access, shared-via-API vs shared-DB,
    known lifecycle, coverage confidence; state the distinction reached on the
-   ladder (declaration / read / write / join-reference / same-name-only /
+   ladder (declaration / schema-write / read / write / join-reference / same-name-only /
    unresolved-dynamic). A name match ALONE is never confirmed shared persistence.
 9. **Background execution** — per job: trigger, owner, data, external calls,
    observed retry/idempotency/failure-recording/alerting. Defined ≠ active.

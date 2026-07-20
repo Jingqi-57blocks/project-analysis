@@ -19,6 +19,7 @@ from .targetspec import TargetSpec
 SCHEMA_VERSION = "1.0.0"
 _CITATION = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*)@([0-9a-fA-F]{7,40}):")
 _FENCE = re.compile(r"```.*?```", re.S)
+_HTML_ENTITY = re.compile(r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);")
 _CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _WORD = re.compile(r"\b[A-Za-z0-9][A-Za-z0-9'-]*\b")
 
@@ -244,6 +245,11 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
 
         overview = (run / "overview.md").read_text(
             "utf-8", errors="replace") if (run / "overview.md").is_file() else ""
+        entities = sorted(set(_HTML_ENTITY.findall(overview)))
+        check("pm-text-integrity", not entities,
+              "PM overview uses plain Unicode/Markdown text"
+              if not entities else
+              "HTML entities are forbidden in PM Markdown: " + ", ".join(entities[:20]))
         minutes = _pm_reading_minutes(overview)
         check("pm-reading-budget", minutes <= 10.5,
               f"estimated prose reading time={minutes:.1f} minutes (limit 10.5)")

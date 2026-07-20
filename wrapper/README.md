@@ -88,8 +88,9 @@ are NEVER read from ast-grep (that is dependency-cruiser / `go list`). When
 ast-grep is absent the route lane falls back to the transparent regex and the
 integration/table/access-model producers fail closed (disclosed). New discovery
 producers: `discovery/integrations.py` (assembled-URL host fragments + integration
-packages); `discovery/tables.py` (table access-type ladder — declaration / write /
-read / join-ref / same-name / unresolved — with a Go typed-constant registry and an
+packages); `discovery/tables.py` (table access-type ladder — declaration /
+schema-write / write / read / join-ref / same-name / unresolved — with a Go
+typed-constant registry and an
 exact-identifier structural join for `.Table(constant.X)` accesses); an
 `discovery/access_model.py` locate-and-count view (role catalogs, authz checks,
 middleware, route guards, casbin policy files, identity comparisons, plus a

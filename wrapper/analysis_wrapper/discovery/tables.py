@@ -3,9 +3,10 @@
 ORM table declarations + access sites come from ast-grep rules (Sequelize
 queryInterface.*/define tableName, GORM TableName constants + methods); raw SQL
 DDL comes from SQLGlot. Every finding is tagged on the ladder —
-``declaration`` / ``write`` / ``read`` / ``join_ref`` / ``same_name`` /
-``unresolved`` — so NAME MATCHING ALONE is never emitted as confirmed shared
-persistence. Cross-file constant/model→table binding is NOT attempted (the table
+``declaration`` / ``schema_write`` / ``write`` / ``read`` / ``join_ref`` /
+``same_name`` / ``unresolved`` — so schema changes cannot be promoted to
+application data writers, and NAME MATCHING ALONE is never emitted as confirmed
+shared persistence. Cross-file constant/model→table binding is NOT attempted (the table
 of a constant- or model-bound access is recorded ``unresolved``).
 
 SQL coverage (attempted dialect, parse failures, unparsed files) is explicit:
@@ -27,7 +28,10 @@ _SQL_MAX_BYTES = 1_000_000
 
 # The ladder. `same_name` = the name occurs but in no recognized access; a bare
 # name match must land here (or `unresolved`), never in a stronger bucket.
-ACCESS_TYPES = ("declaration", "write", "read", "join_ref", "same_name", "unresolved")
+ACCESS_TYPES = (
+    "declaration", "schema_write", "write", "read", "join_ref", "same_name",
+    "unresolved",
+)
 
 # Migration / DDL / schema directories carry first-class table evidence
 # (createTable, CREATE TABLE) — the TABLE lane scans them DELIBERATELY even when
@@ -106,9 +110,13 @@ def _classify_astgrep(matches, tier2: set[str]):
         rid = match.rule_id
         if rid in ("sequelize-create-table", "sequelize-create-table-ts"):
             name = match.vars.get("N", "").strip("'\"`")
-            add(name, "declaration", where)   # createTable both declares…
-            add(name, "write", where)         # …and is a DDL write
-        elif rid == "sequelize-ddl-write":
+            add(name, "declaration", where)
+            add(name, "schema_write", where)
+        elif rid == "sequelize-schema-write":
+            found = _STR_ARG.search(match.text)
+            if found:
+                add(found.group(1), "schema_write", where)
+        elif rid == "sequelize-data-write":
             found = _STR_ARG.search(match.text)
             if found:
                 add(found.group(1), "write", where)
@@ -227,7 +235,7 @@ def _sql_coverage(root: Path, tables, tier2: set[str], dialect: str = "mysql") -
                 target = stmt.find(exp.Table)
                 if target is not None:
                     add(target.name, "declaration", where)
-                    add(target.name, "write", where)
+                    add(target.name, "schema_write", where)
                 for fk in stmt.find_all(exp.ForeignKey):
                     ref = fk.find(exp.Table)
                     if ref is not None:
@@ -252,8 +260,9 @@ def generate(repo_path: str | Path, repo_id: str, *,
              tier2_exclusions: list[str] | None = None,
              sql_dialect: str = "mysql") -> TableEvidence:
     tier2 = set(tier2_exclusions or [])
-    # DDL/migration dirs carry the createTable / CREATE TABLE declarations+writes
-    # this lane exists to find — scan them even when tier2 excludes them for other
+    # DDL/migration dirs carry createTable / CREATE TABLE declarations and schema
+    # writes (distinct from application data writes), which this lane exists to
+    # find — scan them even when tier2 excludes them for other
     # lanes, and disclose the deliberate inclusion.
     ddl_kept = {d for d in tier2 if _DDL_EXEMPT.search(d)}
     scan_tier2 = tier2 - ddl_kept
@@ -283,8 +292,9 @@ def generate(repo_path: str | Path, repo_id: str, *,
         "unreferenced": sorted(set(registry) - referenced)[:40],
     }
     notes = [
-        "access-type ladder: declaration / write / read / join_ref / same_name / "
-        "unresolved — name matching alone is NEVER confirmed shared persistence.",
+        "access-type ladder: declaration / schema_write / write / read / join_ref / "
+        "same_name / unresolved — schema mutation is not application data writing, "
+        "and name matching alone is NEVER confirmed shared persistence.",
         "Go typed-constant registry (constant/table.go) is extracted; "
         "`.Table(constant.X)` and `TableName()` constant returns are linked to it by "
         "EXACT identifier match (structural join, not data-flow). A table accessed "

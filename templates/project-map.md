@@ -44,12 +44,12 @@ claims}}
 
 Data-ownership backing for overview.md §8. The **sharing distinction** states the
 strongest evidence reached on the ladder — a name match ALONE is `same-name-only`, never
-confirmed shared persistence; `observed` sharing needs a write/read distinction reached
+confirmed shared persistence; `observed` sharing needs an application write/read distinction reached
 with citations.
 
 | store / table | written by | read by | sharing distinction | label | evidence |
 |---|---|---|---|---|---|
-| {{table_or_store}} | {{module_ids}} | {{module_ids}} | {{declaration / read / write / join-reference / same-name-only / unresolved-dynamic}} | {{observed/inferred/unresolved}} | {{citations}} |
+| {{table_or_store}} | {{module_ids}} | {{module_ids}} | {{declaration / schema-write / read / write / join-reference / same-name-only / unresolved-dynamic}} | {{observed/inferred/unresolved}} | {{citations}} |
 
 ## Static frontend-to-backend route references
 

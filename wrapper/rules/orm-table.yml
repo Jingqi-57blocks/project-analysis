@@ -1,7 +1,7 @@
 # ORM table declarations + access sites. Table NAMES and access verbs are read
 # structurally; the Python side (discovery/tables.py) maps each match to an
-# access-type on the ladder: declaration / write / read / join-ref /
-# same-name-only / unresolved-dynamic. Cross-file constant/model→table binding is
+# access-type on the ladder: declaration / schema-write / write / read /
+# join-ref / same-name-only / unresolved-dynamic. Cross-file constant/model→table binding is
 # NOT attempted — a table referenced through a constant or a model object is
 # recorded as unresolved, never asserted as a confirmed access.
 
@@ -13,13 +13,21 @@ rule:
 constraints:
   N: { kind: string }
 ---
-id: sequelize-ddl-write
+id: sequelize-schema-write
 language: JavaScript
 rule:
   kind: call_expression
   has:
     field: function
-    regex: '\.(dropTable|renameTable|addColumn|removeColumn|renameColumn|changeColumn|addIndex|removeIndex|bulkInsert|bulkUpdate|bulkDelete)$'
+    regex: '\.(dropTable|renameTable|addColumn|removeColumn|renameColumn|changeColumn|addIndex|removeIndex)$'
+---
+id: sequelize-data-write
+language: JavaScript
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '\.(bulkInsert|bulkUpdate|bulkDelete)$'
 ---
 # --- Sequelize: model → table binding (declaration) ---
 id: sequelize-tablename

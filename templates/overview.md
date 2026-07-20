@@ -123,7 +123,9 @@ technical-overview.md.}}
 {{per IMPORTANT domain only: source of truth · writers · readers · any multi-service
 direct access · shared-via-API vs shared-DB · known lifecycle (create → archive/delete
 where visible) · coverage confidence. State the strongest distinction reachable on the
-ladder: declaration / read / write / join-reference / same-name-only / unresolved-dynamic.
+ladder: declaration / schema-write / read / write / join-reference / same-name-only / unresolved-dynamic.
+Schema-write evidence changes table structure; it does NOT make a service an application
+data writer.
 A name match ALONE is never confirmed shared persistence.}}
 
 | domain | source of truth | writers | readers | sharing | distinction reached | confidence |

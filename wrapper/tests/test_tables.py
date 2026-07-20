@@ -17,7 +17,9 @@ def test_orm_declaration_and_unresolved_binding():
     assert ev.available
     # createTable + Go const literal + Go TableName() literal all declare `widgets`.
     assert "declaration" in ev.tables["widgets"]
-    assert "write" in ev.tables["widgets"]        # createTable/dropTable are DDL writes
+    assert "schema_write" in ev.tables["widgets"]
+    assert not any("create-table" in site
+                   for site in ev.tables["widgets"].get("write", []))
     assert "declaration" in ev.tables["gadgets"]  # tableName: 'gadgets'
     kinds = {u["kind"] for u in ev.unresolved}
     assert "go-const" in kinds           # TableName = OtherConst (non-literal)
