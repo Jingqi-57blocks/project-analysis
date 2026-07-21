@@ -1,7 +1,7 @@
 # Project Analysis
 
-A general-purpose Claude Code skill that examines a codebase (single- or multi-repo
-workspace) with zero required setup and produces:
+A portable Agent Skill that examines a codebase (single- or multi-repo workspace) with
+zero target-specific configuration and produces:
 
 1. **Project overview + diagnosis** — module map, ranked problems with evidence,
    honest per-lens coverage reporting.
@@ -18,7 +18,91 @@ dependency edges, a deterministic `system-model.json`), the tool wrapper, discov
 the lenses, synthesis, and the run lifecycle are built and accepted. `tools/README.md`
 documents the validated toolchain (generic). `overview.md` is the PM-primary document,
 `technical-overview.md` its full-detail companion, and `project-map.md` the reusable
-topology. The skill command is `/project-analysis` (see [Skill registration](#skill-registration)).
+topology.
+
+## Quick start
+
+Project Analysis is not a server and has no daemon to start. Set up its isolated Python
+environment, register the checkout as a skill, start a new agent session, and invoke it.
+
+### 1. Clone and initialize the Python environment
+
+```bash
+git clone <repository-url> project-analysis
+cd project-analysis
+cd wrapper
+python3 -m analysis_wrapper.bootstrap
+cd ..
+```
+
+Bootstrap requires Python 3.11+ and installs only this project's Python packages into
+the gitignored `wrapper/.venv`. It never installs or changes Node, Go, Homebrew, nvm,
+asdf, mise, or standalone analysis tools.
+
+Confirm the wrapper is available:
+
+```bash
+wrapper/.venv/bin/project-analysis-wrapper --help
+```
+
+### 2. Prepare only the language lanes you need
+
+For a JS/TS target, select Node with your normal version manager. The committed
+dependency-cruiser version supports Node `22.x`, `24.x`, or `26+`. Then prepare the
+analyzer-owned packages yourself:
+
+```bash
+pnpm install --dir wrapper/node_tools --frozen-lockfile --ignore-scripts
+```
+
+For a Go target, provide a Go runtime compatible with both the target and callgraph
+`v0.48.0` (Go 1.25+), plus `staticcheck`. If callgraph coverage is required, install it
+yourself from the skill root:
+
+```bash
+mkdir -p wrapper/go_tools/bin
+GOBIN="$PWD/wrapper/go_tools/bin" \
+  go install golang.org/x/tools/cmd/callgraph@v0.48.0
+```
+
+Skip both sections when the target contains neither JS/TS nor Go.
+
+### 3. Register the checkout
+
+Choose one or more clients. These commands link the checkout; they do not copy it or
+install software globally.
+
+```bash
+# Codex
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+ln -s "$PWD" "${CODEX_HOME:-$HOME/.codex}/skills/project-analysis"
+
+# Claude Code
+mkdir -p "$HOME/.claude/skills"
+ln -s "$PWD" "$HOME/.claude/skills/project-analysis"
+
+# Cursor
+mkdir -p "$HOME/.cursor/skills"
+ln -s "$PWD" "$HOME/.cursor/skills/project-analysis"
+```
+
+Do not use `ln -sf`: if a destination already exists, inspect it and decide manually
+whether it should be removed or retained. Start a new client session after registration.
+
+### 4. Run an overview
+
+Use the syntax supported by the client:
+
+```text
+# Codex
+$project-analysis Analyze /absolute/path/to/project --language zh-CN
+
+# Claude Code or Cursor
+/project-analysis /absolute/path/to/project --language zh-CN
+```
+
+Use `--language en` for English output and `--run-id <label>` for a readable run label.
+The skill writes Markdown under `output/` and an offline HTML export under `exported/`.
 
 ## Design
 
@@ -44,25 +128,31 @@ that evidence: it was removed with `git filter-repo`. (Commit messages and tags 
 reference a target project by name — that was an explicit scope choice; the requirement is
 that no target's evidence *content* is tracked or retrievable from history.)
 
-## Skill registration
+## Environment and coverage
 
-Claude Code discovers skills by directory name under `~/.claude/skills/<name>/SKILL.md`;
-the invocation command is the directory name. Register one symlink:
+Project Analysis reports missing tools as reduced coverage; it never changes a
+developer's language runtime or global toolchain. Install only the lanes you need, using
+your preferred manager (`nvm`, `asdf`, `mise`, Homebrew, system packages, and so on):
 
-```
-ln -s /path/to/project-analysis ~/.claude/skills/project-analysis
-```
+- Python 3.11+: wrapper, PyDriller history analysis, SQL parsing, and HTML rendering.
+- Git: history, ownership/co-change evidence, and reproducible revision citations;
+  non-git folders remain supported with disclosed reduced coverage.
+- `scc`: repository-wide size and language inventory.
+- `lizard`: complexity metrics.
+- `jscpd`: within-repository and same-language cross-repository duplication.
+- `ast-grep`: structural route, integration, table, and access-model discovery.
+- Node + pnpm + analyzer-owned dependency-cruiser/TypeScript: JS/TS dependency and call
+  graphs. Node may be supplied by nvm, asdf, mise, or another developer-selected manager.
+- Go + `staticcheck` + callgraph: Go dependency, quality, and call-graph lanes. These are
+  unnecessary for non-Go targets.
+- `osv-scanner`: optional vulnerability evidence; the network lane remains disabled
+  unless the user explicitly authorizes it for the analysis run.
 
-That registers the `/project-analysis` command.
-
-## Python environment
-
-Project Analysis does not require global Python packages. From `wrapper/`, run
-`python3 -m analysis_wrapper.bootstrap`; it creates the gitignored `wrapper/.venv` and
-installs the wrapper and the PyDriller history lane there — this is all an analysis run
-needs. Developers working on the wrapper itself add `--dev` to also install test
-dependencies, then run tests as `.venv/bin/python -m pytest`. The CLI is
-`.venv/bin/project-analysis-wrapper`. See `wrapper/README.md` for details.
+The project intentionally does not prescribe how Node, Go, or standalone binaries are
+installed. Validated tool versions and invocation details are listed in
+[`tools/README.md`](tools/README.md); actual versions and resulting coverage are recorded
+in every run's manifests. Developers working on the wrapper add `--dev` to bootstrap and
+run tests with `wrapper/.venv/bin/python -m pytest`.
 
 ## Tracking
 

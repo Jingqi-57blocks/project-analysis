@@ -1,4 +1,4 @@
-"""Analyzer-owned pinned Go call-graph tool: resolve, version, install."""
+"""Developer-provided pinned Go call-graph tool: resolve and version."""
 
 import subprocess
 
@@ -23,7 +23,7 @@ def test_resolve_absent_reports_install_hint(tmp_path, monkeypatch):
     monkeypatch.setattr(go_tools.shutil, "which", lambda _n: None)
     resolved, note = go_tools.resolve(tmp_path / "empty")
     assert resolved is None
-    assert go_tools.CALLGRAPH_VERSION in note and "bootstrap" in note
+    assert go_tools.CALLGRAPH_VERSION in note and "README.md" in note
 
 
 def test_resolve_path_fallback_is_disclosed(tmp_path, monkeypatch):
@@ -41,36 +41,3 @@ def test_installed_version_parses_go_version_output():
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     assert go_tools.installed_version("/x/callgraph", go="/usr/bin/go", run=run) == "v0.48.0"
-
-
-def test_setup_installs_pinned_version_into_gobin(tmp_path):
-    bin_dir = tmp_path / "gobin"
-    calls = {}
-
-    def run(argv, **kwargs):
-        calls["argv"] = argv
-        calls["env"] = kwargs.get("env", {})
-        _make_binary(bin_dir)          # simulate `go install` producing the binary
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
-
-    binary = go_tools.setup(bin_dir, go="/usr/bin/go", run=run)
-    assert binary == bin_dir / "callgraph"
-    assert calls["argv"] == [
-        "/usr/bin/go", "install",
-        f"{go_tools.CALLGRAPH_PKG}@{go_tools.CALLGRAPH_VERSION}"]
-    assert calls["env"]["GOBIN"] == str(bin_dir)
-    # Install stays read-only + local-toolchain; network is left enabled (approved).
-    assert calls["env"]["GOFLAGS"] == "-mod=readonly"
-    assert calls["env"]["GOTOOLCHAIN"] == "local"
-
-
-def test_setup_raises_when_binary_missing_after_install(tmp_path):
-    def run(argv, **_k):               # exits 0 but produces nothing
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
-
-    try:
-        go_tools.setup(tmp_path / "gobin", go="/usr/bin/go", run=run)
-    except RuntimeError as exc:
-        assert "binary is absent" in str(exc)
-    else:
-        raise AssertionError("expected RuntimeError when the binary is absent")

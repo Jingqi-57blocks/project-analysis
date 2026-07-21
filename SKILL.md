@@ -320,7 +320,11 @@ preserved across runs, with renames/merges recorded as aliases.
 
 One-time per machine, from `<skill-dir>/wrapper`:
 `python3 -m analysis_wrapper.bootstrap` (creates the gitignored `wrapper/.venv` and
-installs the wrapper + history lane there — nothing global, no dev dependencies).
+installs only the project-local Python runtime — nothing global, no dev dependencies).
+It NEVER installs Node, Go, system packages, or external analysis binaries. Before a
+run, consult `README.md` and report missing developer-managed prerequisites as reduced
+coverage; never invoke a package manager on the developer's behalf. A non-Go analysis
+does not require Go.
 **Bootstrap contacts the Python package index (PyPI) to install those dependencies** —
 setup-time network, distinct from analysis: tell the user and get their OK before the
 first bootstrap on a machine. Analysis itself touches no network unless

@@ -29,7 +29,8 @@ python3 -m analysis_wrapper.bootstrap --dev    # also install pytest
 
 Set `--venv <path>` to keep the environment elsewhere. Re-running bootstrap is
 safe and updates the same environment. `wrapper/.venv` is gitignored. Do not run
-`pip install` with the host Python.
+`pip install` with the host Python. Bootstrap never invokes `brew`, `npm`, `pnpm`,
+`nvm`, `go install`, or another system/language package manager.
 
 Network-capable definitions (`staticcheck`, `go list`, `osv-scanner`, and npm/yarn
 outdated) are skipped unless `--include-network` is explicitly supplied, including
@@ -62,13 +63,20 @@ of it is a tested, thin analyzer-owned layer (`git_history/worker.py`,
 
 ## Analyzer-owned Node toolchain, ast-grep, and SQLGlot
 
-`bootstrap` (the one approved network step) additionally sets up a pinned,
-lockfile-frozen Node toolchain under `node_tools/` via pnpm —
+For JS/TS analysis, developers prepare the pinned, lockfile-frozen packages under
+`node_tools/` with their own Node runtime and pnpm. From the skill root:
+
+```bash
+pnpm install --dir wrapper/node_tools --frozen-lockfile --ignore-scripts
+```
+
+This installs
 **dependency-cruiser 18.1.0 + typescript 5.9.3**, committed `package.json` +
 `pnpm-lock.yaml`, `node_modules/` gitignored. The dependency-cruiser signal uses
 only this env binary (`node_env.py`), never a global or target-resolved one; if
 the env lacks `.tsx` support a TypeScript target's dependency signal is recorded
-`unavailable` (fail-closed). `bootstrap --skip-node-tools` opts out.
+`unavailable` (fail-closed). Project Analysis never installs Node or runs this command
+for the developer; nvm/asdf/mise-selected runtimes are supported.
 
 For TS/Vite repos the depcruise lane (`depcruise_lane.py`) runs a per-run
 preparation step: `node_helpers/resolve-ts-config.mjs` reads tsconfig
@@ -101,9 +109,16 @@ status `inferred` or `unknown`, never claiming completeness). `SQLGlot 30.12.0`
 (dialect, parse failures, unparsed files) is explicit and never reported complete
 on failure.
 
+For Go call graphs, developers provide Go and install the documented analyzer binary
+themselves when that lane is needed. From the skill root:
+
+```bash
+GOBIN="$PWD/wrapper/go_tools/bin" go install golang.org/x/tools/cmd/callgraph@v0.48.0
+```
+
 The offline Go lane records GOOS/GOARCH/CGO_ENABLED and build-tag scope in every
-manifest; a cold cache / missing dep / load failure fails loudly. Warm the module
-cache first under approval: `python3 -m analysis_wrapper.bootstrap --warm-go <repo>`
-(`go list -deps -json` with network allowed, still `-mod=readonly`). The
+manifest; a cold cache / missing dep / load failure fails loudly. Developers warm the
+module cache through their normal Go workflow before an offline analysis, or explicitly
+authorize the run's network lane. Project Analysis never installs Go. The
 git-history co-change pass takes an optional `--coupling-sample-cap` (0 = no cap,
 unchanged; when exceeded, an evenly-spaced, disclosed sample is used).

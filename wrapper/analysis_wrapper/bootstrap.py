@@ -102,29 +102,6 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also install test dependencies",
     )
-    result.add_argument(
-        "--skip-node-tools",
-        action="store_true",
-        help="do not install the pinned Node toolchain (dependency-cruiser + "
-             "typescript) into node_tools — the dependency signal then fails "
-             "closed (SKIPPED/unavailable) until it is installed",
-    )
-    result.add_argument(
-        "--skip-go-tools",
-        action="store_true",
-        help="do not install the pinned Go call-graph tool "
-             "(golang.org/x/tools/cmd/callgraph) into go_tools/bin — the Go "
-             "call-graph lane then fails closed (unavailable) until it is installed",
-    )
-    result.add_argument(
-        "--warm-go",
-        action="append",
-        default=[],
-        metavar="REPO",
-        help="approved, network-permitted Go module-cache warm for a target repo "
-             "(repeatable) so the offline Go lane (GOPROXY=off) has a warm cache; "
-             "read-only (-mod=readonly), downloads only into the shared cache",
-    )
     return result
 
 
@@ -143,51 +120,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"virtual environment: {python.parent.parent}")
     print(f"wrapper: {executable}")
 
-    # Analyzer-owned pinned Node toolchain (dependency-cruiser + typescript). This
-    # is the one approved network install for the dependency lane; a failure is
-    # disclosed but non-fatal — the signal then fails closed downstream.
-    if not args.skip_node_tools:
-        from . import node_env
-        try:
-            binary = node_env.setup()
-            print(f"node tools: {binary}")
-        except (OSError, RuntimeError) as exc:
-            print(f"WARNING: node tool env not installed ({exc}); the "
-                  "dependency-cruiser signal will be SKIPPED/unavailable until "
-                  "`pnpm install` succeeds in node_tools", file=sys.stderr)
-
-    # Analyzer-owned pinned Go call-graph tool (golang.org/x/tools/cmd/callgraph).
-    # One approved network install (`go install pkg@version`) into an
-    # analyzer-owned GOBIN; a failure is disclosed but non-fatal — the Go
-    # call-graph lane then fails closed (unavailable) downstream.
-    if not args.skip_go_tools:
-        from . import go_tools
-        try:
-            binary = go_tools.setup()
-            print(f"go tools: {binary} "
-                  f"({go_tools.CALLGRAPH_PKG}@{go_tools.CALLGRAPH_VERSION})")
-        except (OSError, RuntimeError) as exc:
-            print(f"WARNING: Go call-graph tool not installed ({exc}); the Go "
-                  "call-graph lane will be unavailable until "
-                  f"`go install {go_tools.CALLGRAPH_PKG}@{go_tools.CALLGRAPH_VERSION}` "
-                  "succeeds into go_tools/bin", file=sys.stderr)
-
-    # ast-grep is a brew binary (not installed here); the structural rules for
-    # route/HTTP/client/host extraction fall back or fail closed without it.
+    # External runtimes and analysis tools are intentionally never installed by
+    # bootstrap. Report their absence; the README leaves installation and version
+    # management to the developer.
     from . import astgrep
     if astgrep.available():
         print(f"ast-grep: {astgrep.binary()}")
     else:
-        print("WARNING: ast-grep not found (brew install ast-grep) — route/HTTP/"
-              "client structural rules degrade to regex or SKIP", file=sys.stderr)
+        print("WARNING: ast-grep not found — see README.md for developer-managed "
+              "prerequisites; route/HTTP/client structural rules degrade to regex "
+              "or SKIP", file=sys.stderr)
 
-    # Approved network Go warm (offline lane then runs with GOPROXY=off).
-    if args.warm_go:
-        from . import go_cache
-        for repo in args.warm_go:
-            ok, detail = go_cache.warm(repo)
-            print(f"warm-go {repo}: {'ok' if ok else 'FAILED'} — {detail}",
-                  file=sys.stderr if not ok else sys.stdout)
     return 0
 
 

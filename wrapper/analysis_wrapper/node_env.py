@@ -1,7 +1,7 @@
-"""Analyzer-owned pinned Node toolchain (dependency-cruiser + typescript).
+"""Analyzer-owned pinned Node packages (dependency-cruiser + typescript).
 
 The environment lives under ``wrapper/node_tools`` and is installed with pnpm
-from a committed lockfile at bootstrap (a network step, approved once). We NEVER
+from a committed lockfile by the developer. We NEVER
 install into, or resolve a binary from, a target repository, and NEVER use a
 globally-installed dependency-cruiser: only this pinned, lockfile-frozen copy.
 
@@ -14,7 +14,6 @@ the env cannot resolve ``.tsx`` (see the depcruise lane's TS-support guard).
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,7 +104,8 @@ def probe(node_tools: Path = NODE_TOOLS_DIR,
     if binary is None:
         info = NodeToolInfo(
             available=False,
-            reason="analyzer node_tools env not installed — run bootstrap (pnpm)")
+            reason="analyzer node_tools env not installed — follow the manual "
+                   "JS/TS prerequisite step in README.md")
     else:
         try:
             proc = run([str(binary), "--info"], capture_output=True, text=True,
@@ -123,38 +123,3 @@ def probe(node_tools: Path = NODE_TOOLS_DIR,
     if use_cache:
         _probe_cache[key] = info
     return info
-
-
-def setup(node_tools: Path = NODE_TOOLS_DIR,
-          run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-          pnpm: str | None = None) -> Path:
-    """Install the pinned toolchain with pnpm, frozen to the committed lockfile.
-
-    Network is required and approved at bootstrap. Raises on failure so the
-    caller can disclose it; downstream preflight fails closed if the env is
-    absent. ``--ignore-scripts`` blocks dependency lifecycle scripts (neither
-    dependency-cruiser nor typescript needs one). Returns the env binary path."""
-    package = node_tools / "package.json"
-    lock = node_tools / "pnpm-lock.yaml"
-    if not package.is_file():
-        raise RuntimeError(f"node_tools package.json missing: {package}")
-    if not lock.is_file():
-        raise RuntimeError(
-            f"node_tools pnpm-lock.yaml missing — commit the lockfile: {lock}")
-    resolved = pnpm or shutil.which("pnpm")
-    if not resolved:
-        raise RuntimeError("pnpm not found on PATH — install pnpm to set up node_tools")
-    proc = run([resolved, "install", "--dir", str(node_tools),
-                "--frozen-lockfile", "--ignore-scripts"],
-               capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            "pnpm install failed for node_tools: "
-            + (proc.stderr or proc.stdout or "(no output)").strip())
-    _probe_cache.pop(str(node_tools), None)
-    binary = depcruise_binary(node_tools)
-    if binary is None:
-        raise RuntimeError(
-            f"pnpm install completed but env binary is absent: "
-            f"{expected_depcruise_binary(node_tools)}")
-    return binary

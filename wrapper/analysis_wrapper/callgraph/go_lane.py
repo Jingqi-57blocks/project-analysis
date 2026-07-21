@@ -222,9 +222,9 @@ def analyze(target: RepoTarget, *, allow_network: bool = False,
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "(no output)").strip()[:300]
         if _COLD_CACHE.search(detail) and warm_cache != "warm":
-            detail += ("  [likely a cold module cache — warm it with "
-                       "`python3 -m analysis_wrapper.bootstrap --warm-go <repo>` "
-                       "or pass --include-network, then rerun]")
+            detail += ("  [likely a cold module cache — warm it through your "
+                       "developer-managed Go workflow or pass --include-network, "
+                       "then rerun]")
         return [], cov("failed", reason=detail, warm_cache=warm_cache)
 
     edges, counts = parse_tsv(proc.stdout or "", module=module,

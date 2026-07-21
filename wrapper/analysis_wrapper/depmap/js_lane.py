@@ -75,7 +75,8 @@ def analyze(target: RepoTarget, out_dir: Path, *,
     binary = tooldef.resolved_binary()
     if binary is None:
         return None, cov("unavailable", reason=(
-            "analyzer node_tools depcruise env not installed — run bootstrap"))
+            "analyzer node_tools depcruise env not installed — follow the manual "
+            "JS/TS prerequisite step in README.md"))
     guard = tooldef.check_guards(target)
     if guard:
         return None, cov("unavailable", reason=guard)

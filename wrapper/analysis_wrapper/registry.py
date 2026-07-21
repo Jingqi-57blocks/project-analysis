@@ -49,7 +49,7 @@ GO_ENV_NOTE = ("OFFLINE-FIRST: GOPROXY=off/GOSUMDB=off — no network destinatio
                "contacted; -mod=readonly, local toolchain, workspaces off. A cold "
                "module cache / missing dep / load failure fails LOUDLY (never a clean "
                "no-findings result): warm the cache under approval "
-               "(`python3 -m analysis_wrapper.bootstrap --warm-go <repo>`) and rerun")
+               "through your developer-managed Go workflow and rerun")
 
 # Build settings the offline Go lane analyzes under, recorded in every manifest
 # so the analyzed universe is explicit: the LOCAL toolchain's GOOS/GOARCH/CGO and

@@ -1,8 +1,8 @@
-"""Approved Go module-cache warm step (bootstrap-time, network-gated).
+"""Explicitly authorized Go module-cache warm step used by Go analysis lanes.
 
 The offline Go lane (registry) runs with GOPROXY=off so no network destination is
-ever contacted; that requires a warm module cache. This is the ONE approved Go
-network operation: ``go list -deps -json ./...`` WITHOUT GOPROXY=off, run once
+ever contacted; that requires a warm module cache. With explicit run authorization,
+the Go lane may use ``go list -deps -json ./...`` WITHOUT GOPROXY=off
 against a target under user-approved network. It stays read-only
 (``-mod=readonly`` — go.mod/go.sum are never modified) and downloads only into
 the shared module cache, never into the target.

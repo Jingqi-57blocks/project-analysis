@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from analysis_wrapper import bootstrap as bootstrap_module
 from analysis_wrapper.bootstrap import bootstrap, editable_install_target, environment_python
 
 
@@ -11,6 +12,18 @@ def test_install_target_keeps_runtime_and_dev_extras_explicit(tmp_path):
     root = tmp_path / "wrapper"
     assert editable_install_target(root, False) == f"{root.resolve()}[history,sql,report]"
     assert editable_install_target(root, True) == f"{root.resolve()}[history,sql,report,dev]"
+
+
+def test_main_never_installs_external_language_tools(tmp_path, monkeypatch):
+    python = tmp_path / ".venv" / "bin" / "python"
+    monkeypatch.setattr(bootstrap_module, "bootstrap", lambda *_a, **_kw: python)
+    monkeypatch.setattr("analysis_wrapper.astgrep.available", lambda: False)
+
+    assert bootstrap_module.main(["--venv", str(tmp_path / ".venv")]) == 0
+
+    from analysis_wrapper import go_tools, node_env
+    assert not hasattr(node_env, "setup")
+    assert not hasattr(go_tools, "setup")
 
 
 def test_bootstrap_installs_with_only_the_venv_interpreter(tmp_path):

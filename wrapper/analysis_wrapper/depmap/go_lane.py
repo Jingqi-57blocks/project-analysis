@@ -5,7 +5,7 @@ a usable INTERNAL package dependency graph (``go mod graph`` is NOT suitable —
 exposes only the module requirement graph). We run the pinned system ``go`` under
 the SAME hardened offline env as the call-graph Go lane (GOPROXY/GOSUMDB off ⇒
 zero network) and, behind ``--include-network``, warm the module cache once via
-:func:`analysis_wrapper.go_cache.warm` (the one approved Go network op).
+:func:`analysis_wrapper.go_cache.warm` (an explicitly authorized Go network operation).
 
 The raw ``go list`` stream carries absolute machine paths (``Dir``/``Root``) — a
 leak — and non-deterministic object order, so this lane NEVER writes it. It emits

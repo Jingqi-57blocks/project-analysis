@@ -114,7 +114,8 @@ def analyze(target: RepoTarget, *,
     if not node_bin or not _HELPER.is_file() or not ts_lib.exists():
         return [], cov("unavailable", reason=(
             "JS/TS call graph unavailable: node, the extractor helper, or the "
-            "analyzer typescript lib is missing — run bootstrap"))
+            "analyzer typescript lib is missing — follow the manual JS/TS "
+            "prerequisite step in README.md"))
     if not cand_ext:
         return [], cov("complete", reason="no production JS/TS source")
 
