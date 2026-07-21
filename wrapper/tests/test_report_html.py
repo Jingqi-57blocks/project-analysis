@@ -14,6 +14,10 @@ from analysis_wrapper.report_html.generate import generate
 
 DEEP_MARKER = "UNIQUEDEEPMARKERZZ"
 TABLE_MARKER = "cellvaluexyz"
+DIAGNOSIS_MARKER = "EXECUTIVEDIAGNOSISMARKER"
+CHANGEABILITY_MARKER = "CHANGEABILITYMARKER"
+FINDING_MARKER = "TOPFINDINGMARKER"
+UNKNOWN_MARKER = "KEYUNKNOWNMARKER"
 
 OVERVIEW_MD = f"""# Demo — Overview
 
@@ -28,18 +32,45 @@ A paragraph containing {DEEP_MARKER} for split checks.
 | --- | --- |
 | {TABLE_MARKER} | 2 |
 
-## 2. Diagnosis
+## 2. Executive diagnosis
 
-### Finding alpha
+{DIAGNOSIS_MARKER} explains the current system condition. See
+[technical details](technical-overview.md#top-problems).
 
-Detail for alpha.
+## 3. Product snapshot
 
-## 3. Topology
+The product serves demo users.
+
+## 6. Runtime & system topology
 
 ```mermaid
 graph LR
   A --> B
 ```
+
+## 11. Overall changeability diagnosis
+
+{CHANGEABILITY_MARKER} describes why change spreads.
+
+## 12. Representative change-impact paths
+
+One change crosses multiple boundaries.
+
+## 13. Module changeability table
+
+| module | condition |
+| --- | --- |
+| demo | difficult |
+
+## 14. Findings by observed impact
+
+### Finding alpha
+
+{FINDING_MARKER} detail for alpha.
+
+## 16. Coverage & unknowns
+
+{UNKNOWN_MARKER} remains unresolved.
 """
 
 TECH_MD = """# Demo — Technical Overview
@@ -198,6 +229,15 @@ def test_generates_pages_assets_and_manifests(tmp_path):
     assert "http://" not in index and "https://" not in index
 
 
+def test_report_css_preserves_visible_heading_hierarchy(tmp_path):
+    run = make_run(tmp_path)
+    result = generate(run)
+    css = (result.report_dir / "assets" / "report.css").read_text(encoding="utf-8")
+    assert ".section > h2.doc-h" in css and "font-size: 22px" in css
+    assert ".section h3.doc-h" in css and "font-size: 17px" in css
+    assert ".section h4.doc-h" in css and "font-size: 15px" in css
+
+
 def test_content_map_covers_every_source_section(tmp_path):
     run = make_run(tmp_path)
     result = generate(run)
@@ -246,20 +286,60 @@ def test_no_absolute_path_leak(tmp_path):
     assert "/Users/" not in blob
 
 
-def test_main_page_key_data_only_subpages_carry_detail(tmp_path):
+def test_main_page_leads_with_authored_diagnosis_then_structured_status(tmp_path):
     run = make_run(tmp_path)
     result = generate(run)
     index = (result.report_dir / "index.html").read_text(encoding="utf-8")
     findings = (result.report_dir / "findings.html").read_text(encoding="utf-8")
     doc = (result.report_dir / "doc-overview.html").read_text(encoding="utf-8")
-    # main page shows structured key data...
+    # The landing page carries the report's key authored diagnosis verbatim.
+    for marker in (DIAGNOSIS_MARKER, FINDING_MARKER, CHANGEABILITY_MARKER,
+                   UNKNOWN_MARKER):
+        assert marker in index
+    assert ">Executive diagnosis<" in index
+    assert ">2. Executive diagnosis<" not in index
+    assert ">Findings by observed impact<" in index
+    assert ">14. Findings by observed impact<" not in index
+    # It still shows compact structured status after the diagnosis...
     assert "system-snapshot" in index and "Coverage status" in index
-    # ...but NOT the deep narrative body (that lives on sub-pages).
+    # ...without turning into a copy of the complete source document.
     assert DEEP_MARKER not in index
     assert TABLE_MARKER not in index
-    # sub-pages carry the full detail (section-aware + lossless full document).
-    assert DEEP_MARKER in findings
+    # The diagnosis page is scoped to changeability/findings, while the lossless
+    # document page continues to carry every source section.
+    assert FINDING_MARKER in findings and CHANGEABILITY_MARKER in findings
+    assert DIAGNOSIS_MARKER not in findings and UNKNOWN_MARKER not in findings
     assert DEEP_MARKER in doc and TABLE_MARKER in doc
+
+
+def test_main_page_moves_revision_detail_to_evidence_page(tmp_path):
+    run = make_run(tmp_path)
+    result = generate(run)
+    index = (result.report_dir / "index.html").read_text(encoding="utf-8")
+    coverage = (result.report_dir / "coverage.html").read_text(encoding="utf-8")
+    assert "Analyzed revisions" not in index
+    assert "Analyzed revisions" in coverage
+
+
+def test_main_page_destinations_are_recorded_in_content_map(tmp_path):
+    run = make_run(tmp_path)
+    result = generate(run)
+    cmap = json.loads((result.report_dir / "content-map.json").read_text(encoding="utf-8"))
+    overview = next(d for d in cmap["documents"] if d["doc_id"] == "overview")
+    executive = next(s for s in overview["sections"] if s["heading"] == "2. Executive diagnosis")
+    destinations = {(d["page"], d["mode"]) for d in executive["destinations"]}
+    assert ("index.html", "markdown-section") in destinations
+
+
+def test_canonical_markdown_links_target_exported_document_pages(tmp_path):
+    run = make_run(tmp_path)
+    result = generate(run)
+    index = (result.report_dir / "index.html").read_text(encoding="utf-8")
+    full_doc = (result.report_dir / "doc-overview.html").read_text(encoding="utf-8")
+    expected = 'href="doc-technical-overview.html#top-problems"'
+    assert expected in index
+    assert expected in full_doc
+    assert 'href="technical-overview.md' not in index
 
 
 def test_modules_entrance_stub_without_drilldown(tmp_path):

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from collections import Counter
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from . import assets, components, content_map, narrative, pages, run_inputs
-from .content_map import DocEntry
+from .content_map import Destination, DocEntry
 from .htmlutil import attr, esc
 from .markdown_render import mermaid_figure, render_document
 
@@ -66,17 +67,90 @@ def _coverage_status_summary(inputs: run_inputs.RunInputs) -> str:
     return f'<div class="tiles">{tiles}</div>{link}'
 
 
-def _diagnosis_outline(inputs: run_inputs.RunInputs, primary, primary_doc_id: str) -> str:
-    note = (
-        '<div class="note"><p>Findings, changeability and journeys are authored '
-        "narrative. They are presented below by the analysis document's own "
-        "section structure (verbatim headings) — impact/lens grouping needs a "
-        "structured findings artifact this run does not provide.</p></div>"
-    )
-    outline = narrative.document_outline(
-        primary, pages.PAGE_FILES["findings"], max_level=2
-    )
-    return note + outline
+_NUMBERED_HEADING = re.compile(r"^\s*(\d+)\.")
+
+# The overview contract fixes these section numbers across report languages. The
+# exporter uses only that structural contract: it never searches prose for
+# business meaning and never synthesizes a second summary.
+_LANDING_SECTION_ORDER = (2, 14, 11, 12, 3, 16)
+_DIAGNOSIS_SECTION_ORDER = (11, 12, 13, 14)
+
+
+def _authored_section_items(
+    rendered,
+    *,
+    section_numbers: tuple[int, ...],
+    page_file: str,
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, Destination]]]:
+    """Render selected overview sections verbatim in a presentation page.
+
+    Selection is by the overview template's stable numeric structure, so the
+    same mapping works for English and Chinese headings. Missing sections are
+    simply absent; the lossless full-document page remains the canonical view.
+    """
+    by_number = {}
+    for section in rendered.sections:
+        if section.level != 2:
+            continue
+        match = _NUMBERED_HEADING.match(section.text)
+        if match:
+            by_number[int(match.group(1))] = section
+
+    items = []
+    destinations = []
+    for number in section_numbers:
+        section = by_number.get(number)
+        if section is None:
+            continue
+        body = rendered.section_body_html(section.anchor) or ""
+        # Curated HTML views reorder canonical Markdown sections, so carrying
+        # source numbers into the new order would produce sequences such as
+        # 2 -> 14 -> 11. Preserve the verbatim heading in the full document and
+        # content map, but show the semantic title here without its source index.
+        display_title = _NUMBERED_HEADING.sub("", section.text, count=1).strip()
+        items.append((
+            section.anchor,
+            display_title,
+            pages.section(section.anchor, display_title, body),
+        ))
+        destinations.append((
+            rendered.doc_id,
+            section.anchor,
+            Destination(page_file, section.anchor, "markdown-section"),
+        ))
+    return items, destinations
+
+
+def _run_status_summary(inputs: run_inputs.RunInputs) -> str:
+    if not inputs.inspection_only:
+        return ""
+    if inputs.language == "zh-CN":
+        message = (
+            "<strong>仅供检查：</strong>分析时至少一个仓库不是干净工作树；"
+            "此运行不能被接受为 current。"
+        )
+    else:
+        message = (
+            "<strong>Inspection-only:</strong> at least one repository was not a "
+            "clean worktree during analysis; this run cannot be accepted as current."
+        )
+    return f'<div class="note"><p>{message}</p></div>'
+
+
+def _landing_labels(language: str) -> dict[str, str]:
+    labels = {
+        "en": {
+            "run_status": "Run status",
+            "diagnosis": "Diagnosis",
+            "diagnosis_unavailable": "No narrative document present.",
+        },
+        "zh-CN": {
+            "run_status": "运行状态",
+            "diagnosis": "诊断",
+            "diagnosis_unavailable": "没有可用的叙述性文档。",
+        },
+    }
+    return labels.get(language, labels["en"])
 
 
 def _authored_diagrams_section(doc_entries: list[DocEntry]) -> str | None:
@@ -142,7 +216,14 @@ def generate_from_inputs(
     if report_dir.resolve() == inputs.run_dir.resolve():
         raise ValueError("report output directory must not be the run directory")
 
-    rendered = {d.doc_id: render_document(d.doc_id, d.text) for d in inputs.docs}
+    document_link_map = {
+        d.filename: pages.doc_page(d.doc_id)
+        for d in inputs.docs
+    }
+    rendered = {
+        d.doc_id: render_document(d.doc_id, d.text, link_map=document_link_map)
+        for d in inputs.docs
+    }
     doc_entries = [
         DocEntry(d.doc_id, d.filename, pages.doc_page(d.doc_id), rendered[d.doc_id])
         for d in inputs.docs
@@ -159,7 +240,7 @@ def generate_from_inputs(
             text = (inputs.run_dir / rel).read_text(encoding="utf-8")
             did = narrative.drilldown_page_id(m, kind)
             ds = run_inputs.DocSource(did, rel, f"{m.module_id} — {kind}", text)
-            md = render_document(did, text)
+            md = render_document(did, text, link_map=document_link_map)
             module_docs.append((m, kind, ds, md))
             doc_entries.append(DocEntry(did, rel, pages.doc_page(did), md))
 
@@ -206,32 +287,61 @@ def generate_from_inputs(
     P = pages.PAGE_FILES
 
     ch = pages.chrome(inputs.language)
+    landing_labels = _landing_labels(inputs.language)
 
     # ---- main page ----
-    main_body, main_toc = compose([
-        place(provenance, P["index"]),
+    # Lead with the report's authored diagnosis. The former index led with run
+    # mechanics and reduced the diagnosis to an outline, which made the landing
+    # page an audit dashboard rather than a project overview.
+    main_items = []
+    if primary_doc:
+        primary_rendered = rendered[primary_doc.doc_id]
+        authored_items, authored_destinations = _authored_section_items(
+            primary_rendered,
+            section_numbers=_LANDING_SECTION_ORDER,
+            page_file=P["index"],
+        )
+        main_items.extend(authored_items)
+        for doc_id, anchor, dest in authored_destinations:
+            extra_dests.setdefault((doc_id, anchor), []).append(dest)
+    else:
+        main_items.append(sec(
+            "diagnosis-unavailable", landing_labels["diagnosis"],
+            f'<p class="muted">{landing_labels["diagnosis_unavailable"]}</p>',
+        ))
+    status_summary = _run_status_summary(inputs)
+    if status_summary:
+        main_items.insert(0, sec(
+            "run-status", landing_labels["run_status"], status_summary
+        ))
+    main_items.extend([
         place(snapshot, P["index"]),
         sec("coverage-status", "Coverage status", _coverage_status_summary(inputs)),
-        sec(
-            "diagnosis", "Findings & diagnosis",
-            _diagnosis_outline(inputs, rendered.get(primary_doc.doc_id), primary_doc.doc_id)
-            if primary_doc else '<p class="muted">No narrative document present.</p>',
-        ),
     ])
+    main_body, main_toc = compose(main_items)
+    main_title = (
+        rendered[primary_doc.doc_id].sections[0].text
+        if primary_doc and rendered[primary_doc.doc_id].sections
+        else inputs.project_id
+    )
     out_pages.append(pages.Page(
         "index", P["index"],
-        pages.shell(inputs, "index", inputs.project_id, ch["subtitle"],
+        pages.shell(inputs, "index", main_title, ch["subtitle"],
                     main_body, main_toc),
     ))
 
-    # ---- findings & diagnosis (section-aware narrative) ----
+    # ---- findings & diagnosis (diagnostic sections only) ----
     if primary_doc:
-        block = narrative.narrative_cards(
-            rendered[primary_doc.doc_id], pages.doc_page(primary_doc.doc_id), P["findings"]
+        diagnosis_items, diagnosis_destinations = _authored_section_items(
+            rendered[primary_doc.doc_id],
+            section_numbers=_DIAGNOSIS_SECTION_ORDER,
+            page_file=P["findings"],
         )
-        for doc_id, anchor, dest in block.destinations:
+        for doc_id, anchor, dest in diagnosis_destinations:
             extra_dests.setdefault((doc_id, anchor), []).append(dest)
-        findings_body, findings_toc = block.html, block.toc
+        findings_body, findings_toc = compose(diagnosis_items)
+        if not diagnosis_items:
+            findings_body = '<p class="muted">No diagnostic sections present.</p>'
     else:
         findings_body, findings_toc = '<p class="muted">No narrative document present.</p>', []
     out_pages.append(pages.Page(

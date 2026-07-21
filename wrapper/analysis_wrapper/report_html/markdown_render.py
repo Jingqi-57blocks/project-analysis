@@ -175,10 +175,34 @@ def _annotate(tokens: list, allocator: SlugAllocator) -> tuple[list[Section], li
     return sections, mermaid_blocks
 
 
-def render_document(doc_id: str, text: str) -> MarkdownDoc:
+def _rewrite_document_links(tokens: list, link_map: dict[str, str]) -> None:
+    """Retarget canonical Markdown-document links to exported HTML pages."""
+    for token in tokens:
+        if token.type == "link_open":
+            href = token.attrGet("href") or ""
+            target, separator, fragment = href.partition("#")
+            normalized = target[2:] if target.startswith("./") else target
+            replacement = link_map.get(normalized)
+            if replacement is not None:
+                token.attrSet(
+                    "href",
+                    replacement + (separator + fragment if separator else ""),
+                )
+        if token.children:
+            _rewrite_document_links(token.children, link_map)
+
+
+def render_document(
+    doc_id: str,
+    text: str,
+    *,
+    link_map: dict[str, str] | None = None,
+) -> MarkdownDoc:
     """Parse and render a canonical Markdown document losslessly."""
     md = _build_md()
     tokens = md.parse(text)
+    if link_map:
+        _rewrite_document_links(tokens, link_map)
     allocator = SlugAllocator()
     sections, mermaid_blocks = _annotate(tokens, allocator)
     html = md.renderer.render(tokens, md.options, {})
