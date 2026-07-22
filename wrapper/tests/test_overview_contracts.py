@@ -1,6 +1,7 @@
 """Effort-independent overview contracts — domain-neutral fixtures only."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -228,6 +229,23 @@ def test_audit_rejects_misplaced_artifact_and_accepts_canonical_consumption(tmp_
     result = overview_audit.audit(run)
     failed = {row["check"] for row in result["checks"] if row["status"] == "fail"}
     assert "canonical-placement" in failed
+
+
+def test_audit_rejects_overlapping_analysis_targets(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    targets_path = run / "targets.json"
+    targets = json.loads(targets_path.read_text("utf-8"))
+    nested = dict(targets["repos"][0])
+    nested["repo_id"] = "nested-33333333"
+    nested["path"] = str(Path(nested["path"]) / "nested")
+    targets["repos"].append(nested)
+    targets_path.write_text(json.dumps(targets), "utf-8")
+
+    result = overview_audit.audit(run)
+
+    assert result["status"] == "failed"
+    assert any(row["check"] == "non-overlapping-targets"
+               and row["status"] == "fail" for row in result["checks"])
 
 
 def test_model_edges_and_nodes_carry_evidence_basis(tmp_path):

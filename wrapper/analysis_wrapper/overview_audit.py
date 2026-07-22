@@ -16,7 +16,7 @@ from pathlib import Path
 from . import coverage_render, module_map, module_render
 from .executor import replace_artifact_text
 from .sanitize import sanitize_text
-from .targetspec import TargetSpec
+from .targetspec import TargetSpec, overlapping_repo_pairs
 
 SCHEMA_VERSION = "1.0.0"
 _CITATION = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*)@([0-9a-fA-F]{7,40}):")
@@ -112,6 +112,13 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
                        "detail": detail})
 
     spec = TargetSpec.load(run / "targets.json")
+    overlaps = overlapping_repo_pairs(spec.repos)
+    check(
+        "non-overlapping-targets", not overlaps,
+        "canonical targets are pairwise non-overlapping" if not overlaps else
+        "overlapping target pairs: "
+        + ", ".join(f"{left}/{right}" for left, right in overlaps),
+    )
     capabilities = _load(run / "capabilities.json")
     model = _load(run / "system-model.json")
     coverage = model.get("coverage", {})

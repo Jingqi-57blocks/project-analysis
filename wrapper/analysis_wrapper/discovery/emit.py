@@ -20,7 +20,8 @@ import json
 from pathlib import Path
 
 from ..sanitize import redact
-from ..targetspec import RepoTarget, TargetSpec, stable_repo_id
+from ..targetspec import (RepoTarget, TargetSpec, overlapping_repo_pairs,
+                          path_contains, stable_repo_id)
 from . import (access_model, candidates, deploy_units, generated, integrations,
                inventory, liveness, modules, pm, provenance, self_exclusion,
                stacks, tables)
@@ -46,26 +47,42 @@ def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
     return deps, requires
 
 
-def _non_git_projects(root: Path, repo_paths: list[str]) -> list[Path]:
-    """Top-level non-git folders with a detectable stack: reduced-coverage
-    targets (no history lane, non-reproducible citations — per SKILL.md)."""
-    found: list[Path] = []
-    candidates = [root] if not repo_paths else []
+_DIRECT_PROJECT_MANIFESTS = ("package.json", "go.mod")
+
+
+def _has_direct_project_manifest(path: Path) -> bool:
+    return any((path / name).is_file() for name in _DIRECT_PROJECT_MANIFESTS)
+
+
+def _non_git_projects(root: Path, repo_paths: list[str]) -> tuple[list[Path], list[Path]]:
+    """Return canonical non-git projects and contained child projects.
+
+    A direct root project owns its source tree, so stack-bearing child projects
+    are disclosed rather than executed again.  Without a root manifest the
+    workspace is a container and direct child projects become targets.
+    """
+    git_roots = {Path(path).expanduser().resolve() for path in repo_paths}
+    child_projects: list[Path] = []
     try:
-        candidates += sorted(
+        children = sorted(
             p for p in root.iterdir()
             if p.is_dir() and not p.name.startswith(".")
             and p.name not in inventory.PRUNE_DIRS
         )
     except OSError:
-        return found
-    for path in candidates:
-        resolved = str(path.resolve())
-        if any(resolved == r or resolved.startswith(r + "/") for r in repo_paths):
+        children = []
+    for path in children:
+        resolved = path.resolve()
+        if resolved in git_roots:
             continue
-        if stacks.detect(path).stacks:
-            found.append(path.resolve())
-    return found
+        if stacks.detect(resolved).stacks:
+            child_projects.append(resolved)
+
+    resolved_root = root.resolve()
+    if _has_direct_project_manifest(resolved_root):
+        selected = [] if resolved_root in git_roots else [resolved_root]
+        return selected, child_projects
+    return child_projects, []
 
 
 def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
@@ -135,6 +152,12 @@ def discover(workspace_root: str | Path,
     reduced: list[str] = []
 
     def admit(path: Path, repo_id: str) -> None:
+        for existing in repo_targets:
+            if (path_contains(existing.path, path)
+                    or path_contains(path, existing.path)):
+                raise ValueError(
+                    "canonical analysis targets overlap: "
+                    f"{existing.path} and {path}")
         target, cands, report = _produce_target(path, repo_id)
         repo_targets.append(target)
         all_candidates.extend(cands)
@@ -156,6 +179,18 @@ def discover(workspace_root: str | Path,
             return True
         return False
 
+    git_paths = [hit.path for hit in inv.repos]
+    raw_non_git, contained_non_git = _non_git_projects(
+        Path(inv.workspace_root), git_paths)
+    non_git_paths: list[Path] = []
+    for path in raw_non_git:
+        if self_excluded(path):
+            continue
+        if path.name in excluded:
+            disclosed.append(f"{path} (excluded by operator flag)")
+            continue
+        non_git_paths.append(path)
+
     for hit in inv.repos:
         if self_excluded(hit.path):
             continue
@@ -175,21 +210,48 @@ def discover(workspace_root: str | Path,
                     f"{hit.path} (nested in {hit.nested_in} — scanned as part "
                     f"of the enclosing repo, not a separate target in v1)")
             continue
+        owner = next((path for path in non_git_paths
+                      if Path(hit.path).resolve() != path
+                      and path_contains(path, hit.path)), None)
+        if owner is not None:
+            disclosed.append(
+                f"{hit.path} (contained in {owner} — scanned as part of the "
+                "canonical non-git project, not a separate target)")
+            continue
         admit(Path(hit.path), hit.repo_id)
 
-    git_paths = [hit.path for hit in inv.repos]
-    for path in _non_git_projects(Path(inv.workspace_root), git_paths):
-        if self_excluded(path):
-            continue
-        if path.name in excluded:
-            disclosed.append(f"{path} (excluded by operator flag)")
+    for path in non_git_paths:
+        owner = next((Path(target.path).resolve() for target in repo_targets
+                      if Path(target.path).resolve() != path
+                      and (path_contains(target.path, path)
+                           or path_contains(path, target.path))), None)
+        if owner is not None:
+            disclosed.append(
+                f"{path} (overlaps canonical target {owner} — not targeted "
+                "separately)")
             continue
         reduced.append(
             f"{path} (non-git folder: targeted with reduced coverage — "
             f"no history lane, non-reproducible citations, no caching)")
         admit(path, stable_repo_id(str(path)))
 
+    workspace = Path(inv.workspace_root).resolve()
+    root_targeted = any(Path(target.path).resolve() == workspace
+                        for target in repo_targets)
+    if root_targeted:
+        for path in contained_non_git:
+            disclosed.append(
+                f"{path} (contained in root project {workspace} — scanned as "
+                "part of the root, not a separate target)")
+    elif not _has_direct_project_manifest(workspace) and repo_targets:
+        disclosed.append(
+            f"{workspace} (workspace container: no root-level package.json or "
+            "go.mod; contained projects targeted separately)")
+
     spec = TargetSpec(repos=repo_targets, integration_candidates=all_candidates)
+    overlaps = overlapping_repo_pairs(spec.repos)
+    if overlaps:
+        raise ValueError(f"canonical analysis targets overlap: {overlaps}")
 
     # Route liveness: a frontend (Node/TS repo with a src/ SPA layout, no route
     # registrations of its own) joined against the backend route tables.

@@ -2,11 +2,12 @@
 
 import json
 import subprocess
+from pathlib import Path
 
 from analysis_wrapper.cli import main
 from analysis_wrapper.discovery import emit
 from analysis_wrapper.discovery.modules import extract
-from analysis_wrapper.targetspec import TargetSpec
+from analysis_wrapper.targetspec import TargetSpec, path_contains
 
 
 def _write(path, content):
@@ -101,6 +102,75 @@ def test_nested_repo_disclosed_not_targeted(tmp_path):
     spec, report = emit.discover(ws)
     assert {r.path.split("/")[-1] for r in spec.repos} == {"billing-app", "audit-svc"}
     assert any("nested in" in line for line in report["not_targeted"])
+
+
+def test_non_git_workspace_container_targets_children_once(tmp_path):
+    ws = tmp_path / "container"
+    _write(ws / "web" / "package.json", "{}")
+    _write(ws / "web" / "index.js", "export const web = true\n")
+    _write(ws / "api" / "go.mod", "module example.com/api\n")
+    _write(ws / "api" / "main.go", "package main\n")
+
+    spec, report = emit.discover(ws)
+
+    assert {Path(repo.path).name for repo in spec.repos} == {"api", "web"}
+    assert all(Path(repo.path).resolve() != ws.resolve() for repo in spec.repos)
+    assert len(report["repos"]) == len(spec.repos) == 2
+    assert any("workspace container" in line for line in report["not_targeted"])
+
+
+def test_direct_non_git_root_subsumes_child_projects(tmp_path):
+    ws = tmp_path / "root-project"
+    _write(ws / "package.json", "{}")
+    _write(ws / "index.js", "export const root = true\n")
+    _write(ws / "packages" / "child" / "package.json", "{}")
+    _write(ws / "packages" / "child" / "index.js", "export const child = true\n")
+
+    spec, report = emit.discover(ws)
+
+    assert [Path(repo.path).resolve() for repo in spec.repos] == [ws.resolve()]
+    # Only direct child projects are independently discovered in v1; the
+    # nested package remains covered by the root scan without becoming a
+    # second target.
+    assert len(report["repos"]) == 1
+
+
+def test_direct_root_discloses_contained_first_level_project(tmp_path):
+    ws = tmp_path / "root-project"
+    _write(ws / "package.json", "{}")
+    _write(ws / "index.js", "export const root = true\n")
+    _write(ws / "child" / "package.json", "{}")
+    _write(ws / "child" / "index.js", "export const child = true\n")
+
+    spec, report = emit.discover(ws)
+
+    assert [Path(repo.path).resolve() for repo in spec.repos] == [ws.resolve()]
+    assert any("contained in root project" in line
+               for line in report["not_targeted"])
+
+
+def test_non_git_project_owns_nested_git_repo(tmp_path):
+    ws = tmp_path / "mixed"
+    project = ws / "platform"
+    nested = project / "plugin"
+    _write(project / "package.json", "{}")
+    _write(project / "index.js", "export const platform = true\n")
+    _write(nested / "go.mod", "module example.com/plugin\n")
+    _write(nested / "main.go", "package main\n")
+    subprocess.run(["git", "-C", str(nested), "init", "-q", "-b", "main"], check=True)
+
+    spec, report = emit.discover(ws)
+
+    assert [Path(repo.path).resolve() for repo in spec.repos] == [project.resolve()]
+    assert any(str(nested) in line and "canonical non-git project" in line
+               for line in report["not_targeted"])
+
+
+def test_path_containment_is_segment_aware(tmp_path):
+    app = tmp_path / "app"
+    application = tmp_path / "application"
+    assert path_contains(app, app / "src")
+    assert not path_contains(app, application)
 
 
 def test_cli_discover_subcommand(tmp_path, capsys):
