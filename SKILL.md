@@ -170,7 +170,8 @@ anchored):
 - `new-run --workspace <target> --skill-root <skill-dir> [--language ...]
   [--model <actual-id>] [--effort <actual-level>] [--run-id <label>]
   [--exclude ...]` — mints the run directory, runs discovery into it
-  (stage 1 done), reports `inspection_only` and the next stage.
+  (stage 1 done), writes `targets.json`, `discovery-report.json`, and the canonical
+  `identity-map.json`, then reports `inspection_only` and the next stage.
   Hosts that cannot expose model or effort omit those flags; provenance records the
   value as `unknown`, never as a guessed default.
 - `status --run <run-dir>` — prints the resume point and staleness (exit 5 +
@@ -200,6 +201,9 @@ anchored):
    submodule pins, history completeness (shallow flag, oldest commit, commit count);
    run-level — analyzer package/Git version and state, model id or `unknown`, effort or
    `unknown`, language, analyzed-at, bound preparation options, and observed tool versions.
+   `identity-map.json` is the canonical source for the staged presentation migration;
+   do not add another trailing-hash stripping rule. Older completed runs use the read-only
+   compatibility resolver and remain immutable.
 2. **Prepare deterministic evidence through ONE wrapper-owned path.** Run
    `project-analysis-wrapper prepare-overview --run <run-dir>` (put global flags such as
    `--since` before the subcommand; add `--include-network` only with explicit user

@@ -135,9 +135,13 @@ def test_new_run_default_language_is_zh_cn(tmp_path, synthetic_repo, capsys):
     run_dir = capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1]
     assert RunState.load(run_dir).language == "zh-CN"
     from analysis_wrapper import run_provenance
+    from analysis_wrapper import identity
     provenance = run_provenance.load(run_dir)
     assert provenance["generation"] == {
         "language": "zh-CN", "model": "unknown", "effort": "unknown"}
+    mapping = identity.load(run_dir)
+    assert mapping.source == "native"
+    assert mapping.project.display_name == synthetic_repo.parent.name
 
 
 def test_new_run_records_host_supplied_model_and_effort(tmp_path, synthetic_repo, capsys):
