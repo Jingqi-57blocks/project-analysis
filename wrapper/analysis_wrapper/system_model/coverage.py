@@ -170,8 +170,8 @@ def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
                 node_kinds=["route"], edge_types=["route-linkage"],
                 counts={"routes": 0},
                 source_universe="complete discovery observed no registered route surface.")
-        note = ("no route_liveness artifact in the run dir (needs exactly one "
-                "detectable frontend + backends). The capped module_signals.routes "
+        note = ("no canonical route_inventory artifact in the run dir. The "
+                "capped module_signals.routes "
                 "summary is deliberately NOT used as a canonical source, so no "
                 "route nodes were emitted.")
         return Partition(
@@ -179,12 +179,17 @@ def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
             node_kinds=["route"], edge_types=["route-linkage"],
             counts={"routes": 0}, notes=[note],
             source_universe="detailed route-registration inventory unavailable.")
-    rows = (report.get("route_liveness") or {}).get("rows", [])
+    inventory = report.get("route_inventory") or report.get("route_liveness") or {}
+    rows = inventory.get("rows", [])
+    mounts = sum(1 for row in rows if row.get("registration_kind") == "mount")
     unresolved = {
         "no_caller_found": sum(1 for r in rows if r.get("status") == "no-direct-path-match"),
         "match_ambiguous": sum(1 for r in rows if r.get("status") == "match-ambiguous"),
+        "ui_method_unresolved": sum(
+            1 for r in (report.get("ui_route_linkage") or {}).get("rows", [])
+            if r.get("status") == "method-unresolved"),
     }
-    notes = ["route registrations come from the DETAILED route_liveness rows, "
+    notes = ["route registrations come from the DETAILED route_inventory rows, "
              "not the capped module_signals.routes summary."]
     if disc.get("route_summary_capped"):
         notes.append("module_signals.routes hit its 200-row cap in >=1 repo — "
@@ -192,8 +197,12 @@ def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
     # A liveness scan-cap hit (6000-file / 262144-byte) or an ast-grep->regex
     # fallback silently shortens the route/linkage graph — degrade to partial and
     # say why (57B-31 canonical-completeness rule).
-    liveness_notes = (report.get("route_liveness") or {}).get("notes", [])
+    liveness_notes = inventory.get("notes", [])
     status = "complete"
+    if mounts:
+        status = "partial"
+        notes.append(f"{mounts} route mount/group registration(s) are preserved as "
+                     "unresolved topology; mount-to-leaf composition is not guessed.")
     if any("COVERAGE CAP" in n for n in liveness_notes):
         status = "partial"
         notes.append("liveness scan hit a file/byte COVERAGE CAP — some call "
@@ -207,6 +216,8 @@ def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
         status=status, producers=["discovery/liveness"],
         node_kinds=["route"], edge_types=["route-linkage"],
         counts={"routes": _node_count(builder, "route"),
+                "endpoint_registrations": len(rows) - mounts,
+                "unresolved_mounts": mounts,
                 "route_linkage_edges": _edge_count(builder, "route-linkage")},
         caps=["route-registration scan: 6000-file / 262144-byte producer caps "
               "(liveness.py); a route beyond them is not registered here.",

@@ -19,7 +19,7 @@ from .system_model import ids
 from .system_model.builder import ModelBuilder
 from .targetspec import TargetSpec
 
-CANDIDATE_SCHEMA_VERSION = "1.0.0"
+CANDIDATE_SCHEMA_VERSION = "1.1.0"
 MAP_SCHEMA_VERSION = "1.0.0"
 DISPOSITIONS = (
     "standalone", "merged", "platform", "shared-infrastructure",
@@ -117,20 +117,31 @@ def build_candidates(run_dir: str | Path, model: dict | None = None) -> dict:
             add(repo_id, "folder", str(folder),
                 [f"discovery-report.json:repos[{repo_id}].module_signals.folders"],
                 [], prefix_nodes)
-        for route in signals.get("routes", []):
-            value = str(route.get("path", ""))
-            add(repo_id, "route", value,
-                [_citation(repo_id, head, str(route.get("evidence", "")))],
-                [("route", value)])
-        for table in signals.get("tables", []):
-            value = str(table.get("name", ""))
-            add(repo_id, "table", value,
-                [_citation(repo_id, head, str(table.get("evidence", "")))],
-                [("table", value)])
         for path in signals.get("api_configs", []):
             value = str(path)
             add(repo_id, "api-config", value,
                 [_citation(repo_id, head, f"{value}:1")], [("file", value)])
+
+    # Authoritative route and datastore candidates come from the canonical,
+    # uncapped graph — never from the 200-row human-summary fields above.
+    for node in sorted(model.get("nodes", []), key=lambda row: str(row.get("id", ""))):
+        kind = str(node.get("kind", ""))
+        if kind not in {"route", "data-store"}:
+            continue
+        repo_id = str(node.get("repo_id", ""))
+        attrs = node.get("attrs", {})
+        if kind == "route":
+            method = str(attrs.get("method", "")).upper()
+            path = str(attrs.get("path", ""))
+            value = f"{method} {path}".strip()
+            signal_kind = ("route-mount" if attrs.get("registration_kind") == "mount"
+                           else "route")
+        else:
+            value = str(attrs.get("physical_name", node.get("label", "")))
+            signal_kind = "data-store"
+        add(repo_id, signal_kind, value,
+            [str(item) for item in node.get("evidence", [])], [],
+            [str(node.get("id", ""))])
 
     return {
         "schema_version": CANDIDATE_SCHEMA_VERSION,
@@ -138,8 +149,9 @@ def build_candidates(run_dir: str | Path, model: dict | None = None) -> dict:
         "candidate_count": len(candidates),
         "candidates": [candidates[key] for key in sorted(candidates)],
         "limitations": [
-            "Candidate accounting covers mechanically surfaced route, folder, table, "
-            "and committed API-config signals; it does not claim all business modules "
+            "Candidate accounting covers canonical route and datastore nodes plus "
+            "mechanically surfaced folders and committed API-config signals; it does "
+            "not claim all business modules "
             "were discovered.",
         ],
     }

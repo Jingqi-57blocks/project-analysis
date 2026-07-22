@@ -1,7 +1,7 @@
 """Normalize discovery evidence into nodes + non-call edges.
 
 CANONICAL COMPLETENESS RULE (57B-31): routes come from the detailed
-``route_liveness`` rows and tables from the uncapped ``table_evidence`` map —
+``route_inventory`` rows and tables from the uncapped ``table_evidence`` map —
 NEVER from the capped ``module_signals.routes`` / ``module_signals.tables``
 human-synthesis summaries (those are excluded from the canonical graph; the cap
 they carry is disclosed in coverage instead).
@@ -43,7 +43,14 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict) -> dict:
                       block.get("integration_evidence", {}))
         _deploy(builder, target.repo_id, heads, block.get("deployable_units", {}))
     _candidates(builder, spec)
-    routes_present = _routes(builder, heads, report.get("route_liveness"))
+    inventory = report.get("route_inventory") or report.get("route_liveness")
+    linkage = report.get("ui_route_linkage")
+    if linkage is None and report.get("route_liveness"):
+        legacy = report["route_liveness"]
+        linkage = {"rows": [dict(row, frontend_repo_id=legacy.get("frontend", ""))
+                            for row in legacy.get("rows", [])
+                            if row.get("caller_evidence")]}
+    routes_present = _routes(builder, heads, inventory, linkage)
     return {"routes_present": routes_present,
             "route_summary_capped": _summary_route_cap(blocks)}
 
@@ -99,43 +106,63 @@ def _access_summary(access: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# routes (detailed route_liveness — the canonical source)
+# routes (detailed route inventory + optional UI linkage)
 # --------------------------------------------------------------------------- #
 
-def _routes(builder: ModelBuilder, heads: dict, liveness: dict | None) -> bool:
-    if not liveness:
+def _routes(builder: ModelBuilder, heads: dict, inventory: dict | None,
+            linkage: dict | None) -> bool:
+    if not inventory:
         return False
-    frontend = liveness.get("frontend", "")
-    for row in liveness.get("rows", []):
+    link_rows = (linkage or {}).get("rows", [])
+    links_by_route: dict[tuple[str, str, str, str], list[dict]] = {}
+    for row in link_rows:
+        key = (str(row.get("repo_id", "")), str(row.get("method", "")),
+               str(row.get("path", "")), str(row.get("route_evidence", "")))
+        links_by_route.setdefault(key, []).append(row)
+    for row in inventory.get("rows", []):
         repo_id = row.get("repo_id", "")
         method, path = row.get("method", ""), row.get("path", "")
         route_ev = row.get("route_evidence", "")
-        status = row.get("status", "")
+        registration_kind = row.get("registration_kind", "endpoint")
+        key = (repo_id, method, path, route_ev)
+        all_links = links_by_route.get(key, [])
+        linked = [item for item in all_links if item.get("status") == "ui-called"]
         head = heads.get(repo_id, "")
         citation = ids.make_citation(repo_id, head, route_ev)
         route_id = builder.add_node(
             "route", [repo_id, method, path, route_ev],
-            label=f"{method} {path}", status="observed", repo_id=repo_id,
-            producer=LIVENESS, evidence=[citation],
-            attrs={"method": method, "path": path, "liveness": status})
+            label=f"{method} {path}",
+            status=("unresolved" if registration_kind == "mount" else "observed"),
+            repo_id=repo_id, producer=LIVENESS,
+            evidence_basis=("static-reference" if registration_kind == "mount"
+                            else "declaration"), evidence=[citation],
+            attrs={"method": method, "path": path,
+                   "registration_kind": registration_kind,
+                   "ui_linked": bool(linked),
+                   "ui_frontends": sorted(set(str(item.get("frontend_repo_id", ""))
+                                              for item in linked
+                                              if item.get("frontend_repo_id")))})
         builder.note_file(repo_id, ids.split_position(route_ev)[0],
                           producer=LIVENESS, evidence=citation)
-        _route_callers(builder, row, frontend, repo_id, heads, route_id)
+        for link in all_links:
+            _route_callers(builder, link, repo_id, heads, route_id)
     return True
 
 
-def _route_callers(builder, row, frontend, repo_id, heads, route_id) -> None:
+def _route_callers(builder, row, repo_id, heads, route_id) -> None:
     status = row.get("status", "")
     # ui-called callers live in the frontend repo; internal-called ones in the
     # route's own repo. no-direct-path-match / match-ambiguous carry no caller
     # (preserved as unresolved counts in coverage, not as fabricated edges).
-    caller_repo = frontend if status == "ui-called" else repo_id
+    caller_repo = (row.get("frontend_repo_id", "")
+                   if status in {"ui-called", "method-unresolved"} else repo_id)
     for caller_ev in row.get("caller_evidence", []):
         head = heads.get(caller_repo, "")
         citation = ids.make_citation(caller_repo, head, caller_ev)
         caller_file = builder.note_file(caller_repo, ids.split_position(caller_ev)[0],
                                         producer=LIVENESS, evidence=citation)
-        builder.add_edge("route-linkage", caller_file, route_id, status="observed",
+        builder.add_edge("route-linkage", caller_file, route_id,
+                         status=("observed" if status == "ui-called" else "unresolved"),
                          producer=LIVENESS, evidence=[citation],
                          attrs={"link": status})
 

@@ -231,23 +231,29 @@ def build(run_dir: str | Path) -> dict:
             list(targets.get("integration_candidates", [])),
             key=lambda row: row.get("candidate_id", ""),
             limit=_CANDIDATE_LIMIT),
-        "route_liveness": (None if not discovery.get("route_liveness") else {
-            **{key: value for key, value in discovery["route_liveness"].items()
-               if key not in {"rows", "calls_by_base"}},
-            "calls_by_base": _bounded(
-                [{"base": key,
-                  "calls": _bounded([{"path": path} for path in value],
-                                    key=lambda row: row["path"],
-                                    limit=_CANDIDATE_LIMIT)}
-                 for key, value in (discovery["route_liveness"].get(
-                     "calls_by_base", {}) or {}).items()],
-                key=lambda row: row["base"], limit=_CANDIDATE_LIMIT),
-            "rows": _bounded(
-                list(discovery["route_liveness"].get("rows", [])),
-                key=lambda row: (str(row.get("repo_id", "")),
-                                 str(row.get("method", "")),
-                                 str(row.get("path", ""))),
-                limit=_CANDIDATE_LIMIT),
+        "route_inventory": (None if not (discovery.get("route_inventory") or
+                                          discovery.get("route_liveness")) else {
+            "rows": _bounded(list((discovery.get("route_inventory") or
+                                    discovery.get("route_liveness") or {}).get(
+                                        "rows", [])),
+                             key=lambda row: (str(row.get("repo_id", "")),
+                                              str(row.get("method", "")),
+                                              str(row.get("path", ""))),
+                             limit=_CANDIDATE_LIMIT),
+            "notes": (discovery.get("route_inventory") or
+                      discovery.get("route_liveness") or {}).get("notes", []),
+        }),
+        "ui_route_linkage": (None if not discovery.get("ui_route_linkage") else {
+            "frontends": discovery["ui_route_linkage"].get("frontends", []),
+            "calls_by_frontend": discovery["ui_route_linkage"].get(
+                "calls_by_frontend", {}),
+            "rows": _bounded(list(discovery["ui_route_linkage"].get("rows", [])),
+                             key=lambda row: (str(row.get("frontend_repo_id", "")),
+                                              str(row.get("repo_id", "")),
+                                              str(row.get("method", "")),
+                                              str(row.get("path", ""))),
+                             limit=_CANDIDATE_LIMIT),
+            "notes": discovery["ui_route_linkage"].get("notes", []),
         }),
         "role_catalog_by_repo": _bounded(
             [{"repo_id": key, "roles": value}

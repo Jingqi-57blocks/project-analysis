@@ -34,6 +34,8 @@ _SOURCE_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go"}
 # alias of a config base, resolved per-file below), plus the literal path head.
 _UI_CALL = re.compile(
     r"\$\{\s*(config\.)?(\w+)\s*\}(/[A-Za-z0-9_\-./:${}]*)")
+_UI_METHOD_BEFORE = re.compile(
+    r"(?:^|[.\s(])(get|post|put|patch|delete)\s*\(\s*[`'\"]?\s*$", re.I)
 # Per-file rebindings of a config base to a local name — a `${localName}/path`
 # call binds to the REAL underlying config base, not to a global identifier that
 # shares the local name (57B-15: `const x = config.someBase` and `const {
@@ -66,6 +68,7 @@ class CallHit:
     base: str
     path: str
     evidence: str
+    method: str = ""       # empty = path observed, HTTP method not proven
 
 
 @dataclass
@@ -212,21 +215,26 @@ def ui_call_sites(repo_path: str | Path, stats: dict | None = None) -> list[Call
             # An explicit `config.X` is always the global base X. A bare `${X}`
             # binds to a per-file alias when one exists, else stands as written.
             base = name if cfg_prefix else aliases.get(name, name)
+            prefix = text[max(0, m.start() - 120):m.start()]
+            method_match = _UI_METHOD_BEFORE.search(prefix)
             hits.append(CallHit(base=base, path=raw,
-                                evidence=f"{rel}:{_line_of(text, m.start())}"))
+                                evidence=f"{rel}:{_line_of(text, m.start())}",
+                                method=(method_match.group(1).upper()
+                                        if method_match else "")))
     return hits
 
 
 _ROUTE_RULE = "route-registration.yml"
 # Method + path from a matched Go route call's text (the leading "/…" literal).
 _GO_ROUTE_TEXT = re.compile(
-    r'\.\s*(GET|POST|PUT|PATCH|DELETE|Handle|HandleFunc)\s*\(\s*"([/][^"]*)"')
-_MOUNTS = {"USE", "GROUP", "HANDLE"}  # mounts/groups, not leaf routes
+    r'\.\s*(GET|POST|PUT|PATCH|DELETE|Handle|HandleFunc|Group)\s*\(\s*"([/][^"]*)"')
+_MOUNTS = {"USE", "GROUP"}  # unresolved mounts/groups, not leaf endpoints
 
 
 def route_registrations(repo_path: str | Path,
                         tier2_exclusions: list[str] | None = None,
-                        stats: dict | None = None) -> list[RouteHit]:
+                        stats: dict | None = None,
+                        include_mounts: bool = False) -> list[RouteHit]:
     """Structural route extraction via ast-grep (route-registration.yml). Falls
     back to the transparent regex scan when ast-grep is unavailable, so the
     signal degrades rather than disappears; the fallback is disclosed in
@@ -237,7 +245,7 @@ def route_registrations(repo_path: str | Path,
     scans independently and is not bounded by the doctor-owned file/byte caps."""
     tier2 = set(tier2_exclusions or [])
     if not astgrep.available():
-        return _route_registrations_regex(repo_path, tier2, stats)
+        return _route_registrations_regex(repo_path, tier2, stats, include_mounts)
     hits: list[RouteHit] = []
     # Stable order so route rows (and any downstream cap/sample) are deterministic
     # regardless of ast-grep scan order.
@@ -254,7 +262,7 @@ def route_registrations(repo_path: str | Path,
             method, path = found.group(1).upper(), found.group(2)
         else:  # route-js / route-ts / route-tsx expose method + path as metavars
             method, path = match.vars.get("M", "").upper(), match.vars.get("P", "")
-        if method in _MOUNTS or not path.startswith("/"):
+        if (method in _MOUNTS and not include_mounts) or not path.startswith("/"):
             continue
         hits.append(RouteHit(method=method, path=path,
                              evidence=f"{match.file}:{match.line}"))
@@ -262,7 +270,8 @@ def route_registrations(repo_path: str | Path,
 
 
 def _route_registrations_regex(repo_path: str | Path, tier2: set[str],
-                               stats: dict | None = None) -> list[RouteHit]:
+                               stats: dict | None = None,
+                               include_mounts: bool = False) -> list[RouteHit]:
     root = Path(repo_path).expanduser().resolve()
     hits: list[RouteHit] = []
     for path in _iter_source(root, stats):
@@ -273,7 +282,7 @@ def _route_registrations_regex(repo_path: str | Path, tier2: set[str],
         pattern = _GO_ROUTE if path.suffix == ".go" else _JS_ROUTE
         for m in pattern.finditer(text):
             method = m.group(1).upper()
-            if method in _MOUNTS:
+            if method in _MOUNTS and not include_mounts:
                 continue
             hits.append(RouteHit(method=method, path=m.group(2),
                                  evidence=f"{rel}:{_line_of(text, m.start())}"))
@@ -312,6 +321,8 @@ def liveness(frontend_repo, backends: list[tuple],
         "ops callers are invisible to repository evidence (standing disclaimer).",
         "match heuristic: version-prefix-tolerant, param wildcards, route is a "
         "prefix of the call, at least one concrete segment must agree.",
+        "HTTP method must also be structurally observed and compatible before a "
+        "UI call is credited; unknown or conflicting methods remain method-unresolved.",
     ])
     report.astgrep = astgrep.probe().provenance()
     if backends and not astgrep.available():
@@ -363,12 +374,19 @@ def liveness(frontend_repo, backends: list[tuple],
                     "match-ambiguous", []))
                 continue
             matching = [c for segs, c in norm_calls if _matches(rsegs, segs)]
-            here = sorted(c.evidence for c in matching
-                          if base_backend.get(c.base) == repo_id)
+            bound_here = [c for c in matching if base_backend.get(c.base) == repo_id]
+            here = sorted(c.evidence for c in bound_here
+                          if c.method and c.method == route.method.upper())
             if here:
                 report.rows.append(LivenessRow(
                     repo_id, route.method, route.path, route.evidence,
                     "ui-called", here[:3]))
+                continue
+            unknown_or_mismatch = sorted(c.evidence for c in bound_here)
+            if unknown_or_mismatch:
+                report.rows.append(LivenessRow(
+                    repo_id, route.method, route.path, route.evidence,
+                    "method-unresolved", unknown_or_mismatch[:3]))
                 continue
             int_hits = [c.evidence for segs, c in norm_internal if _matches(rsegs, segs)]
             if int_hits:

@@ -236,7 +236,8 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
               f"producer repos={mapped_repos}, system-model repos={consumed_repos}")
 
     report = _load(run / "discovery-report.json")
-    route_rows = (report.get("route_liveness") or {}).get("rows", [])
+    route_rows = ((report.get("route_inventory") or report.get("route_liveness"))
+                  or {}).get("rows", [])
     route_nodes = int(coverage.get("routes", {}).get("counts", {}).get("routes", 0))
     check("route-liveness-consumption", not route_rows or route_nodes > 0,
           f"producer rows={len(route_rows)}, system-model routes={route_nodes}")
@@ -246,6 +247,27 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
           candidate_doc.get("candidate_count") == len(candidate_doc.get("candidates", [])),
           f"declared={candidate_doc.get('candidate_count')}, "
           f"rows={len(candidate_doc.get('candidates', []))}")
+    for node_kind, signal_kind in (("route", "route"),
+                                   ("route", "route-mount"),
+                                   ("data-store", "data-store")):
+        expected_ids = set()
+        for node in model.get("nodes", []):
+            if node.get("kind") != node_kind:
+                continue
+            is_mount = node.get("attrs", {}).get("registration_kind") == "mount"
+            if node_kind == "route" and (signal_kind == "route-mount") != is_mount:
+                continue
+            expected_ids.add(str(node.get("id", "")))
+        observed = []
+        for candidate in candidate_doc.get("candidates", []):
+            if candidate.get("signal_kind") == signal_kind:
+                observed.extend(str(node_id) for node_id in candidate.get("node_ids", []))
+        check(
+            f"canonical-{signal_kind}-candidate-coverage",
+            set(observed) == expected_ids and len(observed) == len(set(observed)),
+            f"canonical_nodes={len(expected_ids)}, candidate_links={len(observed)}, "
+            f"unique_links={len(set(observed))}",
+        )
     if require_module_map or (run / "module-map.json").is_file():
         try:
             candidates, modules = module_map.validate(run)

@@ -8,7 +8,7 @@ language: JavaScript
 rule:
   pattern: $O.$M($P, $$$)
 constraints:
-  M: { regex: '^(get|post|put|patch|delete)$' }
+  M: { regex: '^(get|post|put|patch|delete|use)$' }
   P: { kind: string }
 ---
 id: route-ts
@@ -16,7 +16,7 @@ language: TypeScript
 rule:
   pattern: $O.$M($P, $$$)
 constraints:
-  M: { regex: '^(get|post|put|patch|delete)$' }
+  M: { regex: '^(get|post|put|patch|delete|use)$' }
   P: { kind: string }
 ---
 id: route-tsx
@@ -24,7 +24,7 @@ language: Tsx
 rule:
   pattern: $O.$M($P, $$$)
 constraints:
-  M: { regex: '^(get|post|put|patch|delete)$' }
+  M: { regex: '^(get|post|put|patch|delete|use)$' }
   P: { kind: string }
 ---
 id: route-go
@@ -34,7 +34,7 @@ rule:
   all:
     - has:
         field: function
-        regex: '\.(GET|POST|PUT|PATCH|DELETE|Handle|HandleFunc)$'
+        regex: '\.(GET|POST|PUT|PATCH|DELETE|Handle|HandleFunc|Group)$'
     - has:
         field: arguments
         has:

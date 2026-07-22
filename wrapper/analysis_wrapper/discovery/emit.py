@@ -48,6 +48,13 @@ def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
 
 
 _DIRECT_PROJECT_MANIFESTS = ("package.json", "go.mod")
+_SERVER_FRAMEWORKS = {
+    "express", "koa", "fastify", "@nestjs/core", "hapi",
+    "github.com/gin-gonic/gin", "github.com/labstack/echo",
+    "github.com/gofiber/fiber", "github.com/go-chi/chi",
+    "github.com/gorilla/mux",
+}
+_UI_FRAMEWORKS = {"react", "vue", "@angular/core", "svelte", "next", "nuxt"}
 
 
 def _has_direct_project_manifest(path: Path) -> bool:
@@ -262,22 +269,70 @@ def discover(workspace_root: str | Path,
     for t in repo_targets:
         has_routes = any(_produce_has_routes(r) for r in repo_reports
                          if r["repo_id"] == t.repo_id)
+        repo_report = next((r for r in repo_reports if r["repo_id"] == t.repo_id), {})
+        frameworks = set(repo_report.get("stacks", {}).get("frameworks", []))
         stacks_l = {s.lower() for s in t.stacks}
-        if has_routes:
+        if has_routes or frameworks & _SERVER_FRAMEWORKS:
             backends.append((t.repo_id, t.path, _tier2(t.repo_id)))
-        elif stacks_l & {"ts", "tsx", "js"} and (Path(t.path) / "src").is_dir():
+        if (frameworks & _UI_FRAMEWORKS or
+                (not frameworks & _SERVER_FRAMEWORKS and
+                 stacks_l & {"ts", "tsx", "js"} and
+                 (Path(t.path) / "src").is_dir() and not has_routes)):
             frontends.append(t)
-    liveness_report = None
-    if backends and len(frontends) == 1:
-        rep = liveness.liveness(frontends[0].path, backends)
-        liveness_report = {
-            "frontend": frontends[0].repo_id,
-            "calls_by_base": rep.calls_by_base(),
-            "notes": rep.notes,
-            "rows": [{"repo_id": r.repo_id, "method": r.method, "path": r.path,
-                      "route_evidence": r.route_evidence, "status": r.status,
-                      "caller_evidence": r.caller_evidence} for r in rep.rows],
-            **rep.astgrep,   # ast-grep version/path/drift for the route scan (57B-37)
+    route_inventory = None
+    ui_route_linkage = None
+    if backends:
+        inventory_rows = []
+        inventory_notes = []
+        for repo_id, path, tier2_dirs in sorted(backends):
+            stats = {"file_cap_hit": False, "oversized": 0}
+            for hit in liveness.route_registrations(
+                    path, tier2_dirs, stats, include_mounts=True):
+                inventory_rows.append({
+                    "repo_id": repo_id, "method": hit.method, "path": hit.path,
+                    "route_evidence": hit.evidence,
+                    "registration_kind": (
+                        "mount" if hit.method.upper() in liveness._MOUNTS else "endpoint"),
+                })
+            if stats["file_cap_hit"] or stats["oversized"]:
+                inventory_notes.append(
+                    f"{repo_id}: COVERAGE CAP in fallback route scan "
+                    f"(file_cap={stats['file_cap_hit']}, oversized={stats['oversized']})")
+        if not liveness.astgrep.available():
+            inventory_notes.append("ROUTE EXTRACTION FALLBACK: ast-grep unavailable")
+        route_inventory = {
+            "notes": inventory_notes,
+            "rows": sorted(inventory_rows, key=lambda row: (
+                row["repo_id"], row["method"], row["path"], row["route_evidence"])),
+            **liveness.astgrep.probe().provenance(),
+        }
+        linkage_rows = []
+        calls_by_frontend = {}
+        linkage_notes = []
+        for frontend in sorted(frontends, key=lambda row: row.repo_id):
+            linked = liveness.liveness(frontend.path, backends)
+            calls_by_frontend[frontend.repo_id] = linked.calls_by_base()
+            linkage_notes.extend(f"{frontend.repo_id}: {note}" for note in linked.notes)
+            for row in linked.rows:
+                if row.status not in {"ui-called", "method-unresolved"} \
+                        or not row.caller_evidence:
+                    continue
+                linkage_rows.append({
+                    "frontend_repo_id": frontend.repo_id,
+                    "repo_id": row.repo_id,
+                    "method": row.method,
+                    "path": row.path,
+                    "route_evidence": row.route_evidence,
+                    "status": row.status,
+                    "caller_evidence": row.caller_evidence,
+                })
+        ui_route_linkage = {
+            "frontends": sorted(t.repo_id for t in frontends),
+            "calls_by_frontend": calls_by_frontend,
+            "rows": sorted(linkage_rows, key=lambda row: (
+                row["frontend_repo_id"], row["repo_id"], row["method"],
+                row["path"], row["route_evidence"])),
+            "notes": sorted(set(linkage_notes)),
         }
 
     report = {
@@ -287,7 +342,8 @@ def discover(workspace_root: str | Path,
         "not_targeted": sorted(disclosed),
         "reduced_coverage_targets": sorted(reduced),
         "integration_candidate_count": len(all_candidates),
-        "route_liveness": liveness_report,
+        "route_inventory": route_inventory,
+        "ui_route_linkage": ui_route_linkage,
         # Cross-repo role-catalog summary so catalog DIFFERENCES are computable
         # (locate-only; names, not meanings).
         "role_catalog_by_repo": {

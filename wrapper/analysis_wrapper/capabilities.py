@@ -137,10 +137,13 @@ def build(run_dir: str | Path) -> dict:
     # assumptions.  Legitimate zero results become not-applicable only when the
     # corresponding producer completed its source universe.
     repos = report.get("repos", [])
-    liveness_doc = report.get("route_liveness")
-    route_rows = (liveness_doc or {}).get("rows", [])
-    backend_ids = {block.get("repo_id", "") for block in repos
-                   if block.get("module_signals", {}).get("routes")}
+    route_doc = report.get("route_inventory") or report.get("route_liveness")
+    route_rows = (route_doc or {}).get("rows", [])
+    backend_ids = {str(row.get("repo_id", "")) for row in route_rows
+                   if row.get("repo_id")}
+    if not backend_ids:
+        backend_ids = {block.get("repo_id", "") for block in repos
+                       if block.get("module_signals", {}).get("routes")}
     any_registered_routes = bool(backend_ids)
     frontend_ids = set()
     for block in repos:
@@ -155,20 +158,28 @@ def build(run_dir: str | Path) -> dict:
         if stacks & {"js", "ts", "tsx", "javascript", "typescript"} \
                 and "src" in folders:
             frontend_ids.add(block.get("repo_id", ""))
-    route_status = ("complete" if liveness_doc is not None else
+    unresolved_mounts = sum(1 for row in route_rows
+                            if row.get("registration_kind") == "mount")
+    route_status = ("partial" if route_doc is not None and unresolved_mounts else
+                    "complete" if route_doc is not None else
                     "unavailable" if any_registered_routes else "not-applicable")
     records.append(_record(
         "route-inventory", status=route_status,
         applicable=route_status != "not-applicable", expected=[], run=run,
         details=[{"repo_id": row.get("repo_id", ""), "status": row.get("status", "")}
                  for row in route_rows],
-        reason=("no registered route surface was discovered" if route_status == "not-applicable"
+        reason=("route mounts are retained as unresolved topology; composed endpoint "
+                "paths are not guessed" if unresolved_mounts else
+                "no registered route surface was discovered" if route_status == "not-applicable"
                 else "no canonical detailed route inventory" if route_status == "unavailable"
                 else ""),
     ))
     ui_applicable = bool(frontend_ids and backend_ids)
+    linkage_doc = report.get("ui_route_linkage")
+    if linkage_doc is None and report.get("route_liveness") is not None:
+        linkage_doc = report.get("route_liveness")
     ui_status = ("not-applicable" if not ui_applicable else
-                 "complete" if liveness_doc is not None else "unavailable")
+                 "complete" if linkage_doc is not None else "unavailable")
     records.append(_record(
         "ui-route-linkage", status=ui_status, applicable=ui_applicable,
         expected=[], run=run,

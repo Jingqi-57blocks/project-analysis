@@ -7,6 +7,8 @@ from pathlib import Path
 from analysis_wrapper.cli import main
 from analysis_wrapper.discovery import emit
 from analysis_wrapper.discovery.modules import extract
+from analysis_wrapper import module_map
+from analysis_wrapper.system_model import assemble as system_model
 from analysis_wrapper.targetspec import TargetSpec, path_contains
 
 
@@ -190,3 +192,64 @@ def test_cli_run_without_targets_is_input_error(tmp_path, capsys):
     code = main(["--out", str(tmp_path / "o"), "sweep"])
     assert code == 2
     assert "--targets is required" in capsys.readouterr().err
+
+
+def test_route_inventory_is_independent_of_multiple_frontends(tmp_path):
+    ws = tmp_path / "workspace"
+    api = ws / "api"
+    _write(api / "package.json", '{"dependencies":{"express":"1"}}')
+    _write(api / "app.js", "app.get('/items', h); app.get('/health', h);\n")
+    for name in ("web-a", "web-b"):
+        web = ws / name
+        _write(web / "package.json", "{}")
+        _write(web / "src" / "api.ts",
+               "get(`${api}/items`); get(`${api}/health`);\n")
+
+    _, report = emit.discover(ws)
+
+    assert len(report["route_inventory"]["rows"]) == 2
+    assert report["ui_route_linkage"]["frontends"] == [
+        next(row["repo_id"] for row in report["repos"] if "web-a" in row["repo_id"]),
+        next(row["repo_id"] for row in report["repos"] if "web-b" in row["repo_id"]),
+    ]
+    assert {row["frontend_repo_id"]
+            for row in report["ui_route_linkage"]["rows"]} == set(
+                report["ui_route_linkage"]["frontends"])
+
+
+def test_canonical_routes_and_datastores_bypass_summary_cap(tmp_path):
+    ws = tmp_path / "workspace"
+    api = ws / "api"
+    _write(api / "package.json", '{"dependencies":{"express":"1"}}')
+    _write(api / "app.js", "\n".join(
+        f"app.get('/resource-{index}', h);" for index in range(230)))
+    _write(api / "schema.sql", "\n".join(
+        f"CREATE TABLE t_{index:03d} (id INT);" for index in range(230)))
+    run = tmp_path / "run"
+    spec, report = emit.discover(ws)
+    emit.write_stage1(run, spec, report)
+    model = system_model.assemble(run).to_dict()
+    candidates = module_map.build_candidates(run, model)
+
+    assert len(report["repos"][0]["module_signals"]["routes"]) == 200
+    assert len(report["route_inventory"]["rows"]) == 230
+    assert sum(node["kind"] == "route" for node in model["nodes"]) == 230
+    assert sum(node["kind"] == "data-store" for node in model["nodes"]) == 230
+    assert sum(row["signal_kind"] == "route"
+               for row in candidates["candidates"]) == 230
+    assert sum(row["signal_kind"] == "data-store"
+               for row in candidates["candidates"]) == 230
+
+
+def test_route_candidate_identity_includes_method(tmp_path):
+    ws = tmp_path / "workspace"
+    api = ws / "api"
+    _write(api / "package.json", '{"dependencies":{"express":"1"}}')
+    _write(api / "app.js", "app.get('/items', h); app.post('/items', h);\n")
+    run = tmp_path / "run"
+    spec, report = emit.discover(ws)
+    emit.write_stage1(run, spec, report)
+    model = system_model.assemble(run).to_dict()
+    values = {row["value"] for row in module_map.build_candidates(
+        run, model)["candidates"] if row["signal_kind"] == "route"}
+    assert values == {"GET /items", "POST /items"}
