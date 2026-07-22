@@ -13,8 +13,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import (coverage_render, module_map, module_render, synthesis_input,
-               workspace_metrics)
+from . import (coverage_render, findings, module_map, module_render,
+               synthesis_input, workspace_metrics)
 from .executor import replace_artifact_text
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec, overlapping_repo_pairs
@@ -319,7 +319,12 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
     artifact_names = ["system-model.json", "module-candidates.json", "module-map.json",
                       "module-summary.md"]
     if require_reports:
-        artifact_names += ["project-map.md", "technical-overview.md", "overview.md"]
+        artifact_names += ["findings.json", "findings-summary.md",
+                           "findings-pm-summary.md", "project-map.md",
+                           "technical-overview.md", "overview.md"]
+    elif (run / "findings.json").is_file():
+        artifact_names += ["findings.json", "findings-summary.md",
+                           "findings-pm-summary.md"]
     for name in artifact_names:
         path = run / name
         if not path.is_file():
@@ -358,8 +363,29 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
               if observed_modules == expected_modules else
               "project map module block is missing or differs from module-map.json")
 
+        try:
+            findings.validate(run)
+            expected_technical_findings = findings.render_technical(run)
+            expected_pm_findings = findings.render_pm(run)
+            finding_error = ""
+        except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            expected_technical_findings = expected_pm_findings = ""
+            finding_error = str(exc)
+        observed_technical_findings = findings.extract_technical(technical)
+        check("machine-verified-technical-findings",
+              not finding_error and observed_technical_findings == expected_technical_findings,
+              "technical report contains the exact validated atomic findings block"
+              if not finding_error and observed_technical_findings == expected_technical_findings
+              else finding_error or "technical findings block is missing or changed")
+
         overview = (run / "overview.md").read_text(
             "utf-8", errors="replace") if (run / "overview.md").is_file() else ""
+        observed_pm_findings = findings.extract_pm(overview)
+        check("machine-verified-pm-findings",
+              not finding_error and observed_pm_findings == expected_pm_findings,
+              "PM report contains the exact verified findings projection"
+              if not finding_error and observed_pm_findings == expected_pm_findings
+              else finding_error or "PM findings block is missing or changed")
         entities = sorted(set(_HTML_ENTITY.findall(overview)))
         encoded_links = _ENCODED_LOCAL_LINK.findall(overview)
         check("pm-text-integrity", not entities and not encoded_links,

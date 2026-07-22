@@ -9,11 +9,15 @@ read `signals/raw/` (contained, off-limits).
 ## The finding shape (return every finding exactly in this shape)
 
 ```
+finding_id:           finding-<stable-kebab-case-id>
 claim:               one falsifiable sentence — the problem, not the metric
 lens:                <lens name>
 affected_modules:    [candidate IDs from module-candidates.json; re-keyed after map]
-evidence:            - <citation> | basis=<basis> — one line of what it shows
-                     - <citation> | basis=<basis> — ... (≥2 independent signals for high confidence)
+evidence:            - fact: <one atomic, independently inspectable statement>
+                       refs: [<one or more exact citations supporting only this fact>]
+                       basis: <basis>
+                     - fact: <another atomic statement>
+                       refs: [...]              # ≥2 independent signals for high confidence
 evidence_basis:      [the distinct bases used by the evidence rows]
 impact:              what this costs when someone changes/operates this code
 priority:            critical | high | medium | low   (impact, likelihood/exposure,
@@ -27,9 +31,13 @@ suggested_direction: a direction, not a prescription
 
 - Source claims: `repo@commit:path:line` — dirty worktree: `repo@WORKTREE:path:line`,
   non-git: `repo@NON-GIT:path:line`.
-- Tool-derived metrics (complexity, duplication, churn, counts): cite the view —
-  `signals/<view-file>:<line-or-section>`.
+- Tool-derived metrics (complexity, duplication, churn, counts): cite the exact
+  view line — `signals/<view-file>:<line>`.
+- Canonical workspace metrics: cite `metric:<metric_ref>` exactly as recorded in
+  `workspace-metrics.json`; do not recalculate or relabel its numerator/denominator.
 - NEVER cite `signals/raw/`. A claim you cannot cite is a claim you do not make.
+- A citation never covers a neighboring subclaim. Split path ownership, counts,
+  percentages, and classifications into separate atomic evidence rows.
 - Evidence basis is exactly one of `static-reference | declaration | configuration |
   history | inferred-linkage | runtime-observation | user-confirmed`. This static
   overview normally has no `runtime-observation`; never assign it merely because a
@@ -46,10 +54,11 @@ suggested_direction: a direction, not a prescription
    `active` / `conditional (on what)` / `status unresolved` — assigned only
    with evidence (env gates, feature flags, commented-out registration,
    config conditionals). Code present ≠ behavior active.
-4. **Coverage honesty.** End your output with a coverage line per signal you
-   consumed: its status (verbatim from `run-summary.json`) and what a
-   failed/partial/skipped signal means for YOUR lens. A missing tool is
-   reduced coverage — never evidence of health.
+4. **Coverage honesty.** Return coverage separately from the findings array: one
+   row per consumed signal with its status (verbatim from `run-summary.json`) and
+   what a failed/partial/skipped signal means for YOUR lens. Coverage text is not
+   evidence and must never be folded into a finding. A missing tool is reduced
+   coverage — never evidence of health.
 5. **Priorities are for the reader's time**: `critical` = actively dangerous
    or blocking change today; `high` = will bite the next project on this code;
    `medium` = friction; `low` = polish. When priority rests on change
