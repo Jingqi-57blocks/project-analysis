@@ -93,6 +93,13 @@ def test_rollback_cascades_to_later_stages(tmp_path, target, capsys):
     for stage in lifecycle.STAGES:
         state.mark(stage)
     state.save(tmp_path)
+    from analysis_wrapper import run_provenance
+    TargetSpec([target]).save(tmp_path / "targets.json")
+    run_provenance.write(
+        tmp_path,
+        run_provenance.create_document(
+            TargetSpec([target]), analyzer_root=tmp_path, language="en"),
+    )
     assert main(["rollback", "--run", str(tmp_path), "--stage", "map"]) == 0
     assert "re-opened: map, overview" in capsys.readouterr().out
     assert RunState.load(tmp_path).next_stage() == "map"
@@ -127,6 +134,23 @@ def test_new_run_default_language_is_zh_cn(tmp_path, synthetic_repo, capsys):
     assert code == 0
     run_dir = capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1]
     assert RunState.load(run_dir).language == "zh-CN"
+    from analysis_wrapper import run_provenance
+    provenance = run_provenance.load(run_dir)
+    assert provenance["generation"] == {
+        "language": "zh-CN", "model": "unknown", "effort": "unknown"}
+
+
+def test_new_run_records_host_supplied_model_and_effort(tmp_path, synthetic_repo, capsys):
+    from analysis_wrapper import run_provenance
+    code = main([
+        "new-run", "--workspace", str(synthetic_repo.parent),
+        "--skill-root", str(tmp_path / "skill"),
+        "--model", "host-model", "--effort", "light",
+    ])
+    assert code == 0
+    run_dir = capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1]
+    assert run_provenance.load(run_dir)["generation"] == {
+        "language": "zh-CN", "model": "host-model", "effort": "light"}
 
 
 def test_new_run_cli_uses_custom_readable_id(tmp_path, synthetic_repo, capsys):
@@ -173,3 +197,42 @@ def test_cli_full_lifecycle_flow(tmp_path, target, synthetic_repo, capsys):
     subprocess.run(["git", "-C", str(synthetic_repo), "-c", "user.email=t@t",
                     "-c", "user.name=t", "commit", "-qm", "later"], check=True)
     assert main(["status", "--run", run_dir]) == 5
+
+
+def test_accept_refuses_analyzer_staleness(tmp_path, target, monkeypatch, capsys):
+    from analysis_wrapper import run_provenance
+    run = tmp_path / "skill" / "output" / "project" / "overview" / "run"
+    run.mkdir(parents=True)
+    recorded = {
+        "root": str(tmp_path), "version": "0.3.0",
+        "git_head": "a" * 40, "dirty_detail": "no",
+    }
+    state = RunState.create(
+        "run", "project", TargetSpec([target]),
+        analysis_identity={"analyzer": recorded})
+    for stage in lifecycle.STAGES:
+        state.mark(stage)
+    state.save(run)
+    TargetSpec([target]).save(run / "targets.json")
+    run_provenance.write(
+        run,
+        run_provenance.create_document(
+            TargetSpec([target]), analyzer_root=tmp_path, language="en"),
+    )
+    monkeypatch.setattr(run_provenance, "analyzer_observation", lambda _root: {
+        **recorded, "version": "0.4.0"})
+    assert main(["accept", "--run", str(run)]) == 2
+    assert "stale" in capsys.readouterr().err
+
+
+def test_incomplete_legacy_run_cannot_advance_without_provenance(
+        tmp_path, target, capsys):
+    state = RunState.create("legacy", "project", TargetSpec([target]), when=WHEN)
+    state.mark("discovery")
+    state.save(tmp_path)
+    TargetSpec([target]).save(tmp_path / "targets.json")
+
+    assert main([
+        "mark-stage", "--run", str(tmp_path), "--stage", "signals"
+    ]) == 2
+    assert "legacy run cannot resume" in capsys.readouterr().err
