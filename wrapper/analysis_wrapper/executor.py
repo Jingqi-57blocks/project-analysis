@@ -27,6 +27,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import gitinfo
 from .manifest import Manifest, RepoStamp
@@ -35,6 +36,9 @@ from .status import Status
 from .targetspec import RepoTarget
 from .tooldefs import PrepareResult, ToolDef, approved_argv0
 
+if TYPE_CHECKING:
+    from .identity import RepositoryIdentity
+
 _NET_ERR = re.compile(
     r"ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|"
     r"no such host|lookup [^\n]+:|request failed|dial tcp|connection refused|"
@@ -42,9 +46,6 @@ _NET_ERR = re.compile(
     r"|\bE(?:4\d\d|5\d\d)\b|(^|[^0-9])(401|403|404|5\d\d)([^0-9]|$)",
     re.IGNORECASE,
 )
-_SAFE_SIGNAL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$")
-
-
 class WrapperSafetyError(ValueError):
     """A SAFETY refusal (write-into-target, binary-inside-target, unsafe path)
     — distinct from ordinary bad input so callers can report and exit
@@ -55,6 +56,7 @@ class WrapperSafetyError(ValueError):
 class SignalResult:
     tool: str
     repo_id: str
+    repository_ref: str
     status: Status
     reason: str
     manifest: Manifest
@@ -63,9 +65,11 @@ class SignalResult:
     manifest_path: Path | None = None
 
 
-def _stamp(target: RepoTarget) -> RepoStamp:
+def _stamp(target: RepoTarget, repo_identity: RepositoryIdentity) -> RepoStamp:
+    if repo_identity.internal_id != target.repo_id:
+        raise ValueError("repository identity does not match execution target")
     return RepoStamp(
-        repo_id=target.repo_id,
+        repository_ref=repo_identity.reference,
         repo_path=target.path,
         repo_head=gitinfo.head(target.path),
         branch=gitinfo.branch(target.path),
@@ -272,7 +276,9 @@ def _assert_path_outside_targets(env: dict[str, str], targets: list[RepoTarget])
 
 
 def _assert_signal_paths_available(out: Path, raw_dir: Path, name: str) -> None:
-    if not _SAFE_SIGNAL_ID.fullmatch(name):
+    if (not name or len(name.encode("utf-8")) > 255 or name in {".", ".."}
+            or "/" in name or "\\" in name or Path(name).name != name
+            or any(ord(char) < 32 or ord(char) == 127 for char in name)):
         raise ValueError(f"unsafe signal id: {name!r}")
     paths = [
         raw_dir / f"{name}.out",
@@ -294,15 +300,24 @@ def run_tool(
     target: RepoTarget,
     out_dir: str | Path,
     scan_date: str,
+    repository_identity: RepositoryIdentity,
     additional_targets: list[RepoTarget] | None = None,
+    additional_repository_identities: list[RepositoryIdentity] | None = None,
     signal_id: str | None = None,
     allow_network: bool = False,
 ) -> SignalResult:
     out = Path(out_dir)
     targets = [target, *(additional_targets or [])]
+    identities = [repository_identity, *(additional_repository_identities or [])]
+    if len(identities) != len(targets):
+        raise ValueError("every execution target requires a repository identity")
+    for recorded_target, recorded_identity in zip(targets, identities):
+        if recorded_target.repo_id != recorded_identity.internal_id:
+            raise ValueError("repository identities do not match execution targets")
+    identity_by_internal = {item.internal_id: item for item in identities}
     _assert_output_outside_targets(out, targets)
     raw_dir = _containment_dir(out)
-    name = signal_id or f"{tooldef.name}-{target.repo_id}"
+    name = signal_id or f"{tooldef.name}-{repository_identity.artifact_key}"
     _assert_signal_paths_available(out, raw_dir, name)
 
     argv: list[str] | None = None
@@ -324,13 +339,15 @@ def run_tool(
             argv=argv or [],
             cwd=str(cwd) if argv else "",
             env=dict(tooldef.env),
-            repos=[_stamp(item) for item in targets],
+            repos=[_stamp(item, item_identity)
+                   for item, item_identity in zip(targets, identities)],
             status=status.value,
             reason=reason,
             exit_code=exit_code,
             wall_time_s=wall,
             scope=tooldef.scope_description(target)
-            + ("; repos: " + ", ".join(x.repo_id for x in targets) if len(targets) > 1 else ""),
+            + ("; repositories: " + ", ".join(
+                item.reference for item in identities) if len(targets) > 1 else ""),
             exclusions=tooldef.exclusions_description(target),
             network=tooldef.network,
             scan_date=scan_date,
@@ -341,7 +358,8 @@ def run_tool(
             structured_metrics=structured_metrics,
         )
         manifest_path, _ = manifest.write(out, name)
-        return SignalResult(tooldef.name, target.repo_id, status, reason,
+        return SignalResult(tooldef.name, target.repo_id,
+                            repository_identity.reference, status, reason,
                             manifest, raw, view, manifest_path)
 
     # 1. authorization + guards BEFORE every invocation, including version probes.
@@ -373,7 +391,8 @@ def run_tool(
     # anything on a refused signal; a declined prepare fails closed (SKIPPED).
     if tooldef.prepare:
         try:
-            prep = tooldef.run_prepare(target, out.resolve())
+            prep = tooldef.run_prepare(
+                target, out.resolve(), repository_identity.artifact_key)
         except Exception as exc:  # never let input generation crash the run
             return finish(Status.FAILED, f"prepare step failed: {type(exc).__name__}: {exc}")
         if not prep.ok:
@@ -396,13 +415,15 @@ def run_tool(
         if live_head != item.git.head:
             return finish(
                 Status.FAILED,
-                f"TargetSpec stale for {item.repo_id}: recorded HEAD {item.git.head[:12]} but live "
+                f"TargetSpec stale for {identity_by_internal[item.repo_id].reference}: "
+                f"recorded HEAD {item.git.head[:12]} but live "
                 f"HEAD is {live_head[:12] or '(unavailable)'} — rerun discovery",
             )
         if not gitinfo.matches_recorded_dirty(item.path, item.git.dirty_detail):
             return finish(
                 Status.FAILED,
-                f"TargetSpec stale for {item.repo_id}: dirty worktree state changed "
+                f"TargetSpec stale for {identity_by_internal[item.repo_id].reference}: "
+                "dirty worktree state changed "
                 "after discovery — "
                 "rerun discovery",
             )
@@ -411,7 +432,8 @@ def run_tool(
         if item.git.is_git and pre[item.repo_id] is None:
             return finish(
                 Status.FAILED,
-                f"git-visible snapshot unavailable on git target {item.repo_id} (fail-closed)",
+                "git-visible snapshot unavailable on git target "
+                f"{identity_by_internal[item.repo_id].reference} (fail-closed)",
             )
 
     # 3. invoke -------------------------------------------------------------------
@@ -459,7 +481,8 @@ def run_tool(
                 if post is not None else
                 "git-visible snapshot unavailable after run (fail-closed)",
                 exit_code=exit_code, wall=wall, raw=raw_path, view=view_path,
-                notes=f"pre/post porcelain delta on {item.repo_id}",
+                notes=("pre/post porcelain delta on "
+                       f"{identity_by_internal[item.repo_id].reference}"),
             )
 
     # 5. classification -----------------------------------------------------------
@@ -507,7 +530,8 @@ def run_tool(
                       exit_code=exit_code, wall=wall, raw=raw_path, view=view_path,
                       notes=annotation)
 
-    nongit = [item.repo_id for item in targets if not item.git.is_git]
+    nongit = [identity_by_internal[item.repo_id].reference
+              for item in targets if not item.git.is_git]
     notes = ("non-git targets: immutability compare skipped (reduced-coverage mode): "
              + ", ".join(nongit)) if nongit else ""
     return finish(Status.COMPLETE, "", exit_code=exit_code, wall=wall,

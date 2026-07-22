@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -21,7 +23,6 @@ from .targetspec import TargetSpec, stable_repo_id
 FILENAME = "identity-map.json"
 SCHEMA_VERSION = 1
 _SOURCE_NATIVE = "native"
-_SOURCE_LEGACY = "legacy-derived"
 _PROJECT_FIELDS = {
     "internal_id", "display_name", "reference", "artifact_key", "canonical_path",
 }
@@ -76,6 +77,77 @@ def artifact_key(reference: str, *, encode_all: bool = False) -> str:
     return result
 
 
+def claim_project_namespace(output_root: str | Path, mapping: IdentityMap) -> str:
+    """Atomically claim a readable local namespace for one workspace.
+
+    The basename stays unchanged in the ordinary case. If another workspace
+    with the same basename already owns that namespace, prepend the shortest
+    readable parent suffix needed to distinguish it. No path hash is exposed.
+    """
+    root = _canonical(output_root)
+    root.mkdir(parents=True, exist_ok=True)
+    registry = root / ".project-identities"
+    registry.mkdir(exist_ok=True)
+    project_path = _canonical(mapping.project.canonical_path)
+    parts = [part for part in project_path.parts if part not in {project_path.anchor, ""}]
+
+    def claim_owner(claim_dir: Path) -> IdentityMap | None:
+        marker = claim_dir / FILENAME
+        try:
+            return from_dict(json.loads(marker.read_text("utf-8")))
+        except (OSError, ValueError):
+            return None
+
+    for depth in range(1, len(parts) + 1):
+        reference = "/".join(parts[-depth:])
+        candidate = artifact_key(reference)
+        if len(candidate.encode("utf-8")) > 240:
+            continue
+        namespace = root / candidate
+        claim_dir = registry / candidate
+        if claim_dir.exists():
+            owner = claim_owner(claim_dir)
+            if owner is not None \
+                    and _canonical(owner.project.canonical_path) == project_path:
+                namespace.mkdir(exist_ok=True)
+                return candidate
+            continue
+
+        # A namespace created before the atomic registry existed is accepted
+        # only when every readable run identity belongs to this workspace.
+        existing_maps = sorted(namespace.glob(f"overview/*/{FILENAME}"))
+        owners: list[Path | None] = []
+        for path in existing_maps:
+            try:
+                existing = from_dict(json.loads(path.read_text("utf-8")))
+            except (OSError, ValueError):
+                owners.append(None)
+                continue
+            owners.append(_canonical(existing.project.canonical_path))
+        if namespace.exists() and (not owners or any(owner != project_path
+                                                      for owner in owners)):
+            continue
+
+        staging = Path(tempfile.mkdtemp(prefix=f".{candidate}.claim-", dir=registry))
+        try:
+            write_mapping(staging, mapping)
+            os.rename(staging, claim_dir)
+            namespace.mkdir(exist_ok=True)
+            return candidate
+        except OSError:
+            if staging.exists():
+                shutil.rmtree(staging)
+            owner = claim_owner(claim_dir)
+            if owner is not None \
+                    and _canonical(owner.project.canonical_path) == project_path:
+                namespace.mkdir(exist_ok=True)
+                return candidate
+    raise ValueError(
+        "cannot claim a collision-free readable project namespace; "
+        "move the workspace or choose a different parent path"
+    )
+
+
 def decode_artifact_key(value: str) -> str:
     """Reverse :func:`artifact_key`, rejecting malformed percent escapes."""
     key = _require_text(value, "artifact key")
@@ -124,8 +196,8 @@ class IdentityMap:
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int or self.schema_version != SCHEMA_VERSION:
             raise ValueError("identity map has an unsupported schema version")
-        if self.source not in {_SOURCE_NATIVE, _SOURCE_LEGACY}:
-            raise ValueError("identity map source must be native or legacy-derived")
+        if self.source != _SOURCE_NATIVE:
+            raise ValueError("identity map source must be native")
         object.__setattr__(self, "repositories", tuple(self.repositories))
         internal_ids = [item.internal_id for item in self.repositories]
         references = [item.reference for item in self.repositories]
@@ -173,6 +245,27 @@ class IdentityMap:
             if item.internal_id == internal_id:
                 return item
         raise KeyError(f"unknown repository internal ID {internal_id!r}")
+
+    def repository_by_reference(self, reference: str) -> RepositoryIdentity:
+        for item in self.repositories:
+            if item.reference == reference:
+                return item
+        raise KeyError(f"unknown repository reference {reference!r}")
+
+    def repository_by_artifact_key(self, key: str) -> RepositoryIdentity:
+        for item in self.repositories:
+            if item.artifact_key == key:
+                return item
+        raise KeyError(f"unknown repository artifact key {key!r}")
+
+    def reference_for(self, internal_id: str) -> str:
+        return self.repository(internal_id).reference
+
+    def artifact_key_for(self, internal_id: str) -> str:
+        return self.repository(internal_id).artifact_key
+
+    def internal_id_for(self, reference: str) -> str:
+        return self.repository_by_reference(reference).internal_id
 
 
 def _shortest_unique_references(
@@ -234,6 +327,11 @@ def build(
     source: str = _SOURCE_NATIVE,
 ) -> IdentityMap:
     workspace = _canonical(workspace_root)
+    expected_project_id = stable_repo_id(str(workspace))
+    if project_id != expected_project_id:
+        raise ValueError(
+            "project internal ID must be derived from the canonical workspace path"
+        )
     project_name = _require_text(workspace.name, "project display name")
     reference_paths: dict[str, PurePosixPath] = {}
     workspace_relatives: dict[str, str] = {}
@@ -356,44 +454,117 @@ def write_mapping(run_dir: str | Path, mapping: IdentityMap) -> Path:
     return path
 
 
-def _legacy_workspace(run: Path, spec: TargetSpec, discovery: dict[str, Any]) -> Path:
-    recorded = discovery.get("workspace_root")
-    if isinstance(recorded, str) and recorded:
-        return _canonical(recorded)
-    paths = [str(_canonical(target.path)) for target in spec.repos]
-    if not paths:
-        raise ValueError("cannot derive legacy identity mapping without repositories")
-    return Path(os.path.commonpath(paths))
+def externalize_discovery_report(report: dict[str, Any],
+                                 mapping: IdentityMap) -> dict[str, Any]:
+    """Project a discovery document into the evidence-plane identity contract."""
+    replacements = {item.internal_id: item.reference for item in mapping.repositories}
+    projected = json.loads(json.dumps(report))
+    projected["project_ref"] = mapping.project.reference
+    projected.pop("project_id", None)
+
+    def replace_field(row: dict[str, Any], old: str, new: str) -> None:
+        if old in row:
+            original = str(row.pop(old))
+            row[new] = replacements.get(original, original)
+
+    for row in projected.get("repos", []):
+        if isinstance(row, dict):
+            replace_field(row, "repo_id", "repository_ref")
+            row["notes"] = _externalize_notes(row.get("notes", []), replacements)
+
+    role_catalog = projected.pop("role_catalog_by_repo", {})
+    projected["role_catalog_by_repository"] = {
+        replacements.get(str(key), str(key)): value
+        for key, value in role_catalog.items()
+    }
+
+    inventory = projected.get("route_inventory")
+    if isinstance(inventory, dict):
+        for row in inventory.get("rows", []):
+            if isinstance(row, dict):
+                replace_field(row, "repo_id", "repository_ref")
+        inventory["notes"] = _externalize_notes(inventory.get("notes", []), replacements)
+
+    linkage = projected.get("ui_route_linkage")
+    if isinstance(linkage, dict):
+        linkage["frontends"] = [replacements.get(str(item), str(item))
+                                for item in linkage.get("frontends", [])]
+        calls = linkage.pop("calls_by_frontend", {})
+        linkage["calls_by_frontend_repository"] = {
+            replacements.get(str(key), str(key)): value for key, value in calls.items()
+        }
+        for row in linkage.get("rows", []):
+            if isinstance(row, dict):
+                replace_field(row, "frontend_repo_id", "frontend_repository_ref")
+                replace_field(row, "repo_id", "repository_ref")
+        linkage["notes"] = _externalize_notes(linkage.get("notes", []), replacements)
+
+    projected["schema_version"] = "2.0.0"
+    return projected
 
 
-def derive_legacy(run_dir: str | Path) -> IdentityMap:
+def _externalize_notes(notes: Any, replacements: dict[str, str]) -> Any:
+    """Rewrite only wrapper-owned ``<repository-id>:`` note prefixes."""
+    if not isinstance(notes, list):
+        return notes
+    result = []
+    for item in notes:
+        if isinstance(item, str):
+            for internal_id, reference in replacements.items():
+                if item.startswith(internal_id + ":"):
+                    item = reference + item[len(internal_id):]
+                    break
+        result.append(item)
+    return result
+
+
+def load_discovery_report(run_dir: str | Path,
+                          mapping: IdentityMap | None = None) -> dict[str, Any]:
+    """Load and validate the current external discovery contract."""
     run = Path(run_dir).expanduser().resolve()
-    spec = TargetSpec.load(run / "targets.json")
-    try:
-        discovery = json.loads((run / "discovery-report.json").read_text("utf-8"))
-    except (OSError, ValueError):
-        discovery = {}
-    try:
-        state = json.loads((run / "run-state.json").read_text("utf-8"))
-    except (OSError, ValueError):
-        state = {}
-    workspace = _legacy_workspace(run, spec, discovery)
-    project_id = discovery.get("project_id") or state.get("project_id")
-    if not isinstance(project_id, str) or not project_id:
-        project_id = stable_repo_id(str(workspace))
-    return build(
-        spec,
-        workspace_root=workspace,
-        project_id=project_id,
-        source=_SOURCE_LEGACY,
-    )
+    value = json.loads((run / "discovery-report.json").read_text("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("discovery-report.json must contain an object")
+    identities = mapping or load(run)
+    if value.get("schema_version") != "2.0.0":
+        raise ValueError("discovery-report.json uses an unsupported contract version")
+    legacy_locations: list[str] = []
+    for field in ("project_id", "role_catalog_by_repo", "route_liveness"):
+        if field in value:
+            legacy_locations.append(field)
+    for index, row in enumerate(value.get("repos", [])):
+        if isinstance(row, dict) and "repo_id" in row:
+            legacy_locations.append(f"repos[{index}].repo_id")
+    linkage = value.get("ui_route_linkage")
+    if isinstance(linkage, dict):
+        if "calls_by_frontend" in linkage:
+            legacy_locations.append("ui_route_linkage.calls_by_frontend")
+        for index, row in enumerate(linkage.get("rows", [])):
+            if not isinstance(row, dict):
+                continue
+            for field in ("repo_id", "frontend_repo_id"):
+                if field in row:
+                    legacy_locations.append(f"ui_route_linkage.rows[{index}].{field}")
+    inventory = value.get("route_inventory")
+    if isinstance(inventory, dict):
+        for index, row in enumerate(inventory.get("rows", [])):
+            if isinstance(row, dict) and "repo_id" in row:
+                legacy_locations.append(f"route_inventory.rows[{index}].repo_id")
+    if legacy_locations:
+        raise ValueError(
+            "discovery-report.json uses unsupported legacy field(s): "
+            f"{', '.join(legacy_locations)}; regenerate the run"
+        )
+    if value.get("project_ref") != identities.project.reference:
+        raise ValueError("discovery project_ref differs from identity map")
+    return value
 
 
 def load(run_dir: str | Path) -> IdentityMap:
     run = Path(run_dir).expanduser().resolve()
     path = run / FILENAME
     if not path.is_file():
-        return derive_legacy(run)
+        raise ValueError(f"current run is missing required {FILENAME}")
     try:
         value = json.loads(path.read_text("utf-8"))
     except (OSError, ValueError) as exc:
@@ -406,11 +577,24 @@ def load(run_dir: str | Path) -> IdentityMap:
         raise ValueError(
             f"native {FILENAME} requires a readable discovery-report.json: {exc}"
         ) from exc
+    canonical_project_path = str(_canonical(mapping.project.canonical_path))
+    if mapping.project.internal_id != stable_repo_id(canonical_project_path):
+        raise ValueError(f"{FILENAME} project identity is not anchored to its canonical path")
+    state_path = run / "run-state.json"
+    if state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text("utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"cannot read run-state.json: {exc}") from exc
+        if state.get("project_id") != mapping.project.internal_id:
+            raise ValueError(f"{FILENAME} project identity differs from run-state.json")
     expected = build(
         spec,
-        workspace_root=discovery.get("workspace_root", ""),
-        project_id=discovery.get("project_id", ""),
+        workspace_root=canonical_project_path,
+        project_id=mapping.project.internal_id,
     )
+    if discovery.get("project_ref") != mapping.project.reference:
+        raise ValueError("discovery project_ref differs from identity map")
     if mapping != expected:
         raise ValueError(f"{FILENAME} differs from deterministic discovery identity")
     return mapping

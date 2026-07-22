@@ -1,6 +1,6 @@
 """Normalize the 57B-30 call graph into ``symbol`` nodes + ``call`` edges.
 
-Reads ``<run>/callgraph/<repo_id>.jsonl`` (one call edge per line, the contract
+Reads ``<run>/callgraph/<artifact_key>.jsonl`` (one call edge per line, the contract
 shape) and ``<run>/callgraph-coverage.json``. Produces exactly ONE edge type —
 ``call`` — so a language call edge is never confused with an import, route, or
 persistence edge. A call whose resolution the analyzer only INFERRED (Go VTA
@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 
 from ..callgraph.contract import CallEdge
+from ..identity import IdentityMap
 from . import ids
 from .builder import ModelBuilder
 
@@ -34,7 +35,7 @@ def _symbol(builder: ModelBuilder, symbol: str, decl_citation: str) -> str:
                                 evidence=decl_citation)
     sym_id = builder.add_node(
         "symbol", [repo_id, symbol, decl_citation], label=symbol,
-        status="observed", repo_id=repo_id, producer=PRODUCER,
+        status="observed", repository_ref=repo_id, producer=PRODUCER,
         evidence=[decl_citation])
     builder.add_edge("containment", file_id, sym_id, status="observed",
                      producer=PRODUCER)
@@ -58,7 +59,8 @@ def _add_edge(builder: ModelBuilder, edge: CallEdge) -> None:
         discriminator=edge.callsite_citation)
 
 
-def load(builder: ModelBuilder, run_dir: str | Path) -> dict:
+def load(builder: ModelBuilder, run_dir: str | Path,
+         identities: IdentityMap) -> dict:
     """Populate ``builder`` from the call graph in ``run_dir``.
 
     Returns a summary used to build the coverage partition:
@@ -79,7 +81,8 @@ def load(builder: ModelBuilder, run_dir: str | Path) -> dict:
         return summary
     edges_loaded = 0
     for jsonl in sorted(cg_dir.glob("*.jsonl")):
-        summary["jsonl_repos"].append(jsonl.stem)
+        summary["jsonl_repos"].append(
+            identities.repository_by_artifact_key(jsonl.stem).reference)
         for line in jsonl.read_text("utf-8").splitlines():
             line = line.strip()
             if not line:

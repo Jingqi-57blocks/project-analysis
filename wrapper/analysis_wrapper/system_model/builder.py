@@ -23,7 +23,8 @@ class ModelBuilder:
     # ---- nodes ---------------------------------------------------------------
 
     def add_node(self, kind: str, key: list[str], *, label: str, status: str,
-                 repo_id: str = "", producer: str = "", evidence: list[str] | None = None,
+                 repository_ref: str = "", producer: str = "",
+                 evidence: list[str] | None = None,
                  evidence_basis: str | None = None,
                  confidence: float | None = None, attrs: dict | None = None) -> str:
         """Materialize (or merge into) a node identified by ``kind`` + ``key``.
@@ -36,7 +37,7 @@ class ModelBuilder:
         if existing is None:
             self._nodes[node_id] = Node(
                 id=node_id, kind=kind, label=label, status=status,
-                repo_id=repo_id, key=list(key),
+                repository_ref=repository_ref, key=list(key),
                 producers=[producer] if producer else [],
                 evidence=list(evidence or []),
                 evidence_basis=(evidence_basis or
@@ -53,18 +54,18 @@ class ModelBuilder:
             existing.attrs.setdefault(akey, aval)
         return node_id
 
-    def note_file(self, repo_id: str, relpath: str, *, producer: str,
+    def note_file(self, repository_ref: str, relpath: str, *, producer: str,
                   evidence: str = "") -> str:
         """Ensure a ``file`` node + ``repository -> file`` containment edge exist
-        for ``relpath`` in ``repo_id``. Central so every citation-referenced file
+        for ``relpath`` in ``repository_ref``. Central so every citation-referenced file
         is in the graph exactly once."""
         if not relpath:
             relpath = "(unknown)"
         file_id = self.add_node(
-            "file", [repo_id, relpath], label=relpath, status="observed",
-            repo_id=repo_id, producer=producer,
+            "file", [repository_ref, relpath], label=relpath, status="observed",
+            repository_ref=repository_ref, producer=producer,
             evidence=[evidence] if evidence else [])
-        repo_id_node = ids.stable_id("repository", repo_id)
+        repo_id_node = ids.stable_id("repository", repository_ref)
         self.add_edge("containment", repo_id_node, file_id, status="observed",
                       producer=producer)
         return file_id

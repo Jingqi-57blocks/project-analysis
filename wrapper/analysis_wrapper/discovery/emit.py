@@ -365,14 +365,14 @@ def _produce_has_routes(repo_report: dict) -> bool:
 
 def write_stage1(run_dir: str | Path, spec: TargetSpec, report: dict) -> tuple[Path, Path]:
     """Persist the stage-1 checkpoint artifacts into the run directory."""
+    out = Path(run_dir).expanduser().resolve()
+    if out.exists() or out.is_symlink():
+        raise ValueError(f"stage-1 run directory already exists: {out}")
     identity_mapping = identity.build(
         spec,
         workspace_root=report.get("workspace_root", ""),
         project_id=report.get("project_id", ""),
     )
-    out = Path(run_dir).expanduser().resolve()
-    if out.exists() or out.is_symlink():
-        raise ValueError(f"stage-1 run directory already exists: {out}")
     out.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{out.name}.stage1-", dir=out.parent))
     targets_path = out / "targets.json"
@@ -381,7 +381,9 @@ def write_stage1(run_dir: str | Path, spec: TargetSpec, report: dict) -> tuple[P
         write_new_text(staging / "targets.json", spec.to_json())
         write_new_text(
             staging / "discovery-report.json",
-            redact(json.dumps(report, indent=2, sort_keys=True)) + "\n",
+            redact(json.dumps(
+                identity.externalize_discovery_report(report, identity_mapping),
+                indent=2, sort_keys=True)) + "\n",
         )
         identity.write_mapping(staging, identity_mapping)
         os.rename(staging, out)

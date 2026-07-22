@@ -70,7 +70,9 @@ def test_analyze_fails_closed_without_module_directive(tmp_path):
     (tmp_path / "go.mod").write_text("// no module directive\n")
     target = RepoTarget(repo_id="app-1", path=str(tmp_path), stacks=["go"],
                         git=GitProvenance(head="c" * 40))
-    payload, cov = go_lane.analyze(target, go_binary="/usr/bin/go",
+    payload, cov = go_lane.analyze(
+        target, repository_ref="app", artifact_key="app",
+        go_binary="/usr/bin/go",
                                    run=lambda *a, **k: None)  # never reached
     assert payload is None
     assert cov.status == "failed"
@@ -87,11 +89,13 @@ def test_analyze_projects_from_a_fake_go_list(tmp_path):
         assert argv[1:4] == ["list", "-deps", "-json"]
         return _Proc()
 
-    payload, cov = go_lane.analyze(_target(tmp_path), go_binary="/usr/bin/go",
+    payload, cov = go_lane.analyze(
+        _target(tmp_path), repository_ref="app", artifact_key="app",
+        go_binary="/usr/bin/go",
                                    run=fake_run)
     assert cov.status == "complete"
     assert cov.lane == "go"
-    assert cov.map_file == "app-1.golist.json"
+    assert cov.map_file == "app.golist.json"
     assert cov.units == 3
     assert cov.reference_counts == {
         "internal": 2, "third_party": 1, "stdlib": 4, "total": 7}
@@ -104,7 +108,9 @@ def test_analyze_fails_closed_on_nonzero_exit(tmp_path):
         stdout = ""
         stderr = "go: cannot find module providing package foo"
 
-    payload, cov = go_lane.analyze(_target(tmp_path), go_binary="/usr/bin/go",
+    payload, cov = go_lane.analyze(
+        _target(tmp_path), repository_ref="app", artifact_key="app",
+        go_binary="/usr/bin/go",
                                    run=lambda *a, **k: _Proc())
     assert payload is None
     assert cov.status == "failed"

@@ -11,7 +11,7 @@ from analysis_wrapper.executor import (WrapperSafetyError, prepare_output_direct
 from analysis_wrapper.status import Status
 from analysis_wrapper.tooldefs import ToolDef
 
-from test_executor import bash_tool, run  # reuse helpers
+from test_executor import bash_tool, identities_for, run  # reuse helpers
 
 SCAN_DATE = "2026-07-16"
 
@@ -71,8 +71,10 @@ def test_raw_containment_dir_is_self_gitignoring(target, tmp_path):
 
 def test_output_inside_target_is_refused_before_any_write(target, synthetic_repo):
     attempted = synthetic_repo / "output" / "signals"
+    repo_identity = identities_for(target).repository(target.repo_id)
     with pytest.raises(ValueError, match="inside target"):
-        run_tool(bash_tool("reader", "echo hi"), target, attempted, SCAN_DATE)
+        run_tool(bash_tool("reader", "echo hi"), target, attempted, SCAN_DATE,
+                 repo_identity)
     assert not attempted.exists()
 
 
@@ -210,10 +212,11 @@ def test_bounded_view_failure_is_partial(target, tmp_path):
 def test_normalized_outputs_are_deterministic(target, tmp_path):
     td = bash_tool("stable", "printf 'b\\na\\n'")
     td.cwd_mode = "output"
-    first = run_tool(td, target, tmp_path / "one", SCAN_DATE)
-    second = run_tool(td, target, tmp_path / "two", SCAN_DATE)
+    repo_identity = identities_for(target).repository(target.repo_id)
+    first = run_tool(td, target, tmp_path / "one", SCAN_DATE, repo_identity)
+    second = run_tool(td, target, tmp_path / "two", SCAN_DATE, repo_identity)
     assert first.view_path.read_bytes() == second.view_path.read_bytes()
-    name = f"stable-{target.repo_id}.manifest.normalized.json"
+    name = "stable-widget-api.manifest.normalized.json"
     assert (tmp_path / "one" / name).read_bytes() == (tmp_path / "two" / name).read_bytes()
     assert '"cwd": "<output>"' in (tmp_path / "one" / name).read_text()
 
@@ -222,7 +225,8 @@ def test_relative_output_directory_is_normalized(monkeypatch, target, tmp_path):
     monkeypatch.chdir(tmp_path)
     td = bash_tool("relative", "echo stable")
     td.cwd_mode = "output"
-    result = run_tool(td, target, Path("relative-signals"), SCAN_DATE)
-    normalized = Path("relative-signals") / f"relative-{target.repo_id}.manifest.normalized.json"
+    repo_identity = identities_for(target).repository(target.repo_id)
+    result = run_tool(td, target, Path("relative-signals"), SCAN_DATE, repo_identity)
+    normalized = Path("relative-signals") / "relative-widget-api.manifest.normalized.json"
     assert result.status is Status.COMPLETE
     assert '"cwd": "<output>"' in normalized.read_text()

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "2.0.0"
 
 # What a node can be. Only materialized where evidence exists (issue: "external
 # boundaries when evidence exists"); a kind with no evidence yields no nodes and
@@ -67,7 +67,7 @@ class Node:
     kind: str
     label: str                                   # human-readable natural name
     status: str
-    repo_id: str = ""                            # owning repo ("" = cross/global)
+    repository_ref: str = ""                     # owning repo ("" = cross/global)
     key: list[str] = field(default_factory=list)  # natural-key parts (ID source)
     producers: list[str] = field(default_factory=list)   # source producer(s)
     evidence: list[str] = field(default_factory=list)    # citations
@@ -86,7 +86,7 @@ class Node:
     def to_dict(self) -> dict:
         out = {
             "id": self.id, "kind": self.kind, "label": self.label,
-            "status": self.status, "repo_id": self.repo_id,
+            "status": self.status, "repository_ref": self.repository_ref,
             "key": list(self.key),
             "producers": sorted(set(self.producers)),
             "evidence": sorted(set(self.evidence)),
@@ -139,12 +139,12 @@ class Edge:
 class SystemModel:
     """The canonical ``system-model.json`` payload.
 
-    ``scan_date`` and ``project_id`` are RECORDED inputs (never generated here),
+    ``scan_date`` and ``project_ref`` are RECORDED inputs (never generated here),
     so the artifact stays deterministic — no wall time enters the model.
     """
 
     scan_date: str
-    project_id: str
+    project_ref: str
     generator: str
     nodes: list[Node] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
@@ -173,7 +173,7 @@ class SystemModel:
             "schema_version": SCHEMA_VERSION,
             "generator": self.generator,
             "scan_date": self.scan_date,
-            "project_id": self.project_id,
+            "project_ref": self.project_ref,
             "stats": self._stats(),
             "coverage": self.coverage,
             "nodes": [n.to_dict() for n in nodes],

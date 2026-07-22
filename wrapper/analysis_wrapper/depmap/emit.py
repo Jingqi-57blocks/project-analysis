@@ -2,7 +2,7 @@
 
 For each repo (sorted for determinism) this picks the Go and/or JS/TS lane by
 stack, produces the dependency map, and writes it into ``<out>/imports/``:
-``<repo_id>.golist.json`` (Go) / ``<repo_id>.depcruise.json`` (JS/TS). Per-repo
+``<artifact-key>.golist.json`` (Go) / ``<artifact-key>.depcruise.json`` (JS/TS). Per-repo
 lane outcomes are collected into ``<out>/imports/depmap-coverage.json``.
 
 Output is bounded, leak-free, and deterministic: the Go lane writes a projected
@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..executor import create_stage_dir, write_new_text
+from .. import identity
 from ..sanitize import sanitize_text
 from ..status import Status, aggregate
 from ..targetspec import RepoTarget, TargetSpec
@@ -55,27 +56,38 @@ def _write_map(path: Path, payload: dict) -> None:
 
 def run_depmap(spec: TargetSpec, out_dir: str | Path, scan_date: str, *,
                allow_network: bool = False,
+               identities: identity.IdentityMap | None = None,
                run: Callable[..., subprocess.CompletedProcess] = subprocess.run
                ) -> DepMapReport:
     """Run the dependency-map stage over a TargetSpec, writing per-repo maps under
     ``<out>/imports/`` and returning the coverage report."""
     out = Path(out_dir).expanduser().resolve()
+    identities = identities or identity.load(out)
     imports_dir = create_stage_dir(out / "imports")   # never write THROUGH a symlink
     config_root = out / ".depmap-config"
     coverages: list[RepoDepCoverage] = []
     for target in sorted(spec.repos, key=lambda r: r.repo_id):
+        repo_identity = identities.repository(target.repo_id)
         for lane in select_lanes(target):
             if lane == "go":
                 payload, cov = go_lane.analyze(
-                    target, allow_network=allow_network, run=run)
+                    target, repository_ref=repo_identity.reference,
+                    artifact_key=repo_identity.artifact_key,
+                    allow_network=allow_network, run=run)
                 suffix = "golist"
             else:
                 create_stage_dir(config_root)
-                config_dir = create_stage_dir(config_root / target.repo_id)
-                payload, cov = js_lane.analyze(target, config_dir, run=run)
+                config_dir = create_stage_dir(
+                    config_root / repo_identity.artifact_key)
+                payload, cov = js_lane.analyze(
+                    target, config_dir,
+                    repository_ref=repo_identity.reference,
+                    artifact_key=repo_identity.artifact_key, run=run)
                 suffix = "depcruise"
             if payload is not None:
-                _write_map(imports_dir / f"{target.repo_id}.{suffix}.json", payload)
+                _write_map(
+                    imports_dir / f"{repo_identity.artifact_key}.{suffix}.json",
+                    payload)
             coverages.append(cov)
     report = DepMapReport(scan_date=scan_date, repos=coverages)
     write_new_text(imports_dir / "depmap-coverage.json",

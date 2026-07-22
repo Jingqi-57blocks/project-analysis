@@ -80,6 +80,7 @@ def test_signal_records_astgrep_version_and_path():
     assert d["version_drift"] == p.drift
 
 
+@pytest.mark.skipif(not _HAS_SQLGLOT, reason="sqlglot optional extra not installed")
 def test_detector_reports_family_coverage_separately_from_extraction():
     coverage = tables.generate(str(FIXDB), "db-fix").detector_coverage
     assert coverage["complete"]

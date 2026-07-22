@@ -31,7 +31,7 @@ def test_node_to_dict_dedupes_and_omits_none_confidence():
 
 
 def _model(nodes, edges):
-    return SystemModel(scan_date="2026-02-02", project_id="P", generator="g",
+    return SystemModel(scan_date="2026-02-02", project_ref="P", generator="g",
                        nodes=nodes, edges=edges, coverage={})
 
 

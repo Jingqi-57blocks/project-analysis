@@ -8,9 +8,9 @@ from analysis_wrapper.callgraph.contract import CoverageReport, RepoCoverage
 from analysis_wrapper.depmap import emit as dm_emit
 from analysis_wrapper.depmap.contract import DepMapReport, RepoDepCoverage
 from analysis_wrapper.executor import SignalResult
-from analysis_wrapper import lifecycle
+from analysis_wrapper import identity, lifecycle
 from analysis_wrapper.status import Status
-from analysis_wrapper.targetspec import TargetSpec
+from analysis_wrapper.targetspec import TargetSpec, stable_repo_id
 from analysis_wrapper.tooldefs import ToolDef
 
 
@@ -27,9 +27,23 @@ def _fake_scc(tmp_path: Path, body: str) -> Path:
 
 
 def _targets(tmp_path: Path, target) -> Path:
-    path = tmp_path / "targets.json"
-    TargetSpec([target], produced_by="cli-test").save(path)
-    return path
+    stage1 = tmp_path / "stage1"
+    spec = TargetSpec([target], produced_by="cli-test")
+    mapping = identity.build(
+        spec, workspace_root=tmp_path,
+        project_id=stable_repo_id(str(tmp_path)))
+    stage1.mkdir()
+    spec.save(stage1 / "targets.json")
+    identity.write_mapping(stage1, mapping)
+    (stage1 / "discovery-report.json").write_text(json.dumps({
+        "schema_version": "2.0.0",
+        "project_ref": mapping.project.reference,
+    }), "utf-8")
+    return stage1 / "targets.json"
+
+
+def _reference(target) -> str:
+    return Path(target.path).name
 
 
 def test_cli_runs_one_tool_one_repo(monkeypatch, tmp_path, target):
@@ -37,7 +51,7 @@ def test_cli_runs_one_tool_one_repo(monkeypatch, tmp_path, target):
     monkeypatch.setenv("PATH", str(fake.parent) + os.pathsep + os.environ["PATH"])
     out = tmp_path / "signals"
     rc = main(["--targets", str(_targets(tmp_path, target)), "--out", str(out),
-               "run", "--repo", target.repo_id, "--tool", "scc"])
+               "run", "--repo", _reference(target), "--tool", "scc"])
     assert rc == 0
     summary = json.loads((out / "run-summary.json").read_text())
     assert summary["aggregate_status"] == "complete"
@@ -50,7 +64,7 @@ def test_killed_tool_makes_cli_exit_three(monkeypatch, tmp_path, target):
     monkeypatch.setenv("PATH", str(fake.parent) + os.pathsep + os.environ["PATH"])
     out = tmp_path / "signals"
     rc = main(["--targets", str(_targets(tmp_path, target)), "--out", str(out),
-               "run", "--repo", target.repo_id, "--tool", "scc"])
+               "run", "--repo", _reference(target), "--tool", "scc"])
     assert rc == 3
     summary = json.loads((out / "run-summary.json").read_text())
     assert summary["aggregate_status"] == "failed"
@@ -64,7 +78,7 @@ def test_single_network_tool_requires_explicit_opt_in(tmp_path, target):
     (Path(target.path) / "package.json").write_text("{}\n")
     out = tmp_path / "signals"
     rc = main(["--targets", str(_targets(tmp_path, target)), "--out", str(out),
-               "run", "--repo", target.repo_id, "--tool", "outdated"])
+               "run", "--repo", _reference(target), "--tool", "outdated"])
     assert rc == 0  # skipped is disclosed but non-fatal by the status contract
     summary = json.loads((out / "run-summary.json").read_text())
     assert summary["signals"][0]["status"] == "skipped"
@@ -118,7 +132,12 @@ def test_sweep_records_unauthorized_network_lanes_as_skipped(monkeypatch, tmp_pa
     monkeypatch.setattr("analysis_wrapper.cli.network_tools", lambda _target: [definition])
     args = argparse.Namespace(since="2024-01-01", include_network=False,
                               scan_date="2026-07-16")
-    results = _sweep(args, TargetSpec([target]), tmp_path / "signals")
+    spec = TargetSpec([target])
+    identities = identity.build(
+        spec, workspace_root=tmp_path,
+        project_id=stable_repo_id(str(tmp_path)))
+    results = _sweep(
+        args, spec, tmp_path / "signals", identities)
     assert len(results) == 1
     assert results[0].status is Status.SKIPPED
     assert "explicit authorization" in results[0].reason
@@ -126,11 +145,12 @@ def test_sweep_records_unauthorized_network_lanes_as_skipped(monkeypatch, tmp_pa
 
 def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path, target):
     from analysis_wrapper import run_provenance
+    project_id = stable_repo_id(str(tmp_path))
     run = tmp_path / "skill" / "output" / "sample" / "overview" / "run-1"
     run.mkdir(parents=True)
     TargetSpec([target], produced_by="cli-test").save(run / "targets.json")
     discovery = {
-        "project_id": "sample", "workspace_root": str(tmp_path),
+        "project_id": project_id, "workspace_root": str(tmp_path),
         "repos": [{"repo_id": target.repo_id,
                    "provenance": {"is_git": True, "head": target.git.head},
                    "stacks": {"stacks": ["js"], "frameworks": [],
@@ -144,44 +164,53 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
                    "integration_evidence": {"available": False},
                    "deployable_units": {"status": "unknown", "units": [], "notes": []}}],
         "not_targeted": [], "reduced_coverage_targets": [],
-        "route_liveness": None, "role_catalog_by_repo": {},
+        "route_inventory": None, "ui_route_linkage": None,
+        "role_catalog_by_repo": {},
     }
-    (run / "discovery-report.json").write_text(json.dumps(discovery), "utf-8")
-    state = lifecycle.RunState.create("run-1", "sample", TargetSpec([target]))
+    spec = TargetSpec([target], produced_by="cli-test")
+    identities = identity.build(
+        spec, workspace_root=tmp_path, project_id=project_id)
+    identity.write_mapping(run, identities)
+    (run / "discovery-report.json").write_text(json.dumps(
+        identity.externalize_discovery_report(discovery, identities)), "utf-8")
+    repository = identities.repository(target.repo_id)
+    state = lifecycle.RunState.create("run-1", project_id, TargetSpec([target]))
     state.mark("discovery")
     state.save(run)
     run_provenance.write(run, run_provenance.create_document(
         TargetSpec([target]), analyzer_root=tmp_path,
         language="en", analyzed_at=state.analyzed_at))
 
-    def sweep(_args, _spec, out):
-        view = Path(out) / f"fixture-{target.repo_id}.view.txt"
+    def sweep(_args, _spec, out, _identities):
+        view = Path(out) / f"fixture-{repository.artifact_key}.view.txt"
         view.write_text("items: 0\n", "utf-8")
-        (Path(out) / f"fixture-{target.repo_id}.manifest.json").write_text(json.dumps({
+        (Path(out) / f"fixture-{repository.artifact_key}.manifest.json").write_text(json.dumps({
+            "schema_version": "2.0.0",
             "tool": "fixture", "status": "complete",
-            "repos": [{"repo_id": target.repo_id}],
+            "repos": [{"repository_ref": repository.reference}],
         }), "utf-8")
         return [SignalResult(
-            tool="fixture", repo_id=target.repo_id, status=Status.COMPLETE,
+            tool="fixture", repo_id=target.repo_id,
+            repository_ref=repository.reference, status=Status.COMPLETE,
             reason="", manifest=None, raw_path=None, view_path=view)]
     monkeypatch.setattr("analysis_wrapper.cli._sweep", sweep)
 
-    def callgraph(_spec, out, scan_date, allow_network=False):
+    def callgraph(_spec, out, scan_date, allow_network=False, identities=None):
         (Path(out) / "callgraph").mkdir()
-        (Path(out) / "callgraph" / f"{target.repo_id}.jsonl").write_text("", "utf-8")
+        (Path(out) / "callgraph" / f"{repository.artifact_key}.jsonl").write_text("", "utf-8")
         report = CoverageReport(scan_date=scan_date, repos=[RepoCoverage(
-            repo_id=target.repo_id, lang="js", status="complete",
+            repository_ref=repository.reference, lang="js", status="complete",
             tool="fixture", candidates_by_ext={}, analyzed_by_ext={})])
         (Path(out) / "callgraph-coverage.json").write_text(report.to_json(), "utf-8")
         return report
 
-    def depmap(_spec, out, scan_date, allow_network=False):
+    def depmap(_spec, out, scan_date, allow_network=False, identities=None):
         imports = Path(out) / "imports"
         imports.mkdir()
-        map_name = f"{target.repo_id}.depcruise.json"
+        map_name = f"{repository.artifact_key}.depcruise.json"
         (imports / map_name).write_text('{"modules": []}\n', "utf-8")
         report = DepMapReport(scan_date=scan_date, repos=[RepoDepCoverage(
-            repo_id=target.repo_id, lane="js", status="complete",
+            repository_ref=repository.reference, lane="js", status="complete",
             tool="fixture", map_file=map_name, units=0)])
         (imports / "depmap-coverage.json").write_text(report.to_json(), "utf-8")
         return report

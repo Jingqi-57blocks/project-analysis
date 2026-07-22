@@ -2,8 +2,10 @@
 
 import json
 
+from analysis_wrapper import identity
 from analysis_wrapper.depmap import emit
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget, TargetSpec
+from analysis_wrapper.targetspec import (GitProvenance, RepoTarget, TargetSpec,
+                                         stable_repo_id)
 
 _MODULE = "example.com/app"
 _STREAM = "\n".join(json.dumps(o) for o in [
@@ -32,6 +34,12 @@ def _fake_go_run(argv, **kwargs):
     return _Proc()
 
 
+def _identities(spec, workspace):
+    return identity.build(
+        spec, workspace_root=workspace,
+        project_id=stable_repo_id(str(workspace)))
+
+
 def test_select_lanes_by_stack_and_manifest(tmp_path):
     (tmp_path / "go.mod").write_text("module x\n")
     assert emit.select_lanes(
@@ -49,9 +57,11 @@ def test_select_lanes_by_stack_and_manifest(tmp_path):
 def test_run_depmap_writes_go_map_and_coverage(tmp_path):
     spec, _repo = _go_spec(tmp_path)
     out = tmp_path / "run"
-    report = emit.run_depmap(spec, out, "2026-07-18", run=_fake_go_run)
+    identities = _identities(spec, tmp_path)
+    report = emit.run_depmap(
+        spec, out, "2026-07-18", identities=identities, run=_fake_go_run)
 
-    golist = out / "imports" / "app-1.golist.json"
+    golist = out / "imports" / "app.golist.json"
     coverage = out / "imports" / "depmap-coverage.json"
     assert golist.is_file() and coverage.is_file()
 
@@ -59,7 +69,7 @@ def test_run_depmap_writes_go_map_and_coverage(tmp_path):
     assert payload["module"] == _MODULE
     assert "/home/u" not in golist.read_text()        # leak-free projection
     cov = json.loads(coverage.read_text())
-    entry = next(r for r in cov["repos"] if r["repo_id"] == "app-1")
+    entry = next(r for r in cov["repos"] if r["repository_ref"] == "app")
     assert entry["status"] == "complete" and entry["lane"] == "go"
     assert len(report.repos) == 1
 
@@ -67,10 +77,13 @@ def test_run_depmap_writes_go_map_and_coverage(tmp_path):
 def test_run_depmap_is_byte_for_byte_deterministic(tmp_path):
     spec, _repo = _go_spec(tmp_path)
     out_a, out_b = tmp_path / "a", tmp_path / "b"
-    emit.run_depmap(spec, out_a, "2026-07-18", run=_fake_go_run)
-    emit.run_depmap(spec, out_b, "2026-07-18", run=_fake_go_run)
-    assert (out_a / "imports" / "app-1.golist.json").read_bytes() == \
-           (out_b / "imports" / "app-1.golist.json").read_bytes()
+    identities = _identities(spec, tmp_path)
+    emit.run_depmap(
+        spec, out_a, "2026-07-18", identities=identities, run=_fake_go_run)
+    emit.run_depmap(
+        spec, out_b, "2026-07-18", identities=identities, run=_fake_go_run)
+    assert (out_a / "imports" / "app.golist.json").read_bytes() == \
+           (out_b / "imports" / "app.golist.json").read_bytes()
     assert (out_a / "imports" / "depmap-coverage.json").read_bytes() == \
            (out_b / "imports" / "depmap-coverage.json").read_bytes()
 
@@ -80,7 +93,9 @@ def test_run_depmap_skips_unsupported_repos(tmp_path):
     docs.mkdir()
     spec = TargetSpec(repos=[RepoTarget(repo_id="docs", path=str(docs), stacks=["md"])])
     out = tmp_path / "run"
-    report = emit.run_depmap(spec, out, "2026-07-18", run=_fake_go_run)
+    identities = _identities(spec, tmp_path)
+    report = emit.run_depmap(
+        spec, out, "2026-07-18", identities=identities, run=_fake_go_run)
     assert report.repos == []
     assert not (out / "imports" / "docs.golist.json").exists()
     assert (out / "imports" / "depmap-coverage.json").is_file()

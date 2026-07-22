@@ -47,7 +47,7 @@ class PrepareResult:
     reason: str = ""
 
 
-PrepareFn = Callable[[RepoTarget, "Path"], PrepareResult]   # (target, out_dir)
+PrepareFn = Callable[[RepoTarget, "Path", str], PrepareResult]
 AnnotateFn = Callable[[RepoTarget, str, str], str]          # (target, stdout, stderr) -> note
 MetricsFn = Callable[[RepoTarget, str, str], dict]          # deterministic structured output
 
@@ -152,8 +152,10 @@ class ToolDef:
     def check_preflight(self) -> str:
         return self.preflight() if self.preflight else ""
 
-    def run_prepare(self, target: RepoTarget, out: Path) -> PrepareResult:
-        return self.prepare(target, out) if self.prepare else PrepareResult()
+    def run_prepare(self, target: RepoTarget, out: Path,
+                    artifact_key: str) -> PrepareResult:
+        return (self.prepare(target, out, artifact_key)
+                if self.prepare else PrepareResult())
 
     def run_annotate(self, target: RepoTarget, stdout: str, stderr: str) -> str:
         return self.annotate(target, stdout, stderr) if self.annotate else ""

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 from .builder import ModelBuilder
 from ..datastore_coverage import classify as classify_data_model
+from ..identity import IdentityMap
 
 PARTITION_STATES = ("complete", "partial", "failed", "unavailable", "not-applicable")
 
@@ -74,16 +75,17 @@ def _worst(states: list[str]) -> str:
 
 
 def build(spec, report: dict, builder: ModelBuilder, cg: dict,
-          disc: dict, imports: dict, modules: dict, scan_date: str = "") -> dict:
+          disc: dict, imports: dict, modules: dict, *, identities: IdentityMap,
+          scan_date: str = "") -> dict:
     """Assemble every coverage partition. ``cg`` is the from_callgraph summary,
     ``disc`` the from_discovery summary, ``imports`` the from_imports summary,
     ``scan_date`` the model's resolved scan date (empty when it could not be
     recorded — disclosed here rather than left as a silent blank field)."""
-    blocks = {b["repo_id"]: b for b in report.get("repos", [])}
+    blocks = {b["repository_ref"]: b for b in report.get("repos", [])}
     parts = {
         "repositories": _repositories(builder, spec).to_dict(),
         "files": _files(builder).to_dict(),
-        "symbols_and_calls": _calls(builder, cg, spec).to_dict(),
+        "symbols_and_calls": _calls(builder, cg, spec, identities).to_dict(),
         "routes": _routes(builder, report, disc).to_dict(),
         "tables": _tables(builder, blocks).to_dict(),
         "access_model": _access(blocks).to_dict(),
@@ -118,9 +120,11 @@ def _files(builder: ModelBuilder) -> Partition:
                         "an evidence-grounded set, not a full filesystem inventory.")
 
 
-def _calls(builder: ModelBuilder, cg: dict, spec) -> Partition:
+def _calls(builder: ModelBuilder, cg: dict, spec,
+           identities: IdentityMap) -> Partition:
     from ..callgraph import emit as callgraph_emit
-    eligible = [r.repo_id for r in spec.repos if callgraph_emit.select_lanes(r)]
+    eligible = [identities.reference_for(r.repo_id)
+                for r in spec.repos if callgraph_emit.select_lanes(r)]
     if not eligible:
         return Partition(
             status="not-applicable", producers=["callgraph"],
@@ -179,7 +183,7 @@ def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
             node_kinds=["route"], edge_types=["route-linkage"],
             counts={"routes": 0}, notes=[note],
             source_universe="detailed route-registration inventory unavailable.")
-    inventory = report.get("route_inventory") or report.get("route_liveness") or {}
+    inventory = report.get("route_inventory") or {}
     rows = inventory.get("rows", [])
     mounts = sum(1 for row in rows if row.get("registration_kind") == "mount")
     unresolved = {
@@ -207,7 +211,7 @@ def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
         status = "partial"
         notes.append("liveness scan hit a file/byte COVERAGE CAP — some call "
                      "sites / route registrations were NOT scanned (see "
-                     "route_liveness.notes); route/linkage graph is incomplete.")
+                     "route_inventory.notes); route/linkage graph is incomplete.")
     if any("FALLBACK" in n for n in liveness_notes):
         status = "partial"
         notes.append("route registrations came from the regex FALLBACK (ast-grep "
@@ -349,7 +353,7 @@ def _imports(builder: ModelBuilder, imports: dict) -> Partition:
             source_universe="no target repository has a supported dependency-map lane.")
     if not imports.get("present"):
         note = ("import/dependency edges omitted (not fabricated). Run the "
-                "dependency-map stage to populate imports/<repo_id>."
+                "dependency-map stage to populate imports/<artifact_key>."
                 "{depcruise,golist}.json.")
         if expected:
             note += (f" {len(expected)} dependency-map-eligible repo(s) produced "

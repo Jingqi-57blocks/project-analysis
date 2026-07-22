@@ -1,7 +1,7 @@
 """Go package-dependency edges from ``go list`` maps under ``imports/``.
 
 Sibling of :mod:`from_imports` (the dependency-cruiser/JS normalizer): consumes
-``<run>/imports/<repo_id>.golist.json`` (the leak-free projection the Go
+``<run>/imports/<artifact-key>.golist.json`` (the leak-free projection the Go
 dependency-map lane writes) into ``dependency`` edges — kept STRICTLY separate
 from the ``call`` edge type. Granularity is the Go package (``go list`` is
 package-level; the Phase-0 spike validated that), so an edge is
@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..identity import IdentityMap
 from . import ids
 from .builder import ModelBuilder
 
@@ -41,7 +42,8 @@ def _is_internal(import_path: str, module: str) -> bool:
     return import_path == module or import_path.startswith(module + "/")
 
 
-def load(builder: ModelBuilder, run_dir: str | Path, heads: dict) -> dict:
+def load(builder: ModelBuilder, run_dir: str | Path, heads: dict,
+         identities: IdentityMap) -> dict:
     """Consume ``<run>/imports/*.golist.json`` if present.
 
     Returns ``{present, repos, edges, unresolved, stdlib_omitted}`` for coverage.
@@ -52,7 +54,8 @@ def load(builder: ModelBuilder, run_dir: str | Path, heads: dict) -> dict:
     if not imports_dir.is_dir():
         return summary
     for path in sorted(imports_dir.glob("*.golist.json")):
-        repo_id = path.name[: -len(".golist.json")]
+        artifact_key = path.name[: -len(".golist.json")]
+        repo_id = identities.repository_by_artifact_key(artifact_key).reference
         summary["repos"].append(repo_id)
         _consume(builder, repo_id, heads.get(repo_id, ""), path, summary)
     return summary

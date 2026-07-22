@@ -75,11 +75,12 @@ def _searchable_table(
 def _repos(inputs: RunInputs) -> list[dict]:
     sm = inputs.system_model or {}
     repos = [n for n in sm.get("nodes", []) if n.get("kind") == "repository"]
-    return sorted(repos, key=lambda n: n.get("repo_id", ""))
+    return sorted(repos, key=lambda n: n.get("repository_ref", ""))
 
 
 def _nid_to_repo(sm: dict) -> dict[str, str]:
-    return {n["id"]: n.get("repo_id", "") for n in sm.get("nodes", [])}
+    return {n["id"]: n.get("repository_ref", "")
+            for n in sm.get("nodes", [])}
 
 
 def _unavailable(key: str, title: str, anchor: str, reason: str) -> StructuredComponent:
@@ -122,15 +123,14 @@ def system_snapshot(inputs: RunInputs) -> StructuredComponent:
         ("symbols", by_kind.get("symbol", 0), ""),
     ])
 
-    # HEAD revision per repo, joined by repo_id (the stable id's trailing
-    # path-hash suffix is dropped for a clean name; the real commit gets its
-    # own column).
-    heads = {p.repo_id: (p.head[:8] if p.head else "—") for p in inputs.provenance()}
+    # HEAD revision per repository reference; the real commit has its own column.
+    heads = {p.repository_ref: (p.head[:8] if p.head else "—")
+             for p in inputs.provenance()}
     rows = []
     for r in repos:
         a = r.get("attrs", {})
-        rid = r.get("repo_id", "")
-        name = re.sub(r"-[0-9a-f]{6,}$", "", rid) or rid
+        rid = r.get("repository_ref", "")
+        name = rid
         rows.append([
             esc(name),
             esc(heads.get(rid, "—")),
@@ -156,7 +156,7 @@ def provenance_table(inputs: RunInputs) -> StructuredComponent:
     for p in inputs.provenance():
         head_short = p.head[:12] if p.head else "—"
         rows.append([
-            esc(p.repo_id),
+            esc(p.repository_ref),
             f'<code title="{attr(p.head)}">{esc(head_short)}</code>' if p.head else "—",
             esc(p.dirty),
         ])
@@ -255,14 +255,16 @@ def _per_repo_coverage(report: dict | None, title_key: str) -> str:
     if not report:
         return f'<p class="muted">{esc(title_key)} coverage report absent.</p>'
     rows = []
-    for repo in sorted(report.get("repos", []), key=lambda r: r.get("repo_id", "")):
-        detail = {k: v for k, v in repo.items() if k not in ("notes", "repo_id")}
+    for repo in sorted(report.get("repos", []), key=lambda r: r.get(
+            "repository_ref", "")):
+        detail = {k: v for k, v in repo.items()
+                  if k not in ("notes", "repository_ref")}
         detail_txt = ", ".join(
             f"{k}={v}" for k, v in sorted(detail.items())
             if isinstance(v, (str, int, float, bool))
         )
         rows.append([
-            esc(repo.get("repo_id", "")),
+            esc(repo.get("repository_ref", "")),
             status_badge(repo.get("status", "unknown")),
             esc(repo.get("tool", "—")),
             esc(detail_txt),
@@ -299,7 +301,7 @@ def topology_structured(inputs: RunInputs) -> StructuredComponent:
             "system-model.json is absent; the structured topology is unavailable.",
         )
     nid2repo = _nid_to_repo(sm)
-    repos = [r.get("repo_id", "") for r in _repos(inputs)]
+    repos = [r.get("repository_ref", "") for r in _repos(inputs)]
     rid = {r: f"r{i}" for i, r in enumerate(repos)}
 
     cross = collections.Counter()   # (src_repo, dst_repo) -> route-linkage count
@@ -316,7 +318,8 @@ def topology_structured(inputs: RunInputs) -> StructuredComponent:
                 tables_by_repo[s].add(e["dst"])
 
     lines = ["graph LR"]
-    stacks = {r.get("repo_id", ""): ", ".join(r.get("attrs", {}).get("stacks", []))
+    stacks = {r.get("repository_ref", ""):
+              ", ".join(r.get("attrs", {}).get("stacks", []))
               for r in _repos(inputs)}
     for r in repos:
         lines.append(f'  {rid[r]}["{r}<br/>{stacks.get(r, "")}"]')
@@ -393,7 +396,7 @@ def data_stores_table(inputs: RunInputs) -> StructuredComponent:
         rows.append([
             esc(a.get("table", n.get("label", ""))),
             esc(", ".join(a.get("access_types", [])) or "—"),
-            esc(n.get("repo_id", "—")),
+            esc(n.get("repository_ref", "—")),
         ])
     table = _searchable_table(
         "data-stores-table", "filter tables…",

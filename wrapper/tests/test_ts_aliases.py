@@ -29,7 +29,8 @@ def test_resolver_generates_analysis_tsconfig_and_depcruise_config(tmp_path):
         return subprocess.CompletedProcess(argv, 0, stdout=helper_out, stderr="")
 
     res = ts_aliases.resolve_and_generate(
-        target, out, tsconfig="tsconfig.app.json", exclude_re="^(dist)",
+        target, out, artifact_key="widget-ui",
+        tsconfig="tsconfig.app.json", exclude_re="^(dist)",
         run=run, node="/usr/bin/node")
 
     assert res.config_path and res.config_path.exists()
@@ -55,7 +56,8 @@ def test_resolver_error_falls_back_with_disclosure(tmp_path):
         return subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
 
     res = ts_aliases.resolve_and_generate(
-        target, out, tsconfig="tsconfig.app.json", exclude_re="^(dist)",
+        target, out, artifact_key="widget-ui",
+        tsconfig="tsconfig.app.json", exclude_re="^(dist)",
         run=run, node="/usr/bin/node")
     assert res.config_path is None
     assert "without an alias config" in res.notes

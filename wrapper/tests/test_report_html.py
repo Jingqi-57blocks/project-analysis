@@ -9,9 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from analysis_wrapper import identity
 from analysis_wrapper.report_html import content_map
 from analysis_wrapper.report_html.generate import generate
 from analysis_wrapper.report_html.run_inputs import _html_markdown
+from analysis_wrapper.targetspec import RepoTarget, TargetSpec, stable_repo_id
 
 DEEP_MARKER = "UNIQUEDEEPMARKERZZ"
 TABLE_MARKER = "cellvaluexyz"
@@ -115,33 +117,33 @@ graph TB
 
 def _system_model() -> dict:
     return {
-        "schema_version": "1.0.0",
-        "project_id": "DEMO-1",
+        "schema_version": "2.0.0",
+        "project_ref": "DEMO-1",
         "scan_date": "2026-01-01",
         "generator": "test",
         "nodes": [
-            {"id": "repo:a", "kind": "repository", "repo_id": "svc-a", "label": "svc-a",
+            {"id": "repo:a", "kind": "repository", "repository_ref": "svc-a", "label": "svc-a",
              "key": ["svc-a"], "status": "observed", "producers": ["discovery"], "evidence": [],
              "attrs": {"stacks": ["go"], "frameworks": ["gin"], "package_manager": "go",
                        "commit_count": 10, "head": "abc123"}},
-            {"id": "repo:b", "kind": "repository", "repo_id": "web-b", "label": "web-b",
+            {"id": "repo:b", "kind": "repository", "repository_ref": "web-b", "label": "web-b",
              "key": ["web-b"], "status": "observed", "producers": ["discovery"], "evidence": [],
              "attrs": {"stacks": ["ts"], "frameworks": ["react"], "package_manager": "yarn",
                        "commit_count": 20, "head": "def456"}},
-            {"id": "file:b1", "kind": "file", "repo_id": "web-b", "label": "app.ts",
+            {"id": "file:b1", "kind": "file", "repository_ref": "web-b", "label": "app.ts",
              "key": ["web-b", "app.ts"], "status": "observed", "producers": ["depmap"], "evidence": []},
-            {"id": "file:a1", "kind": "file", "repo_id": "svc-a", "label": "db.go",
+            {"id": "file:a1", "kind": "file", "repository_ref": "svc-a", "label": "db.go",
              "key": ["svc-a", "db.go"], "status": "observed", "producers": ["depmap"], "evidence": []},
-            {"id": "route:1", "kind": "route", "repo_id": "svc-a", "label": "GET /x",
+            {"id": "route:1", "kind": "route", "repository_ref": "svc-a", "label": "GET /x",
              "key": ["svc-a", "GET", "/x"], "status": "observed", "producers": ["discovery"],
              "evidence": [], "attrs": {"method": "GET", "path": "/x"}},
-            {"id": "data:1", "kind": "data-store", "repo_id": "svc-a", "label": "t_orders",
+            {"id": "data:1", "kind": "data-store", "repository_ref": "svc-a", "label": "t_orders",
              "key": ["svc-a", "t_orders"], "status": "observed", "producers": ["tables"],
              "evidence": [], "attrs": {"table": "t_orders", "access_types": ["read", "write"]}},
-            {"id": "ext:1", "kind": "external-boundary", "repo_id": "", "label": "smtp.example.test",
+            {"id": "ext:1", "kind": "external-boundary", "repository_ref": "", "label": "smtp.example.test",
              "key": ["host", "smtp.example.test"], "status": "observed", "producers": ["discovery"],
              "evidence": [], "attrs": {"kind": "host-fragment"}},
-            {"id": "ext:2", "kind": "external-boundary", "repo_id": "", "label": "left-pad",
+            {"id": "ext:2", "kind": "external-boundary", "repository_ref": "", "label": "left-pad",
              "key": ["candidate", "left-pad"], "status": "observed", "producers": ["discovery"],
              "evidence": [], "attrs": {"kind": "integration-candidate"}},
         ],
@@ -176,38 +178,53 @@ def make_run(tmp_path: Path, *, full: bool = True, drilldown: bool = False,
              language: str = "en") -> Path:
     run = tmp_path / "run"
     run.mkdir(parents=True, exist_ok=True)
+    workspace = tmp_path / "DEMO-1"
+    service = workspace / "svc-a"
+    web = workspace / "web-b"
+    service.mkdir(parents=True)
+    web.mkdir(parents=True)
+    targets = TargetSpec([
+        RepoTarget(repo_id="svc-a-internal", path=str(service)),
+        RepoTarget(repo_id="web-b-internal", path=str(web)),
+    ])
+    targets.save(run / "targets.json")
+    project_id = stable_repo_id(str(workspace))
+    identities = identity.build(
+        targets, workspace_root=workspace, project_id=project_id)
+    identity.write_mapping(run, identities)
     (run / "overview.md").write_text(OVERVIEW_MD, encoding="utf-8")
     (run / "technical-overview.md").write_text(TECH_MD, encoding="utf-8")
     (run / "project-map.md").write_text(MAP_MD, encoding="utf-8")
     run_state = {
-        "project_id": "DEMO-1",
+        "project_id": project_id,
         "run_id": "20260101T000000Z-demo",
         "language": language,
         "analyzed_at": "2026-01-01T00:00:00+00:00",
         "stages": {"discovery": "done", "overview": "done"},
         # An absolute path in provenance must NEVER reach the rendered output.
         "provenance": [
-            {"repo_id": "svc-a", "head": "abc123def456789", "dirty_detail": "no",
+            {"repo_id": "svc-a-internal", "head": "abc123def456789", "dirty_detail": "no",
              "path": "/Users/demo/secret/svc-a"},
-            {"repo_id": "web-b", "head": "def456abc789012", "dirty_detail": "no",
+            {"repo_id": "web-b-internal", "head": "def456abc789012", "dirty_detail": "no",
              "path": "/Users/demo/secret/web-b"},
         ],
     }
     (run / "run-state.json").write_text(json.dumps(run_state), encoding="utf-8")
+    (run / "discovery-report.json").write_text(json.dumps(
+        {"schema_version": "2.0.0", "project_ref": "DEMO-1",
+         "workspace_root": "/Users/demo/secret",
+         "repos": [{"repository_ref": "svc-a"}],
+         "not_targeted": ["/Users/demo/secret/analyzer (owned checkout)"]}),
+        encoding="utf-8")
     if full:
         (run / "system-model.json").write_text(json.dumps(_system_model()), encoding="utf-8")
         (run / "callgraph-coverage.json").write_text(json.dumps(
-            {"repos": [{"repo_id": "svc-a", "status": "complete", "tool": "callgraph",
+            {"schema_version": "2.0.0", "repos": [{"repository_ref": "svc-a", "status": "complete", "tool": "callgraph",
                         "edges_emitted": 5}]}), encoding="utf-8")
         (run / "imports").mkdir(exist_ok=True)
         (run / "imports" / "depmap-coverage.json").write_text(json.dumps(
-            {"repos": [{"repo_id": "svc-a", "status": "complete", "tool": "go list",
+            {"schema_version": "2.0.0", "repos": [{"repository_ref": "svc-a", "status": "complete", "tool": "go list",
                         "units": 3}]}), encoding="utf-8")
-        (run / "discovery-report.json").write_text(json.dumps(
-            {"project_id": "DEMO-1", "workspace_root": "/Users/demo/secret",
-             "repos": [{"repo_id": "svc-a"}],
-             "not_targeted": ["/Users/demo/secret/analyzer (owned checkout)"]}),
-            encoding="utf-8")
     if drilldown:
         mod = run / "drilldown" / "module-one"
         mod.mkdir(parents=True, exist_ok=True)
@@ -282,6 +299,7 @@ def test_missing_optional_artifacts_render_unavailable(tmp_path):
     run = make_run(tmp_path, full=False)
     result = generate(run)
     assert "system-model.json" in result.missing_artifacts
+    assert "discovery-report.json" not in result.missing_artifacts
     index = (result.report_dir / "index.html").read_text(encoding="utf-8")
     coverage = (result.report_dir / "coverage.html").read_text(encoding="utf-8")
     assert "unavailable" in index.lower()
@@ -289,6 +307,15 @@ def test_missing_optional_artifacts_render_unavailable(tmp_path):
     # honest, not broken: pages still exist and the docs still render losslessly.
     assert (result.report_dir / "doc-overview.html").is_file()
     assert DEEP_MARKER in (result.report_dir / "doc-overview.html").read_text(encoding="utf-8")
+
+
+def test_old_machine_artifact_contract_is_rejected(tmp_path):
+    run = make_run(tmp_path)
+    model = json.loads((run / "system-model.json").read_text())
+    model["schema_version"] = "1.0.0"
+    (run / "system-model.json").write_text(json.dumps(model), "utf-8")
+    with pytest.raises(ValueError, match="unsupported artifact contract"):
+        generate(run)
 
 
 def test_no_absolute_path_leak(tmp_path):

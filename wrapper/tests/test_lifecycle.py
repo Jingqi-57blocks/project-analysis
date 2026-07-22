@@ -1,6 +1,7 @@
 """57B-14: run IDs, stage checkpoints/resume, pointers, staleness."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -142,6 +143,8 @@ def test_new_run_default_language_is_zh_cn(tmp_path, synthetic_repo, capsys):
     mapping = identity.load(run_dir)
     assert mapping.source == "native"
     assert mapping.project.display_name == synthetic_repo.parent.name
+    assert Path(run_dir).parent.parent.name == mapping.project.artifact_key
+    assert mapping.project.internal_id not in Path(run_dir).parts
 
 
 def test_new_run_records_host_supplied_model_and_effort(tmp_path, synthetic_repo, capsys):
@@ -239,4 +242,4 @@ def test_incomplete_legacy_run_cannot_advance_without_provenance(
     assert main([
         "mark-stage", "--run", str(tmp_path), "--stage", "signals"
     ]) == 2
-    assert "legacy run cannot resume" in capsys.readouterr().err
+    assert "must be regenerated" in capsys.readouterr().err

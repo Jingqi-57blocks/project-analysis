@@ -263,7 +263,7 @@ script or generator to manufacture the map or reports.
 For a large candidate universe, prefer `candidate_rules`. Each rule has a stable
 kebab-case `rule_id`, one or more `selectors`, `disposition`, `module_ids`, and one
 evidence-bounded `reason`. A selector filters exact structured candidate fields only:
-`candidate_ids`, `repo_ids`, `signal_kinds`, `values`, `value_prefixes`,
+`candidate_ids`, `repository_refs`, `signal_kinds`, `values`, `value_prefixes`,
 `evidence_path_prefixes`, and `node_ids`; each field is a non-empty string list,
 fields combine with AND, and multiple selectors within a rule combine with OR.
 Rules may contain project vocabulary observed in THIS run's exact values, but project
@@ -304,7 +304,7 @@ the report still states mechanical candidate accounting separately from added ju
    guess. Business capabilities and technical/platform components are DISTINCT
    classes; keep them so (they are never mixed at one level in overview.md §3).
 3. **Stable IDs.** Keep module-id slugs from the accepted map when one
-   exists (`state/<project-id>/`); record renames/merges as aliases, never by
+   exists (`state/<project-key>/`); record renames/merges as aliases, never by
    dropping an ID. First run: mint kebab-case slugs from the module's
    business name.
 4. **Label every relationship** `observed | inferred | unresolved |

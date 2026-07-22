@@ -7,12 +7,14 @@ judge findings, or infer integrations from vendor names.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from .targetspec import RepoTarget
+from . import identity
+from .targetspec import RepoTarget, TargetSpec, stable_repo_id
 
 
 def _json(text: str) -> Any:
@@ -116,7 +118,17 @@ def _parse_clone_pairs(stdout: str) -> list[dict]:
     return pairs
 
 
-def _clone_endpoint(path_text: str, targets: list[RepoTarget]) -> dict:
+def _repository_references(targets: list[RepoTarget]) -> dict[str, str]:
+    paths = [str(Path(target.path).expanduser().resolve()) for target in targets]
+    workspace = paths[0] if len(paths) == 1 else os.path.commonpath(paths)
+    mapping = identity.build(
+        TargetSpec(targets), workspace_root=workspace,
+        project_id=stable_repo_id(str(workspace)))
+    return {item.internal_id: item.reference for item in mapping.repositories}
+
+
+def _clone_endpoint(path_text: str, targets: list[RepoTarget],
+                    references: dict[str, str]) -> dict:
     raw = path_text.strip()
     path = Path(raw).expanduser()
     display_path = raw
@@ -130,7 +142,8 @@ def _clone_endpoint(path_text: str, targets: list[RepoTarget]) -> dict:
             if (resolved == root or resolved.is_relative_to(root)) and any(
                     resolved == scan_root or resolved.is_relative_to(scan_root)
                     for scan_root in scan_roots):
-                matches.append((target.repo_id, resolved.relative_to(root).as_posix()))
+                matches.append((references[target.repo_id],
+                                resolved.relative_to(root).as_posix()))
     else:
         for target in targets:
             repo_root = Path(target.path).expanduser().resolve()
@@ -141,26 +154,29 @@ def _clone_endpoint(path_text: str, targets: list[RepoTarget]) -> dict:
                 if (resolved.is_file() and resolved.is_relative_to(repo_root) and
                         any(resolved == scan_root or resolved.is_relative_to(scan_root)
                             for scan_root in scan_roots)):
-                    matches.append((target.repo_id, resolved.relative_to(repo_root).as_posix()))
+                    matches.append((references[target.repo_id],
+                                    resolved.relative_to(repo_root).as_posix()))
     unique = sorted(set(matches))
     return {
         "raw": raw,
-        "repo_id": unique[0][0] if len(unique) == 1 else "",
-        "repo_candidates": sorted({repo_id for repo_id, _ in unique}),
+        "repository_ref": unique[0][0] if len(unique) == 1 else "",
+        "repository_candidates": sorted({repository_ref
+                                         for repository_ref, _ in unique}),
         "path": unique[0][1] if len(unique) == 1 else display_path,
         "resolved": len(unique) == 1,
     }
 
 
 def _qualify_clone_pairs(pairs: list[dict], targets: list[RepoTarget]) -> list[dict]:
+    references = _repository_references(targets)
     qualified = []
     for pair in pairs:
         row = dict(pair)
-        row["a"] = _clone_endpoint(pair["a_file"], targets)
-        row["b"] = _clone_endpoint(pair["b_file"], targets)
+        row["a"] = _clone_endpoint(pair["a_file"], targets, references)
+        row["b"] = _clone_endpoint(pair["b_file"], targets, references)
         if not row["a"]["resolved"] or not row["b"]["resolved"]:
             row["scope"] = "ambiguous"
-        elif row["a"]["repo_id"] == row["b"]["repo_id"]:
+        elif row["a"]["repository_ref"] == row["b"]["repository_ref"]:
             row["scope"] = "within-repo"
         else:
             row["scope"] = "cross-repo"
@@ -180,7 +196,8 @@ def _jscpd_view(targets: list[RepoTarget], stdout: str, stderr: str) -> str:
     cross.sort(key=lambda p: -p["span"])
     endpoint_rows = [endpoint for pair in pairs for endpoint in (pair["a"], pair["b"])]
     resolved_endpoints = sum(endpoint["resolved"] for endpoint in endpoint_rows)
-    ambiguous_endpoints = sum(not endpoint["resolved"] and bool(endpoint["repo_candidates"])
+    ambiguous_endpoints = sum(not endpoint["resolved"] and bool(
+        endpoint["repository_candidates"])
                               for endpoint in endpoint_rows)
     unresolved_endpoints = len(endpoint_rows) - resolved_endpoints - ambiguous_endpoints
     scopes = Counter(pair["scope"] for pair in pairs)
@@ -194,8 +211,10 @@ def _jscpd_view(targets: list[RepoTarget], stdout: str, stderr: str) -> str:
     out += ["", f"### cross-file clone pairs (top {min(len(cross), 60)} of {len(cross)}; "
                 f"lines\tscope\ta_repo:path:from-to\tb_repo:path:from-to)"]
     for p in cross[:60]:
-        a_repo = p["a"]["repo_id"] or "?{" + ",".join(p["a"]["repo_candidates"]) + "}"
-        b_repo = p["b"]["repo_id"] or "?{" + ",".join(p["b"]["repo_candidates"]) + "}"
+        a_repo = p["a"]["repository_ref"] or "?{" + ",".join(
+            p["a"]["repository_candidates"]) + "}"
+        b_repo = p["b"]["repository_ref"] or "?{" + ",".join(
+            p["b"]["repository_candidates"]) + "}"
         out.append(f"{p['span']}\t{p['scope']}\t"
                    f"{a_repo}:{p['a']['path']}:{p['a_from']}-{p['a_to']}\t"
                    f"{b_repo}:{p['b']['path']}:{p['b_from']}-{p['b_to']}")

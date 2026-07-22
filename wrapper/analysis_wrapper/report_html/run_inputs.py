@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .. import identity
+
 # Canonical narrative documents, in the order they appear in the report nav.
 CANONICAL_DOCS: tuple[tuple[str, str, str], ...] = (
     ("overview", "overview.md", "Overview"),
@@ -41,7 +43,7 @@ class DocSource:
 
 @dataclass(frozen=True)
 class RepoProvenance:
-    repo_id: str
+    repository_ref: str
     head: str
     dirty: str       # "no" / "yes" / verbatim dirty_detail; never a path
 
@@ -64,13 +66,14 @@ class RunInputs:
     callgraph_coverage: dict | None
     depmap_coverage: dict | None
     discovery: dict | None
+    identity_map: identity.IdentityMap | None = None
     drilldown_modules: list[DrilldownModule] = field(default_factory=list)
 
     # ---- convenience accessors (all honest about missing data) ----
 
     @property
-    def project_id(self) -> str:
-        return str(self.run_state.get("project_id") or "unknown")
+    def project_ref(self) -> str:
+        return self.identity_map.project.reference
 
     @property
     def run_id(self) -> str:
@@ -101,12 +104,13 @@ class RunInputs:
                 continue
             out.append(
                 RepoProvenance(
-                    repo_id=str(row.get("repo_id") or "unknown"),
+                    repository_ref=self.identity_map.reference_for(
+                        str(row.get("repo_id"))),
                     head=str(row.get("head") or ""),
                     dirty=str(row.get("dirty_detail") or "unknown"),
                 )
             )
-        return sorted(out, key=lambda r: r.repo_id)
+        return sorted(out, key=lambda r: r.repository_ref)
 
     def doc(self, doc_id: str) -> DocSource | None:
         for d in self.docs:
@@ -144,6 +148,14 @@ def _read_json(path: Path) -> dict | None:
     except (OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _read_current_contract(path: Path) -> dict | None:
+    data = _read_json(path)
+    if data is not None and data.get("schema_version") != "2.0.0":
+        raise ValueError(
+            f"{path.name} uses an unsupported artifact contract; regenerate the run")
+    return data
 
 
 def _detect_drilldown(run_dir: Path) -> list[DrilldownModule]:
@@ -186,6 +198,10 @@ def load(run_dir: str | Path) -> RunInputs:
         raise FileNotFoundError(f"run directory not found: {run_dir}")
 
     run_state = _read_json(run_dir / "run-state.json") or {}
+    try:
+        identities = identity.load(run_dir)
+    except (OSError, ValueError, KeyError) as exc:
+        raise ValueError(f"report input uses an unsupported identity contract: {exc}") from exc
 
     docs: list[DocSource] = []
     for doc_id, filename, title in CANONICAL_DOCS:
@@ -204,9 +220,13 @@ def load(run_dir: str | Path) -> RunInputs:
         run_dir=run_dir,
         run_state=run_state,
         docs=docs,
-        system_model=_read_json(run_dir / "system-model.json"),
-        callgraph_coverage=_read_json(run_dir / "callgraph-coverage.json"),
-        depmap_coverage=_read_json(run_dir / "imports" / "depmap-coverage.json"),
-        discovery=_read_json(run_dir / "discovery-report.json"),
+        system_model=_read_current_contract(run_dir / "system-model.json"),
+        callgraph_coverage=_read_current_contract(
+            run_dir / "callgraph-coverage.json"),
+        depmap_coverage=_read_current_contract(
+            run_dir / "imports" / "depmap-coverage.json"),
+        discovery=(identity.load_discovery_report(run_dir, identities)
+                   if (run_dir / "discovery-report.json").is_file() else None),
+        identity_map=identities,
         drilldown_modules=_detect_drilldown(run_dir),
     )

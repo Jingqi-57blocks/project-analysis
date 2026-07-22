@@ -125,7 +125,8 @@ def test_analyze_unavailable_when_tool_absent(tmp_path):
     def fail_run(*_a, **_k):  # the tool must never be invoked when it is absent
         raise AssertionError("callgraph must not run when the binary is unavailable")
 
-    edges, cov = go_lane.analyze(target, bin_dir=tmp_path / "empty-gobin", run=fail_run)
+    edges, cov = go_lane.analyze(
+        target, repository_ref="app", bin_dir=tmp_path / "empty-gobin", run=fail_run)
     assert edges == []
     assert cov.status == "unavailable"
     assert "not installed" in cov.reason
@@ -147,7 +148,8 @@ def test_analyze_failed_on_nonzero_exit(tmp_path):
         return subprocess.CompletedProcess(
             argv, 1, stdout="", stderr="cannot find module providing package")
 
-    edges, cov = go_lane.analyze(target, bin_dir=gobin, run=run)
+    edges, cov = go_lane.analyze(
+        target, repository_ref="app", bin_dir=gobin, run=run)
     assert edges == []
     assert cov.status == "failed"
     assert "cold module cache" in cov.reason

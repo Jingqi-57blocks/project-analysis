@@ -3,7 +3,7 @@
 The canonical run dir (targets + discovery + callgraph) does not include an
 import map, so this partition is normally ``partial`` (disclosed, never
 fabricated). When a producer drops dependency-cruiser JSON into
-``<run>/imports/<repo_id>.depcruise.json`` this module consumes it into
+``<run>/imports/<artifact-key>.depcruise.json`` this module consumes it into
 ``dependency`` edges — kept STRICTLY separate from the ``call`` edge type.
 
 An import that dependency-cruiser could not resolve to an in-repo file (external
@@ -16,13 +16,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..identity import IdentityMap
 from . import ids
 from .builder import ModelBuilder
 
 PRODUCER = "dependency-cruiser"
 
 
-def load(builder: ModelBuilder, run_dir: str | Path, heads: dict) -> dict:
+def load(builder: ModelBuilder, run_dir: str | Path, heads: dict,
+         identities: IdentityMap) -> dict:
     """Consume ``<run>/imports/*.depcruise.json`` if present.
 
     Returns ``{present, files, repos, edges, unresolved}`` for coverage.
@@ -34,7 +36,8 @@ def load(builder: ModelBuilder, run_dir: str | Path, heads: dict) -> dict:
     if not imports_dir.is_dir():
         return summary
     for path in sorted(imports_dir.glob("*.depcruise.json")):
-        repo_id = path.name[: -len(".depcruise.json")]
+        artifact_key = path.name[: -len(".depcruise.json")]
+        repo_id = identities.repository_by_artifact_key(artifact_key).reference
         summary["repos"].append(repo_id)
         _consume(builder, repo_id, heads.get(repo_id, ""), path, summary)
     return summary

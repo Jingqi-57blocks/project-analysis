@@ -20,7 +20,7 @@ from .status import Status
 @dataclass
 class RepoStamp:
     """Provenance for one scanned repo; multi-repo tools carry several."""
-    repo_id: str
+    repository_ref: str
     repo_path: str
     repo_head: str
     branch: str
@@ -28,7 +28,6 @@ class RepoStamp:
     shallow: bool = False
     commit_count: int = 0
     oldest_commit_date: str = ""
-
 
 @dataclass
 class Manifest:
@@ -53,7 +52,8 @@ class Manifest:
     structured_metrics: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), indent=2, sort_keys=True) + "\n"
+        return json.dumps({"schema_version": "2.0.0", **asdict(self)},
+                          indent=2, sort_keys=True) + "\n"
 
     def normalized_json(self) -> str:
         """Deterministic comparison artifact.
@@ -63,6 +63,7 @@ class Manifest:
         compare byte-for-byte. The full manifest remains the provenance record.
         """
         data = asdict(self)
+        data["schema_version"] = "2.0.0"
         data.pop("wall_time_s", None)
         data.pop("scan_date", None)
         cwd = Path(self.cwd).expanduser().resolve() if self.cwd else None
@@ -82,7 +83,7 @@ class Manifest:
         ]
         for r in self.repos:
             lines.append(
-                f"repo:            {r.repo_id} @ {r.repo_head or '(non-git)'}"
+                f"repo:            {r.repository_ref} @ {r.repo_head or '(non-git)'}"
                 f" [{r.branch or '-'}] dirty={r.dirty_detail}  ({r.repo_path})"
                 f" history=shallow:{str(r.shallow).lower()},commits:{r.commit_count},"
                 f"oldest:{r.oldest_commit_date or '?'}"

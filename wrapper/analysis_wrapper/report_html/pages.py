@@ -101,7 +101,7 @@ def _nav(active: str, inputs: RunInputs) -> str:
     )
     return (
         '<nav class="nav" aria-label="report navigation">'
-        f'<h1>{esc(inputs.project_id)}</h1>'
+        f'<h1>{esc(inputs.project_ref)}</h1>'
         f'<p class="project-id">{esc(c["subtitle"])}</p>'
         f'<div class="nav-group">{"".join(links)}</div>'
         f"{full_docs_group}"
@@ -145,7 +145,7 @@ def shell(
         f'<html lang="{attr(inputs.language)}" data-theme="light">\n<head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f"<title>{esc(title)} · {esc(inputs.project_id)}</title>\n"
+        f"<title>{esc(title)} · {esc(inputs.project_ref)}</title>\n"
         f'<link rel="stylesheet" href="{attr(STYLESHEET)}">\n'
         "</head>\n<body>\n"
         '<div class="layout">\n'

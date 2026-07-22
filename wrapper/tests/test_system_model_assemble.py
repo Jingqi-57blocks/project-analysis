@@ -16,7 +16,7 @@ def test_assemble_builds_every_node_kind_from_evidence(tmp_path):
             "external-boundary", "deployable-unit"} <= kinds
     assert "module" not in kinds
     assert model.scan_date == "2026-02-02"      # from callgraph-coverage (recorded)
-    assert model.project_id == "PROJ-1"
+    assert model.project_ref == "ws"
 
 
 def test_edge_types_are_kept_distinct_by_producer(tmp_path):
@@ -69,8 +69,8 @@ def test_ui_called_route_links_frontend_file_to_backend_route(tmp_path):
     link = links[0]
     src = next(n for n in model.nodes if n.id == link.src)
     dst = next(n for n in model.nodes if n.id == link.dst)
-    assert src.repo_id == "web-22222222" and src.label == "src/api/users.ts"
-    assert dst.kind == "route" and dst.repo_id == "api-11111111"
+    assert src.repository_ref == "web" and src.label == "src/api/users.ts"
+    assert dst.kind == "route" and dst.repository_ref == "api"
 
 
 def test_output_is_byte_identical_across_runs(tmp_path):

@@ -15,10 +15,11 @@ from .callgraph import emit as callgraph_emit
 from .datastore_coverage import classify as classify_data_model
 from .depmap import emit as depmap_emit
 from .executor import replace_artifact_text
+from . import identity
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "2.0.0"
 STATES = ("complete", "partial", "unavailable", "not-applicable", "failed")
 _SEVERITY = {
     "complete": 0,
@@ -79,7 +80,8 @@ def _record(capability_id: str, *, status: str, applicable: bool,
         "observed_artifacts": observed,
         "missing_artifacts": missing,
         "details": sorted(details or [], key=lambda row: (
-            str(row.get("repo_id", "")), str(row.get("lang", row.get("lane", ""))),
+            str(row.get("repository_ref", "")),
+            str(row.get("lang", row.get("lane", ""))),
             str(row.get("tool", "")))),
     }
 
@@ -87,7 +89,8 @@ def _record(capability_id: str, *, status: str, applicable: bool,
 def build(run_dir: str | Path) -> dict:
     run = Path(run_dir).expanduser().resolve()
     spec = TargetSpec.load(run / "targets.json")
-    report = _read_json(run / "discovery-report.json")
+    identities = identity.load(run)
+    report = identity.load_discovery_report(run, identities)
     signal_summary = _read_json(run / "signals" / "run-summary.json")
     callgraph = _read_json(run / "callgraph-coverage.json")
     depmap = _read_json(run / "imports" / "depmap-coverage.json")
@@ -102,7 +105,8 @@ def build(run_dir: str | Path) -> dict:
         _record(
             "discovery", status="complete", applicable=True,
             expected=["targets.json", "discovery-report.json"], run=run,
-            details=[{"repo_id": repo.repo_id, "status": "complete"}
+            details=[{"repository_ref": identities.reference_for(repo.repo_id),
+                      "status": "complete"}
                      for repo in spec.repos],
         ),
         _record(
@@ -137,12 +141,12 @@ def build(run_dir: str | Path) -> dict:
     # assumptions.  Legitimate zero results become not-applicable only when the
     # corresponding producer completed its source universe.
     repos = report.get("repos", [])
-    route_doc = report.get("route_inventory") or report.get("route_liveness")
+    route_doc = report.get("route_inventory")
     route_rows = (route_doc or {}).get("rows", [])
-    backend_ids = {str(row.get("repo_id", "")) for row in route_rows
-                   if row.get("repo_id")}
+    backend_ids = {str(row.get("repository_ref", "")) for row in route_rows
+                   if row.get("repository_ref")}
     if not backend_ids:
-        backend_ids = {block.get("repo_id", "") for block in repos
+        backend_ids = {block.get("repository_ref", "") for block in repos
                        if block.get("module_signals", {}).get("routes")}
     any_registered_routes = bool(backend_ids)
     frontend_ids = set()
@@ -157,7 +161,7 @@ def build(run_dir: str | Path) -> dict:
         # not-applicable.
         if stacks & {"js", "ts", "tsx", "javascript", "typescript"} \
                 and "src" in folders:
-            frontend_ids.add(block.get("repo_id", ""))
+            frontend_ids.add(block.get("repository_ref", ""))
     unresolved_mounts = sum(1 for row in route_rows
                             if row.get("registration_kind") == "mount")
     route_status = ("partial" if route_doc is not None and unresolved_mounts else
@@ -166,7 +170,8 @@ def build(run_dir: str | Path) -> dict:
     records.append(_record(
         "route-inventory", status=route_status,
         applicable=route_status != "not-applicable", expected=[], run=run,
-        details=[{"repo_id": row.get("repo_id", ""), "status": row.get("status", "")}
+        details=[{"repository_ref": str(row.get("repository_ref", "")),
+                  "status": row.get("status", "")}
                  for row in route_rows],
         reason=("route mounts are retained as unresolved topology; composed endpoint "
                 "paths are not guessed" if unresolved_mounts else
@@ -176,14 +181,13 @@ def build(run_dir: str | Path) -> dict:
     ))
     ui_applicable = bool(frontend_ids and backend_ids)
     linkage_doc = report.get("ui_route_linkage")
-    if linkage_doc is None and report.get("route_liveness") is not None:
-        linkage_doc = report.get("route_liveness")
     ui_status = ("not-applicable" if not ui_applicable else
                  "complete" if linkage_doc is not None else "unavailable")
     records.append(_record(
         "ui-route-linkage", status=ui_status, applicable=ui_applicable,
         expected=[], run=run,
-        details=[{"repo_id": row.get("repo_id", ""), "status": row.get("status", "")}
+        details=[{"repository_ref": str(row.get("repository_ref", "")),
+                  "status": row.get("status", "")}
                  for row in route_rows],
         reason=("project shape has no UI/backend pair" if not ui_applicable else
                 "canonical UI-to-route linkage artifact unavailable"
@@ -205,7 +209,7 @@ def build(run_dir: str | Path) -> dict:
                            key=lambda value: _SEVERITY[value], default="failed")
     return {
         "schema_version": SCHEMA_VERSION,
-        "project_id": report.get("project_id", ""),
+        "project_ref": identities.project.reference,
         "scan_date": callgraph.get("scan_date") or depmap.get("scan_date") or "",
         "aggregate_status": aggregate_status,
         "capabilities": sorted(records, key=lambda row: row["capability_id"]),

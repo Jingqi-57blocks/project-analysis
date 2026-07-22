@@ -159,7 +159,8 @@ def parse_tsv(text: str, *, module: str, repo_id: str, commit: str,
     return sorted(edges, key=lambda e: e.sort_key()), counts
 
 
-def analyze(target: RepoTarget, *, allow_network: bool = False,
+def analyze(target: RepoTarget, *, repository_ref: str,
+            allow_network: bool = False,
             run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
             warm: Callable[..., tuple[bool, str]] = go_cache.warm,
             bin_dir: Path = go_tools.GO_TOOLS_BIN,
@@ -183,7 +184,8 @@ def analyze(target: RepoTarget, *, allow_network: bool = False,
             call_sites: CallSiteCounts | None = None, edges: int = 0,
             analyzed: dict | None = None) -> RepoCoverage:
         return RepoCoverage(
-            repo_id=target.repo_id, lang="go", status=status, reason=reason,
+            repository_ref=repository_ref,
+            lang="go", status=status, reason=reason,
             tool=go_tools.CALLGRAPH_PKG, tool_version=version, algorithm="vta",
             warm_cache=warm_cache, candidates_by_ext=cand_ext,
             analyzed_by_ext=analyzed or {}, excluded_by_reason=excl,
@@ -228,7 +230,7 @@ def analyze(target: RepoTarget, *, allow_network: bool = False,
         return [], cov("failed", reason=detail, warm_cache=warm_cache)
 
     edges, counts = parse_tsv(proc.stdout or "", module=module,
-                              repo_id=target.repo_id, commit=commit,
+                              repo_id=repository_ref, commit=commit,
                               repo_root=repo_root, prod_files=prod_files)
     analyzed = dict(cand_ext)          # loader parses all production .go in-module
     status = contract.coverage_status(cand_ext, analyzed, 0)

@@ -30,8 +30,8 @@ def test_capped_route_summary_is_recorded_but_not_used_as_source(tmp_path):
 
 
 def test_routes_partial_when_only_capped_summary_available(tmp_path):
-    # No route_liveness -> the capped module_signals.routes is NOT used as source.
-    cov = _coverage(write_run(tmp_path / "run", route_liveness=False))
+    # No route_inventory -> the capped module_signals.routes is NOT used as source.
+    cov = _coverage(write_run(tmp_path / "run", with_routes=False))
     routes = cov["routes"]
     assert routes["status"] == "partial"
     assert routes["counts"]["routes"] == 0
@@ -177,7 +177,7 @@ def test_model_matches_minimal_json_schema(tmp_path):
     doc = sm.assemble(write_run(tmp_path / "run", with_imports=True)).to_dict()
     schema = {
         "type": "object",
-        "required": ["schema_version", "generator", "scan_date", "project_id",
+        "required": ["schema_version", "generator", "scan_date", "project_ref",
                      "stats", "coverage", "nodes", "edges"],
         "properties": {
             "schema_version": {"type": "string"},

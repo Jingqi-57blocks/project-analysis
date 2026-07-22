@@ -125,5 +125,5 @@ def test_legacy_run_state_remains_loadable_without_new_provenance(tmp_path, targ
     state = lifecycle.RunState.create("run", "project", TargetSpec([target]))
     state.save(tmp_path)
     assert lifecycle.RunState.load(tmp_path).run_id == "run"
-    with pytest.raises(ValueError, match="legacy run cannot resume"):
+    with pytest.raises(ValueError, match="must be regenerated"):
         run_provenance.load(tmp_path)

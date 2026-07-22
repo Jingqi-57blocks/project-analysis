@@ -13,11 +13,12 @@ from pathlib import Path, PurePosixPath
 import re
 
 from .executor import replace_artifact_text
+from . import identity
 from .lifecycle import RunState
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "2.0.0"
 FINDINGS_FILE = "findings.json"
 TECHNICAL_FILE = "findings-summary.md"
 PM_FILE = "findings-pm-summary.md"
@@ -27,9 +28,6 @@ PM_BEGIN = "<!-- BEGIN MACHINE PM FINDINGS -->"
 PM_END = "<!-- END MACHINE PM FINDINGS -->"
 
 _ID = re.compile(r"^finding-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
-_SOURCE = re.compile(
-    r"^([A-Za-z0-9][A-Za-z0-9._-]*)@([0-9a-fA-F]{40}|WORKTREE|NON-GIT):"
-    r"([^:]+):(\d+)$")
 _SIGNAL = re.compile(r"^signals/([^:]+):(\d+)$")
 _METRIC = re.compile(r"^(?:metric:|workspace-metrics\.json#metric:)(.+)$")
 _PRIORITIES = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -78,16 +76,28 @@ def _safe_relative(value: str, label: str) -> PurePosixPath:
     return path
 
 
-def _validate_source_ref(ref: str, spec: TargetSpec) -> None:
-    match = _SOURCE.fullmatch(ref)
-    if not match:
+def _source_parts(ref: str) -> tuple[str, str, str, str] | None:
+    repository_ref, marker, tail = ref.rpartition("@")
+    revision, separator, position = tail.partition(":")
+    relative, line_separator, line = position.rpartition(":")
+    if not marker or not separator or not line_separator or not repository_ref \
+            or not revision or not relative or not line.isdigit():
+        return None
+    return repository_ref, revision, relative, line
+
+
+def _validate_source_ref(ref: str, spec: TargetSpec,
+                         identities: identity.IdentityMap) -> None:
+    parts = _source_parts(ref)
+    if not parts:
         raise ValueError(f"invalid source ref: {ref}")
-    repo_id, revision, relative, line_text = match.groups()
-    target = spec.repo(repo_id)
+    repository_ref, revision, relative, line_text = parts
+    target = spec.repo(identities.internal_id_for(repository_ref))
     expected = ("NON-GIT" if not target.git.is_git else
                 "WORKTREE" if target.git.dirty_detail != "no" else target.git.head.lower())
     if revision.lower() != expected.lower():
-        raise ValueError(f"source ref revision mismatch for {repo_id}: {revision}")
+        raise ValueError(
+            f"source ref revision mismatch for {repository_ref}: {revision}")
     relative_path = _safe_relative(relative, "source ref path")
     root = Path(target.path).expanduser().resolve()
     path = (root / relative_path).resolve()
@@ -129,6 +139,7 @@ def _validate_signal_ref(ref: str, run: Path, allowed_views: dict[str, str]) -> 
 
 
 def _validate_ref(ref: str, run: Path, spec: TargetSpec,
+                  identities: identity.IdentityMap,
                   metric_refs: set[str], allowed_views: dict[str, str]) -> None:
     metric = _METRIC.fullmatch(ref)
     if metric:
@@ -138,7 +149,7 @@ def _validate_ref(ref: str, run: Path, spec: TargetSpec,
     if ref.startswith("signals/"):
         _validate_signal_ref(ref, run, allowed_views)
         return
-    _validate_source_ref(ref, spec)
+    _validate_source_ref(ref, spec, identities)
 
 
 def _metric_origins(row: dict, run: Path) -> set[str]:
@@ -166,9 +177,9 @@ def _independent_ref_keys(ref: str, *, run: Path,
     signal = _SIGNAL.fullmatch(ref)
     if signal:
         return {f"signal-tool:{allowed_views.get(signal.group(1), 'unknown')}"}
-    source = _SOURCE.fullmatch(ref)
+    source = _source_parts(ref)
     if source:
-        return {f"source-repo:{source.group(1)}"}
+        return {f"source-repo:{source[0]}"}
     return {ref}
 
 
@@ -186,6 +197,7 @@ def validate(run_dir: str | Path) -> dict:
     if not isinstance(rows, list):
         raise ValueError("findings must be a list")
     spec = TargetSpec.load(run / "targets.json")
+    identities = identity.load(run)
     metrics = _load(run / "workspace-metrics.json")
     metric_rows = {str(row.get("metric_ref", "")): row
                    for row in metrics.get("metrics", []) if isinstance(row, dict)}
@@ -234,7 +246,8 @@ def validate(run_dir: str | Path) -> dict:
                 raise ValueError(f"{finding_id}.evidence[{evidence_index}].refs is empty")
             for ref in refs:
                 normalized_ref = _one_line(ref, "evidence ref")
-                _validate_ref(normalized_ref, run, spec, metric_refs, allowed_views)
+                _validate_ref(normalized_ref, run, spec, identities,
+                              metric_refs, allowed_views)
                 independent_refs.update(_independent_ref_keys(
                     normalized_ref, run=run,
                     allowed_views=allowed_views, metric_origins=metric_origins))

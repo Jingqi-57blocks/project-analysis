@@ -6,7 +6,7 @@ the actual ``dependency`` edge counts live in the system-model's per-producer
 coverage (derived from the assembled graph), so nothing is double-counted here.
 
 Deterministic by construction: no wall time is generated, entries are sorted by
-``(repo_id, lane)``, and ``scan_date`` is a recorded input.
+``(repository_ref, lane)``, and ``scan_date`` is a recorded input.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ LANES = ("go", "js")
 class RepoDepCoverage:
     """One repo+lane dependency-map outcome."""
 
-    repo_id: str
+    repository_ref: str
     lane: str
     status: str                       # one of COVERAGE_STATES
     tool: str = ""
@@ -44,7 +44,8 @@ class RepoDepCoverage:
 
     def to_dict(self) -> dict:
         return {
-            "repo_id": self.repo_id, "lane": self.lane, "status": self.status,
+            "repository_ref": self.repository_ref,
+            "lane": self.lane, "status": self.status,
             "tool": self.tool, "tool_version": self.tool_version,
             "reason": self.reason, "map_file": self.map_file, "units": self.units,
             "warm_cache": self.warm_cache, "notes": self.notes,
@@ -62,8 +63,9 @@ class DepMapReport:
                         "identical inputs yield identical bytes")
 
     def to_dict(self) -> dict:
-        ordered = sorted(self.repos, key=lambda c: (c.repo_id, c.lane))
+        ordered = sorted(self.repos, key=lambda c: (c.repository_ref, c.lane))
         return {
+            "schema_version": "2.0.0",
             "scan_date": self.scan_date,
             "determinism": self.determinism,
             "repos": [c.to_dict() for c in ordered],

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..executor import SignalResult, run_tool
+from ..identity import IdentityMap
 from ..registry import tool_for
 from ..targetspec import RepoTarget, TargetSpec
 
@@ -15,6 +16,7 @@ class ExecutorToolAccess:
     """Narrow adapter that preserves every existing executor safety check."""
 
     targets: TargetSpec
+    identities: IdentityMap
     output_dir: Path
     scan_date: str
     network_authorized: bool = False
@@ -37,6 +39,7 @@ class ExecutorToolAccess:
             recorded,
             self.output_dir,
             self.scan_date,
+            self.identities.repository(recorded.repo_id),
             signal_id=signal_id or None,
             allow_network=self.network_authorized,
         )

@@ -45,7 +45,7 @@ def _fixture(tmp_path):
 @requires_node
 def test_extractor_classifies_and_emits_internal_edges(tmp_path):
     target = _fixture(tmp_path)
-    edges, cov = js_lane.analyze(target)
+    edges, cov = js_lane.analyze(target, repository_ref="widget")
 
     assert cov.status == "complete"
     assert cov.algorithm == "tsconfig"
@@ -73,8 +73,8 @@ def test_extractor_classifies_and_emits_internal_edges(tmp_path):
 @requires_node
 def test_extractor_output_is_deterministic(tmp_path):
     target = _fixture(tmp_path)
-    first, _ = js_lane.analyze(target)
-    second, _ = js_lane.analyze(target)
+    first, _ = js_lane.analyze(target, repository_ref="widget")
+    second, _ = js_lane.analyze(target, repository_ref="widget")
     assert [e.to_json_line() for e in first] == [e.to_json_line() for e in second]
 
 
@@ -88,7 +88,7 @@ def test_analyze_unavailable_when_node_missing(tmp_path, monkeypatch):
     def fail_run(*_a, **_k):
         raise AssertionError("extractor must not run when node is unavailable")
 
-    edges, cov = js_lane.analyze(target, run=fail_run)
+    edges, cov = js_lane.analyze(target, repository_ref="x", run=fail_run)
     assert edges == []
     assert cov.status == "unavailable"
     assert "unavailable" in cov.reason
