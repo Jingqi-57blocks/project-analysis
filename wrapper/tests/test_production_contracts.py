@@ -1,11 +1,12 @@
 """Required parser/tool-definition behavior classes from Linear 57B-10."""
 
 import json
+from pathlib import Path
 
 from analysis_wrapper import parsers
 from analysis_wrapper.registry import dependency_cruiser, outdated, staticcheck
 from analysis_wrapper.status import Status
-from analysis_wrapper.targetspec import PackageManager
+from analysis_wrapper.targetspec import PackageManager, RepoTarget, stable_repo_id
 
 
 def test_yarn_empty_success_is_valid_but_empty_error_is_not():
@@ -206,6 +207,10 @@ def test_go_view_matches_internal_packages_on_module_boundaries(tmp_path, target
 
 
 def test_jscpd_view_extracts_ranked_cross_file_clone_pairs(target):
+    for relative in ("a/x.js", "b/y.js", "c/z.js"):
+        path = Path(target.path) / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n", "utf-8")
     stdout = (
         "Clone found (javascript)\n"
         " - a/x.js [10:1 - 25:4] (15 lines, 90 tokens)\n"
@@ -217,9 +222,95 @@ def test_jscpd_view_extracts_ranked_cross_file_clone_pairs(target):
     )
     view = parsers.jscpd_view(target, stdout, "")
     # cross-file pair present with span + both endpoints; same-file pair excluded
-    assert "15\ta/x.js:10-25\tb/y.js:40-55" in view
+    assert (f"15\twithin-repo\t{target.repo_id}:a/x.js:10-25\t"
+            f"{target.repo_id}:b/y.js:40-55") in view
     assert "c/z.js:1-6\tc/z.js" not in view.split("cross-file", 1)[1].split("summary", 1)[0]
     assert "1 same-file" in view
+
+
+def test_jscpd_multi_qualifies_cross_repo_and_ambiguous_endpoints(tmp_path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    for root in (left, right):
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "shared.js").write_text("x\n", "utf-8")
+    (left / "src" / "only-left.js").write_text("x\n", "utf-8")
+    targets = [RepoTarget(stable_repo_id(str(root)), str(root), stacks=["js"])
+               for root in (left, right)]
+    stdout = (
+        "Clone found (javascript)\n"
+        f" - {left / 'src' / 'only-left.js'} [1:1 - 4:1] (3 lines, 20 tokens)\n"
+        f"   {right / 'src' / 'shared.js'} [2:1 - 5:1]\n"
+        "Clone found (javascript)\n"
+        " - src/shared.js [1:1 - 4:1] (3 lines, 20 tokens)\n"
+        "   src/shared.js [8:1 - 11:1]\n"
+        "Found 2 clones.\n")
+
+    view = parsers.jscpd_multi_view(targets, stdout, "")
+
+    assert "\tcross-repo\t" in view
+    assert f"{targets[0].repo_id}:src/only-left.js" in view
+    assert f"{targets[1].repo_id}:src/shared.js" in view
+    assert "\tambiguous\t?{" in view
+    assert targets[0].repo_id in view and targets[1].repo_id in view
+
+
+def test_jscpd_multi_does_not_publish_absolute_paths_outside_targets(tmp_path):
+    root = tmp_path / "target"
+    root.mkdir()
+    target = RepoTarget(stable_repo_id(str(root)), str(root), stacks=["js"])
+    outside = tmp_path / "outside" / "secret.js"
+    stdout = (
+        "Clone found (javascript)\n"
+        f" - {outside} [1:1 - 4:1] (3 lines, 20 tokens)\n"
+        "   missing.js [8:1 - 11:1]\n"
+        "Found 1 clones.\n")
+
+    view = parsers.jscpd_multi_view([target], stdout, "")
+
+    assert str(outside) not in view
+    assert "<outside-target>" in view
+
+
+def test_jscpd_paths_resolve_against_analysis_roots_and_reject_escapes(tmp_path):
+    repo = tmp_path / "client"
+    source = repo / "src"
+    source.mkdir(parents=True)
+    (source / "page.tsx").write_text("x\n", "utf-8")
+    (repo / "outside.ts").write_text("x\n", "utf-8")
+    target = RepoTarget(stable_repo_id(str(repo)), str(repo), stacks=["tsx"],
+                        analysis_roots=["src"])
+    stdout = (
+        "Clone found (tsx)\n"
+        " - page.tsx [1:1 - 4:1] (3 lines, 20 tokens)\n"
+        "   ../outside.ts [8:1 - 11:1]\n"
+        "Found 1 clones.\n")
+
+    view = parsers.jscpd_multi_view([target], stdout, "")
+
+    assert f"{target.repo_id}:src/page.tsx" in view
+    assert f"{target.repo_id}:../outside.ts" not in view
+    assert "unresolved=1" in view
+
+
+def test_jscpd_attribution_summary_counts_ambiguity_beyond_sample(tmp_path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    for root in (left, right):
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "shared.js").write_text("x\n", "utf-8")
+    targets = [RepoTarget(stable_repo_id(str(root)), str(root), stacks=["js"])
+               for root in (left, right)]
+    blocks = []
+    for index in range(61):
+        blocks.append(
+            "Clone found (javascript)\n"
+            f" - src/shared.js [{index + 1}:1 - {index + 4}:1] (3 lines, 20 tokens)\n"
+            f"   src/shared.js [{index + 8}:1 - {index + 11}:1]\n")
+    view = parsers.jscpd_multi_view(targets, "".join(blocks) + "Found 61 clones.\n", "")
+
+    assert "pairs\t61\twithin-repo=0\tcross-repo=0\tambiguous=61" in view
+    assert "endpoints\t122\tresolved=0\tambiguous=122\tunresolved=0" in view
 
 
 def test_depcruise_partial_keys_on_internal_edges_not_external_subpaths(target):

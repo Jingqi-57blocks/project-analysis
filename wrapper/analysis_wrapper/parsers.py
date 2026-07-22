@@ -97,27 +97,102 @@ def _parse_clone_pairs(stdout: str) -> list[dict]:
     return pairs
 
 
-def jscpd_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
+def _clone_endpoint(path_text: str, targets: list[RepoTarget]) -> dict:
+    raw = path_text.strip()
+    path = Path(raw).expanduser()
+    display_path = raw
+    matches: list[tuple[str, str]] = []
+    if path.is_absolute():
+        resolved = path.resolve()
+        display_path = "<outside-target>"
+        for target in targets:
+            root = Path(target.path).expanduser().resolve()
+            scan_roots = target.root_paths()
+            if (resolved == root or resolved.is_relative_to(root)) and any(
+                    resolved == scan_root or resolved.is_relative_to(scan_root)
+                    for scan_root in scan_roots):
+                matches.append((target.repo_id, resolved.relative_to(root).as_posix()))
+    else:
+        for target in targets:
+            repo_root = Path(target.path).expanduser().resolve()
+            scan_roots = target.root_paths()
+            candidates = [repo_root / path, *(scan_root / path for scan_root in scan_roots)]
+            for candidate in candidates:
+                resolved = candidate.resolve()
+                if (resolved.is_file() and resolved.is_relative_to(repo_root) and
+                        any(resolved == scan_root or resolved.is_relative_to(scan_root)
+                            for scan_root in scan_roots)):
+                    matches.append((target.repo_id, resolved.relative_to(repo_root).as_posix()))
+    unique = sorted(set(matches))
+    return {
+        "raw": raw,
+        "repo_id": unique[0][0] if len(unique) == 1 else "",
+        "repo_candidates": sorted({repo_id for repo_id, _ in unique}),
+        "path": unique[0][1] if len(unique) == 1 else display_path,
+        "resolved": len(unique) == 1,
+    }
+
+
+def _qualify_clone_pairs(pairs: list[dict], targets: list[RepoTarget]) -> list[dict]:
+    qualified = []
+    for pair in pairs:
+        row = dict(pair)
+        row["a"] = _clone_endpoint(pair["a_file"], targets)
+        row["b"] = _clone_endpoint(pair["b_file"], targets)
+        if not row["a"]["resolved"] or not row["b"]["resolved"]:
+            row["scope"] = "ambiguous"
+        elif row["a"]["repo_id"] == row["b"]["repo_id"]:
+            row["scope"] = "within-repo"
+        else:
+            row["scope"] = "cross-repo"
+        qualified.append(row)
+    return qualified
+
+
+def _jscpd_view(targets: list[RepoTarget], stdout: str, stderr: str) -> str:
     formats = Counter(re.findall(r"Clone found \(([^)]+)\)", stdout))
     summary = [line.strip() for line in stdout.splitlines()
                if re.search(r"Found \d+ clones|duplicated lines|duplication", line, re.I)]
-    pairs = _parse_clone_pairs(stdout)
+    pairs = _qualify_clone_pairs(_parse_clone_pairs(stdout), targets)
     # Cross-FILE clones are the change-friction signal (a fix in one file must be
     # mirrored in another); same-file clones are lower value. Rank by span.
-    cross = [p for p in pairs if p["a_file"] != p["b_file"]]
+    cross = [p for p in pairs if p["scope"] != "within-repo" or
+             p["a"]["path"] != p["b"]["path"]]
     cross.sort(key=lambda p: -p["span"])
-    out = ["### clone formats"]
+    endpoint_rows = [endpoint for pair in pairs for endpoint in (pair["a"], pair["b"])]
+    resolved_endpoints = sum(endpoint["resolved"] for endpoint in endpoint_rows)
+    ambiguous_endpoints = sum(not endpoint["resolved"] and bool(endpoint["repo_candidates"])
+                              for endpoint in endpoint_rows)
+    unresolved_endpoints = len(endpoint_rows) - resolved_endpoints - ambiguous_endpoints
+    scopes = Counter(pair["scope"] for pair in pairs)
+    out = ["### repository attribution",
+           (f"pairs\t{len(pairs)}\twithin-repo={scopes['within-repo']}\t"
+            f"cross-repo={scopes['cross-repo']}\tambiguous={scopes['ambiguous']}"),
+           (f"endpoints\t{len(endpoint_rows)}\tresolved={resolved_endpoints}\t"
+            f"ambiguous={ambiguous_endpoints}\tunresolved={unresolved_endpoints}"),
+           "", "### clone formats"]
     out += [f"{name}\t{count}" for name, count in sorted(formats.items(), key=lambda x: (-x[1], x[0]))]
     out += ["", f"### cross-file clone pairs (top {min(len(cross), 60)} of {len(cross)}; "
-                f"lines\ta_file:a_from-a_to\tb_file:b_from-b_to)"]
+                f"lines\tscope\ta_repo:path:from-to\tb_repo:path:from-to)"]
     for p in cross[:60]:
-        out.append(f"{p['span']}\t{p['a_file']}:{p['a_from']}-{p['a_to']}\t"
-                   f"{p['b_file']}:{p['b_from']}-{p['b_to']}")
+        a_repo = p["a"]["repo_id"] or "?{" + ",".join(p["a"]["repo_candidates"]) + "}"
+        b_repo = p["b"]["repo_id"] or "?{" + ",".join(p["b"]["repo_candidates"]) + "}"
+        out.append(f"{p['span']}\t{p['scope']}\t"
+                   f"{a_repo}:{p['a']['path']}:{p['a_from']}-{p['a_to']}\t"
+                   f"{b_repo}:{p['b']['path']}:{p['b_from']}-{p['b_to']}")
     out += ["", f"### summary ({len(pairs)} total pairs, "
                 f"{len(pairs) - len(cross)} same-file)", *summary[-30:]]
     if stderr.strip():
         out += ["", "### stderr", *stderr.splitlines()[:30]]
     return "\n".join(out)
+
+
+def jscpd_view(target: RepoTarget, stdout: str, stderr: str) -> str:
+    return _jscpd_view([target], stdout, stderr)
+
+
+def jscpd_multi_view(targets: list[RepoTarget], stdout: str, stderr: str) -> str:
+    return _jscpd_view(targets, stdout, stderr)
 
 
 def validate_jscpd(text: str, _exit: int) -> str:
