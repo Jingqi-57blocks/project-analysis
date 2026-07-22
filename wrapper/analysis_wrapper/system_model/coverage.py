@@ -224,6 +224,9 @@ def _tables(builder: ModelBuilder, blocks: dict) -> Partition:
     notes = ["tables come from the UNCAPPED table_evidence map (deduped by name), "
              "not the capped module_signals.tables summary."]
     notes.extend(classified.notes)
+    if classified.unresolved_bindings:
+        notes.append("dynamic or unresolved datastore bindings remain; physical "
+                     "names were not guessed.")
     if evidence_capped:
         notes.append("per-(table, access-type) evidence hit its 8-site cap in >=1 "
                      "repo — some data edges (access sites) were NOT recorded "

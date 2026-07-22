@@ -59,3 +59,10 @@ def test_detected_supported_family_with_failed_producer_is_unavailable():
     row = _repo(detected=("sequelize",), supported=("sequelize",),
                 available=False)
     assert classify([row]).status == "unavailable"
+
+
+def test_unresolved_binding_degrades_extracted_model_to_partial():
+    row = _repo(detected=("sql",), supported=("sql",), extracted=("sql",),
+                tables={"widgets": {"read": ["query.sql"]}})
+    row["table_evidence"]["unresolved"] = [{"kind": "dynamic-name"}]
+    assert classify([row]).status == "partial"

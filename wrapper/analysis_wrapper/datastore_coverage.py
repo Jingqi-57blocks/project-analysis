@@ -43,7 +43,11 @@ def classify(repos: list[dict]) -> DataModelCoverage:
         tables = evidence.get("tables", {})
         count = len(tables) if isinstance(tables, dict) else 0
         store_count += count
-        binding_count += len(evidence.get("unresolved", []))
+        unresolved_accesses = sum(
+            len(buckets.get("unresolved", []))
+            for buckets in (tables.values() if isinstance(tables, dict) else [])
+            if isinstance(buckets, dict))
+        binding_count += len(evidence.get("unresolved", [])) + unresolved_accesses
 
         if not isinstance(detector, dict):
             complete = False
@@ -76,7 +80,10 @@ def classify(repos: list[dict]) -> DataModelCoverage:
         cap_hit = any("COVERAGE CAP" in str(note)
                       for note in evidence.get("notes", []))
         any_failed = any_failed or producer_failed
-        any_partial = any_partial or producer_partial or cap_hit or bool(unresolved)
+        has_unresolved_bindings = bool(evidence.get("unresolved", [])) or bool(
+            unresolved_accesses)
+        any_partial = (any_partial or producer_partial or cap_hit or
+                       bool(unresolved) or has_unresolved_bindings)
 
         if not complete:
             repo_status = "unavailable" if not count else "partial"
@@ -84,7 +91,8 @@ def classify(repos: list[dict]) -> DataModelCoverage:
             repo_status = "not-applicable"
         elif producer_failed and not extracted:
             repo_status = "unavailable"
-        elif count and not (producer_failed or producer_partial or cap_hit or unresolved):
+        elif count and not (producer_failed or producer_partial or cap_hit or
+                            unresolved or has_unresolved_bindings):
             repo_status = "complete"
         elif count or extracted:
             repo_status = "partial"

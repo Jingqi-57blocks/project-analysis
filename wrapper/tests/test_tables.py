@@ -88,7 +88,7 @@ def test_detector_reports_family_coverage_separately_from_extraction():
     assert "sql" in coverage["extracted_families"]
 
 
-def test_detector_recognizes_unsupported_family_without_claiming_no_data_model(tmp_path):
+def test_detector_recognizes_family_even_without_extractable_source(tmp_path):
     nested = tmp_path / "packages" / "api"
     nested.mkdir(parents=True)
     (nested / "package.json").write_text(
@@ -96,7 +96,38 @@ def test_detector_recognizes_unsupported_family_without_claiming_no_data_model(t
     coverage = tables.generate(tmp_path, "sample").detector_coverage
     assert coverage["complete"]
     assert coverage["detected_families"] == ["mongoose"]
-    assert coverage["unsupported_families"] == ["mongoose"]
+    assert coverage["supported_families"] == ["mongoose"]
+    assert coverage["extracted_families"] == []
+
+
+def test_document_store_physical_names_and_logical_models_are_separate():
+    ev = tables.generate(str(FIXDB), "db-fix")
+    assert "inventory_items" in ev.tables
+    metadata = ev.store_metadata["inventory_items"]
+    assert metadata["kind"] == "collection"
+    assert metadata["physical_name"] == "inventory_items"
+    assert metadata["logical_names"] == ["InventoryItem"]
+    assert set(metadata["families"]) == {"mongodb-native", "mongoose"}
+    logical = [row for row in ev.unresolved
+               if row.get("kind") == "mongoose-logical-model"]
+    assert logical and logical[0]["logical_name"] == "UnresolvedItem"
+    assert "UnresolvedItem" not in ev.tables
+    assert ev.store_metadata["runtime_settings"]["families"] == ["mongoose"]
+
+
+def test_dynamic_document_collection_is_not_guessed():
+    ev = tables.generate(str(FIXDB), "db-fix")
+    assert "collectionName" not in ev.tables
+    kinds = {row["kind"] for row in ev.unresolved}
+    assert "mongodb-dynamic-collection" in kinds
+    assert "mongoose-dynamic-collection" in kinds
+
+
+def test_document_metadata_is_order_independent_and_never_defaults_to_relational():
+    ev = tables.generate(str(FIXDB), "db-fix")
+    assert ev.store_metadata["runtime_settings"] == {
+        "kind": "collection", "families": ["mongoose"],
+        "physical_name": "runtime_settings", "logical_names": []}
 
 
 @pytest.mark.skipif(not _HAS_SQLGLOT, reason="sqlglot not installed")

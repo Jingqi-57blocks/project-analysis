@@ -149,13 +149,21 @@ def _tables(builder: ModelBuilder, repo_id: str, heads: dict, te: dict) -> None:
         return
     head = heads.get(repo_id, "")
     for name, buckets in te.get("tables", {}).items():
+        metadata = te.get("store_metadata", {}).get(name, {})
         first = _first_citation(repo_id, head, buckets)
+        basis = "declaration" if buckets.get("declaration") else "observed-access"
         table_id = builder.add_node(
             "data-store", [repo_id, name], label=name, status="observed",
             repo_id=repo_id, producer=TABLES,
-            evidence_basis="declaration",
+            evidence_basis=("declaration" if basis == "declaration"
+                            else "static-reference"),
             evidence=[first] if first else [],
-            attrs={"table": name, "access_types": sorted(buckets.keys())})
+            attrs={"table": name,
+                   "store_kind": metadata.get("kind", "table"),
+                   "families": metadata.get("families", ["relational"]),
+                   "physical_name": metadata.get("physical_name", name),
+                   "logical_names": metadata.get("logical_names", []),
+                   "access_types": sorted(buckets.keys())})
         for access_type, sites in sorted(buckets.items()):
             for site in sites:
                 citation = ids.make_citation(repo_id, head, site)
