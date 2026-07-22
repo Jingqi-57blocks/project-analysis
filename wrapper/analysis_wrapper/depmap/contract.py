@@ -34,6 +34,7 @@ class RepoDepCoverage:
     units: int = 0                    # internal packages (go) / modules (js)
     warm_cache: str = "n/a"           # go: "warm"|"cold"|"already-warm"|"n/a"
     notes: str = ""
+    reference_counts: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.status not in COVERAGE_STATES:
@@ -47,6 +48,7 @@ class RepoDepCoverage:
             "tool": self.tool, "tool_version": self.tool_version,
             "reason": self.reason, "map_file": self.map_file, "units": self.units,
             "warm_cache": self.warm_cache, "notes": self.notes,
+            "reference_counts": dict(sorted(self.reference_counts.items())),
         }
 
 

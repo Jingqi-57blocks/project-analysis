@@ -50,6 +50,7 @@ class Manifest:
     declared_reads: list[str] = field(default_factory=list)  # target data files read
     version_drift: str = ""               # "" or "validated X, found Y"
     notes: str = ""
+    structured_metrics: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True) + "\n"
@@ -100,6 +101,10 @@ class Manifest:
         ]
         if self.notes:
             lines.append(f"notes:           {self.notes}")
+        if self.structured_metrics:
+            lines.append(
+                "structured_metrics: " + json.dumps(
+                    self.structured_metrics, sort_keys=True, separators=(",", ":")))
         return "\n".join(lines) + "\n"
 
     def write(self, directory: str | Path, name: str) -> tuple[Path, Path]:

@@ -61,6 +61,9 @@ evidence that derived each Tier-2 entry}}
 Topology, module classification, relationships, and shared persistence (with the
 data-ownership distinction ladder) are in [`project-map.md`](project-map.md).
 
+All code totals/shares, dependency ratios, and tool/lens counts below quote stable
+`metric_ref` values from `workspace-metrics.json`; do not recompute them in prose.
+
 ## Interfaces & consumers
 
 Endpoint-level backing for overview.md §7 (which stays summary-level). Per interface:

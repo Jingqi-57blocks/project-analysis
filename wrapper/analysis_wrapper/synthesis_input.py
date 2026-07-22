@@ -22,6 +22,9 @@ _VIEW_LINE_LIMIT = 120
 _CANDIDATE_LIMIT = 500
 _SIGNAL_LIMIT = 200
 _TEXT_LINE_LIMIT = 2_000
+_METRIC_LIMIT = 400
+_TOOL_COUNT_LIMIT = 100
+_LENS_COUNT_LIMIT = 50
 
 
 def _load(path: Path, default: dict | None = None) -> dict:
@@ -149,6 +152,25 @@ def _signal_views(run: Path, summary: dict) -> dict:
             "truncated": len(rows) < len(signals), "items": rows}
 
 
+def _workspace_metrics_projection(doc: dict) -> dict:
+    return {
+        "schema_version": doc.get("schema_version", ""),
+        "artifact": "workspace-metrics.json",
+        "scope": doc.get("scope", {}),
+        "coverage": doc.get("coverage", {}),
+        "rules": doc.get("rules", {}),
+        "metrics": _bounded(list(doc.get("metrics", [])),
+                            key=lambda row: str(row.get("metric_ref", "")),
+                            limit=_METRIC_LIMIT),
+        "tool_signal_counts": _bounded(
+            list(doc.get("tool_signal_counts", [])),
+            key=lambda row: str(row.get("tool", "")), limit=_TOOL_COUNT_LIMIT),
+        "lens_signal_counts": _bounded(
+            list(doc.get("lens_signal_counts", [])),
+            key=lambda row: str(row.get("lens_id", "")), limit=_LENS_COUNT_LIMIT),
+    }
+
+
 def build(run_dir: str | Path) -> dict:
     run = Path(run_dir).expanduser().resolve()
     discovery = _load(run / "discovery-report.json")
@@ -158,6 +180,7 @@ def build(run_dir: str | Path) -> dict:
     candidates = _load(run / "module-candidates.json")
     signal_summary = _load(run / "signals" / "run-summary.json")
     module_map = _load(run / "module-map.json")
+    workspace_metrics = _load(run / "workspace-metrics.json")
 
     repos = []
     report_by_id = {row.get("repo_id", ""): row
@@ -187,6 +210,7 @@ def build(run_dir: str | Path) -> dict:
         "callgraph-coverage.json", "imports/depmap-coverage.json",
         "system-model.json", "capabilities.json", "module-candidates.json",
         "coverage-summary.md",
+        "workspace-metrics.json",
         "module-summary.md",
     ]
     artifact_digests = {
@@ -206,6 +230,7 @@ def build(run_dir: str | Path) -> dict:
                     str(row.get("view", ""))), limit=_SIGNAL_LIMIT),
         },
         "signal_views": _signal_views(run, signal_summary),
+        "workspace_metrics": _workspace_metrics_projection(workspace_metrics),
         "graph": _graph_projection(model),
         # The packet stays bounded. The full, hash-addressed candidate artifact
         # remains the authority for the mandatory one-time disposition pass.
@@ -304,6 +329,9 @@ def build(run_dir: str | Path) -> dict:
             "signals": _SIGNAL_LIMIT,
             "module_and_integration_candidates_in_packet": _CANDIDATE_LIMIT,
             "maximum_characters_per_view_line": _TEXT_LINE_LIMIT,
+            "workspace_metrics": _METRIC_LIMIT,
+            "workspace_tool_counts": _TOOL_COUNT_LIMIT,
+            "workspace_lens_counts": _LENS_COUNT_LIMIT,
             "surfaced_candidate_universe_truncated_in_authoritative_artifact": False,
             "interpretation_added": False,
         },

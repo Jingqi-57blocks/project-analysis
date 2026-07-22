@@ -215,7 +215,9 @@ def _write_imports(run: Path) -> None:
             {"module": "lodash", "resolved": "node_modules/lodash/index.js",
              "couldNotResolve": False, "dependencyTypes": ["npm"]},
             {"module": "./missing", "couldNotResolve": True},
-        ]}]}
+        ]},
+        {"source": "src/b.ts", "dependencies": []},
+    ]}
     (imports / f"{_WEB}.depcruise.json").write_text(
         json.dumps(payload, sort_keys=True), "utf-8")
 

@@ -49,6 +49,7 @@ class PrepareResult:
 
 PrepareFn = Callable[[RepoTarget, "Path"], PrepareResult]   # (target, out_dir)
 AnnotateFn = Callable[[RepoTarget, str, str], str]          # (target, stdout, stderr) -> note
+MetricsFn = Callable[[RepoTarget, str, str], dict]          # deterministic structured output
 
 
 @dataclass
@@ -75,6 +76,7 @@ class ToolDef:
     preflight: PreflightFn | None = None
     prepare: PrepareFn | None = None         # per-run input generation (given the out dir)
     annotate: AnnotateFn | None = None       # post-run manifest note (metrics)
+    metrics_builder: MetricsFn | None = None # full validated output -> structured metrics
     extra_notes: str = ""                    # standing disclosures for the manifest
 
     # ---- executor-facing API --------------------------------------------------
@@ -155,6 +157,9 @@ class ToolDef:
 
     def run_annotate(self, target: RepoTarget, stdout: str, stderr: str) -> str:
         return self.annotate(target, stdout, stderr) if self.annotate else ""
+
+    def build_metrics(self, target: RepoTarget, stdout: str, stderr: str) -> dict:
+        return self.metrics_builder(target, stdout, stderr) if self.metrics_builder else {}
 
     def scope_description(self, target: RepoTarget) -> str:
         roots = ", ".join(target.analysis_roots) or "<repo root>"

@@ -14,6 +14,22 @@ def test_yarn_empty_success_is_valid_but_empty_error_is_not():
     assert parsers.validate_yarn_outdated("", 1)
 
 
+def test_scc_structured_metrics_preserve_every_language_row(target):
+    payload = json.dumps([
+        {"Name": "TypeScript", "Count": 3, "Lines": 120, "Code": 90,
+         "Comment": 20, "Complexity": 7},
+        {"Name": "Go", "Count": 2, "Lines": 80, "Code": 60,
+         "Comment": 10, "Complexity": 5},
+    ])
+
+    metrics = parsers.scc_metrics(target, payload, "")
+
+    assert metrics["totals"] == {
+        "files": 5, "lines": 200, "code": 150,
+        "comments": 30, "complexity": 12}
+    assert [row["language"] for row in metrics["languages"]] == ["Go", "TypeScript"]
+
+
 def test_yarn_error_object_is_invalid():
     text = json.dumps({"type": "error", "data": "registry failed"}) + "\n"
     assert "error object" in parsers.validate_yarn_outdated(text, 1)

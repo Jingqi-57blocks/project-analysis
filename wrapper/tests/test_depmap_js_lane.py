@@ -14,18 +14,27 @@ from analysis_wrapper.tooldefs import ToolDef
 _UNSORTED = {
     "modules": [
         {"source": "src/b.ts", "dependencies": [
-            {"module": "./a", "resolved": "src/a.ts", "couldNotResolve": False},
-            {"module": "lodash", "resolved": "node_modules/lodash/index.js"}]},
+            {"module": "./a", "resolved": "src/a.ts", "couldNotResolve": False,
+             "dependencyTypes": ["local"]},
+            {"module": "lodash", "resolved": "node_modules/lodash/index.js",
+             "dependencyTypes": ["npm"]}]},
         {"source": "src/a.ts", "dependencies": [
-            {"module": "zod", "resolved": "node_modules/zod/index.js"},
-            {"module": "./b", "resolved": "src/b.ts", "couldNotResolve": False}]},
+            {"module": "fs", "resolved": "fs", "couldNotResolve": False,
+             "dependencyTypes": ["core"]},
+            {"module": "zod", "resolved": "node_modules/zod/index.js",
+             "dependencyTypes": ["npm"]},
+            {"module": "./b", "resolved": "src/b.ts", "couldNotResolve": False,
+             "dependencyTypes": ["local"]}]},
+        {"source": "lodash", "dependencies": []},
+        {"source": "node_modules/lodash/index.js", "dependencies": []},
+        {"source": "bundle.min.js", "dependencies": []},
     ],
     "summary": {"violations": []},
 }
 
 
 def test_sorted_map_orders_modules_and_dependencies():
-    out = js_lane._sorted_map(_UNSORTED)
+    out = js_lane._sorted_map(_UNSORTED, {"src/a.ts", "src/b.ts"})
     sources = [m["source"] for m in out["modules"]]
     assert sources == ["src/a.ts", "src/b.ts"]
     for module in out["modules"]:
@@ -40,8 +49,9 @@ def test_sorted_map_orders_modules_and_dependencies():
 
 
 def test_sorted_map_is_deterministic():
-    a = json.dumps(js_lane._sorted_map(_UNSORTED), sort_keys=True)
-    b = json.dumps(js_lane._sorted_map(_UNSORTED), sort_keys=True)
+    sources = {"src/a.ts", "src/b.ts"}
+    a = json.dumps(js_lane._sorted_map(_UNSORTED, sources), sort_keys=True)
+    b = json.dumps(js_lane._sorted_map(_UNSORTED, sources), sort_keys=True)
     assert a == b
 
 
@@ -57,6 +67,12 @@ def test_analyze_captures_and_sorts_the_map(monkeypatch, tmp_path):
     repo = tmp_path / "web"
     repo.mkdir()
     (repo / "package.json").write_text("{}\n")
+    (repo / "src").mkdir()
+    (repo / "src" / "a.ts").write_text("export {}\n")
+    (repo / "src" / "b.ts").write_text("export {}\n")
+    (repo / "node_modules" / "lodash").mkdir(parents=True)
+    (repo / "node_modules" / "lodash" / "index.js").write_text("module.exports = {}\n")
+    (repo / "bundle.min.js").write_text("minified()\n")
     target = RepoTarget(repo_id="web-1", path=str(repo), stacks=["js"],
                         git=GitProvenance(head="f" * 40))
 
@@ -71,6 +87,11 @@ def test_analyze_captures_and_sorts_the_map(monkeypatch, tmp_path):
     assert cov.lane == "js"
     assert cov.map_file == "web-1.depcruise.json"
     assert [m["source"] for m in payload["modules"]] == ["src/a.ts", "src/b.ts"]
+    assert cov.reference_counts == {
+        "resolved_internal": 2, "resolved_external": 3,
+        "could_not_resolve": 0, "total": 5}
+    assert not ({"lodash", "node_modules/lodash/index.js", "bundle.min.js"}
+                & set(payload["internal_sources"]))
 
 
 def test_analyze_fails_closed_on_invalid_json(monkeypatch, tmp_path):

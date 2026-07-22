@@ -189,7 +189,7 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
     expected = {"signals/run-summary.json", "callgraph-coverage.json",
                 "imports/depmap-coverage.json", "system-model.json",
                 "capabilities.json", "module-candidates.json",
-                "coverage-summary.md", "synthesis-input.json",
+                "coverage-summary.md", "workspace-metrics.json", "synthesis-input.json",
                 "consistency-audit.json"}
     assert all((run / rel).exists() for rel in expected)
     assert not (run / "signals" / "callgraph-coverage.json").exists()

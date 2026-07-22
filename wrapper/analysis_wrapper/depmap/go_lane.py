@@ -95,11 +95,13 @@ def analyze(target: RepoTarget, *, allow_network: bool = False,
     binary = go_binary or shutil.which("go")
 
     def cov(status: str, *, reason: str = "", units: int = 0,
-            warm_cache: str = "n/a") -> RepoDepCoverage:
+            warm_cache: str = "n/a", reference_counts: dict | None = None
+            ) -> RepoDepCoverage:
         return RepoDepCoverage(
             repo_id=target.repo_id, lane="go", status=status, reason=reason,
             tool=TOOL, map_file=f"{target.repo_id}.golist.json" if status == "complete" else "",
             units=units, warm_cache=warm_cache,
+            reference_counts=dict(reference_counts or {}),
             notes="internal package import graph; stdlib/third-party imports "
                   "counted by the normalizer, never conflated with call edges.")
 
@@ -137,5 +139,19 @@ def analyze(target: RepoTarget, *, allow_network: bool = False,
                          warm_cache=warm_cache)
     if warm_cache == "n/a":
         warm_cache = "already-warm"
+    internal = external = stdlib_count = 0
+    stdlib = set(payload.get("stdlib", []))
+    for package in payload.get("packages", []):
+        for dependency in package.get("imports", []):
+            if _is_internal(dependency, module):
+                internal += 1
+            elif dependency in stdlib:
+                stdlib_count += 1
+            else:
+                external += 1
     return payload, cov("complete", units=len(payload["packages"]),
-                        warm_cache=warm_cache)
+                        warm_cache=warm_cache, reference_counts={
+                            "internal": internal, "third_party": external,
+                            "stdlib": stdlib_count,
+                            "total": internal + external + stdlib_count,
+                        })

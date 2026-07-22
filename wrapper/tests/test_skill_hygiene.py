@@ -5,6 +5,7 @@ disclaimer in every report template, valid skill frontmatter, and the lens
 set staying consistent with its README grouping.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -69,6 +70,20 @@ def test_lens_set_matches_readme_grouping():
     missing = sorted(name for name in lens_files if name not in readme)
     assert not missing, f"lenses not mapped to a group in README: {missing}"
     assert len(lens_files) == 9, f"expected 9 lenses, found {sorted(lens_files)}"
+
+
+def test_lens_coverage_catalog_matches_installed_lenses_and_tools():
+    lens_files = {p.stem for p in (SKILL_ROOT / "lenses").glob("*.md")} \
+        - {"README", "_shared"}
+    catalog = json.loads((SKILL_ROOT / "lenses" / "coverage-map.json").read_text())
+    rows = catalog["lenses"]
+    assert {row["lens_id"] for row in rows} == lens_files
+    known_tools = {
+        "scc", "lizard", "jscpd", "jscpd-cross", "dependency-cruiser",
+        "staticcheck", "go-list", "git-history", "osv-scanner", "outdated",
+    }
+    mapped = {tool for row in rows for tool in row["tools"]}
+    assert mapped <= known_tools
 
 
 def test_every_lens_reminds_the_finding_shape_or_defers_to_shared():

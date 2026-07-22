@@ -96,6 +96,24 @@ def test_dependency_partition_populated_when_present(tmp_path):
     assert dep["status"] == "partial"
 
 
+def test_bare_resolved_package_name_is_not_promoted_to_internal_file(tmp_path):
+    run = write_run(tmp_path / "run", with_imports=True)
+    path = next((run / "imports").glob("*.depcruise.json"))
+    payload = json.loads(path.read_text("utf-8"))
+    payload["modules"][0]["dependencies"].append({
+        "module": "fs", "resolved": "fs", "couldNotResolve": False})
+    payload["modules"].append({"source": "fs", "dependencies": []})
+    payload["internal_sources"] = ["src/a.ts", "src/b.ts"]
+    path.write_text(json.dumps(payload), "utf-8")
+
+    model = sm.assemble(run)
+
+    assert not any(node.kind == "file" and node.label == "fs" for node in model.nodes)
+    assert any(edge.type == "dependency" and edge.status == "unresolved"
+               and edge.unresolved_target == {"specifier": "fs"}
+               for edge in model.edges)
+
+
 def test_producer_file_cap_degrades_partition_to_partial(tmp_path):
     cov = _coverage(write_run(tmp_path / "run", deploy_capped=True))
     assert cov["deployable_units"]["status"] == "partial"

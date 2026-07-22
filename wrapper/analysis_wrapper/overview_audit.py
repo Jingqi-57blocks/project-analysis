@@ -13,7 +13,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import coverage_render, module_map, module_render
+from . import (coverage_render, module_map, module_render, synthesis_input,
+               workspace_metrics)
 from .executor import replace_artifact_text
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec, overlapping_repo_pairs
@@ -122,6 +123,27 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
     capabilities = _load(run / "capabilities.json")
     model = _load(run / "system-model.json")
     coverage = model.get("coverage", {})
+
+    metrics_path = run / workspace_metrics.FILENAME
+    if metrics_path.is_file():
+        observed_metrics = _load(metrics_path)
+        expected_metrics = workspace_metrics.build(run)
+        check("workspace-metrics-recomputation", observed_metrics == expected_metrics,
+              "workspace metrics match authoritative manifests, dependency maps, and graph"
+              if observed_metrics == expected_metrics else
+              "workspace-metrics.json differs from authoritative producer artifacts")
+        synthesis_path = run / "synthesis-input.json"
+        if synthesis_path.is_file():
+            packet_metrics = _load(synthesis_path).get("workspace_metrics", {})
+            expected_projection = synthesis_input._workspace_metrics_projection(
+                observed_metrics)
+            check("workspace-metrics-consumption", packet_metrics == expected_projection,
+                  "synthesis input contains the exact bounded workspace metrics projection"
+                  if packet_metrics == expected_projection else
+                  "synthesis input omits or changes the workspace metrics projection")
+    else:
+        check("workspace-metrics-recomputation", False,
+              "workspace-metrics.json is missing")
 
     # Signal summary is a consumer-facing index.  It may not claim a different
     # status than the per-signal manifest that actually recorded execution.

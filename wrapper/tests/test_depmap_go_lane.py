@@ -93,6 +93,8 @@ def test_analyze_projects_from_a_fake_go_list(tmp_path):
     assert cov.lane == "go"
     assert cov.map_file == "app-1.golist.json"
     assert cov.units == 3
+    assert cov.reference_counts == {
+        "internal": 2, "third_party": 1, "stdlib": 4, "total": 7}
     assert payload["module"] == _MODULE
 
 
