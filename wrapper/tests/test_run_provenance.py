@@ -3,7 +3,9 @@ import json
 import pytest
 
 from analysis_wrapper import lifecycle, run_provenance
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget, TargetSpec
+from analysis_wrapper.targetspec import (
+    GitProvenance, RepoTarget, TargetSpec, TechnologyFacet,
+)
 
 
 def _document(target, tmp_path, **kwargs):
@@ -84,7 +86,9 @@ def test_non_git_source_state_detects_changes_and_ignores_tier1(tmp_path):
     ignored.mkdir()
     (ignored / "dependency.js").write_text("old\n")
     target = RepoTarget(
-        "plain-source", str(repo), stacks=["js"], git=GitProvenance())
+        "plain-source", str(repo), facets=[TechnologyFacet(
+            "language.javascript", "language", ["."], ["index.js"]
+        )], git=GitProvenance())
     spec = TargetSpec([target])
     document = _document(target, tmp_path)
 

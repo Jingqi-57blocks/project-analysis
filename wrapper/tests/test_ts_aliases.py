@@ -4,14 +4,16 @@ import json
 import subprocess
 
 from analysis_wrapper.resolvers import ts_aliases
-from analysis_wrapper.targetspec import RepoTarget
+from analysis_wrapper.targetspec import RepoTarget, TechnologyFacet
 
 
 def _target(tmp_path):
     repo = tmp_path / "widget-ui"
     repo.mkdir()
     (repo / "tsconfig.app.json").write_text("{}")
-    return RepoTarget(repo_id="widget-ui", path=str(repo), stacks=["ts"]), repo
+    return RepoTarget(repo_id="widget-ui", path=str(repo), facets=[
+        TechnologyFacet("language.typescript", "language", ["."], ["tsconfig.app.json"])
+    ]), repo
 
 
 def test_resolver_generates_analysis_tsconfig_and_depcruise_config(tmp_path):

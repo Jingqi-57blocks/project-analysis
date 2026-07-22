@@ -6,7 +6,7 @@ import pytest
 
 from analysis_wrapper import node_env
 from analysis_wrapper.callgraph import js_lane
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget
+from analysis_wrapper.targetspec import GitProvenance, RepoTarget, TechnologyFacet
 
 _NODE = shutil.which("node")
 _TS = node_env.typescript_lib().exists()
@@ -38,7 +38,9 @@ def _fixture(tmp_path):
     (src / "a.test.ts").write_text("import {run} from './a'; run();\n")
     (src / "mock").mkdir()
     (src / "mock" / "m.ts").write_text("export const m = 1;\n")
-    return RepoTarget(repo_id="widget", path=str(tmp_path), stacks=["ts"],
+    return RepoTarget(repo_id="widget", path=str(tmp_path), facets=[
+        TechnologyFacet("language.typescript", "language", ["src"], ["tsconfig.json"])
+    ],
                       git=GitProvenance(head="a" * 40))
 
 
@@ -82,7 +84,9 @@ def test_analyze_unavailable_when_node_missing(tmp_path, monkeypatch):
     (tmp_path / "package.json").write_text('{"name":"x"}\n')
     (tmp_path / "index.js").write_text("module.exports = 1;\n")
     monkeypatch.setattr(js_lane.shutil, "which", lambda _name: None)
-    target = RepoTarget(repo_id="x", path=str(tmp_path), stacks=["js"],
+    target = RepoTarget(repo_id="x", path=str(tmp_path), facets=[
+        TechnologyFacet("language.javascript", "language", ["."], ["index.js"])
+    ],
                         git=GitProvenance(head="a" * 40))
 
     def fail_run(*_a, **_k):

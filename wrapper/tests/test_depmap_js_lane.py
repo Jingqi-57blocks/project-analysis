@@ -8,7 +8,7 @@ depcruise_lane.dependency_cruiser) is exercised in the WCP smoke, not unit tests
 import json
 
 from analysis_wrapper.depmap import js_lane
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget
+from analysis_wrapper.targetspec import GitProvenance, RepoTarget, TechnologyFacet
 from analysis_wrapper.tooldefs import ToolDef
 
 _UNSORTED = {
@@ -73,7 +73,9 @@ def test_analyze_captures_and_sorts_the_map(monkeypatch, tmp_path):
     (repo / "node_modules" / "lodash").mkdir(parents=True)
     (repo / "node_modules" / "lodash" / "index.js").write_text("module.exports = {}\n")
     (repo / "bundle.min.js").write_text("minified()\n")
-    target = RepoTarget(repo_id="web-1", path=str(repo), stacks=["js"],
+    target = RepoTarget(repo_id="web-1", path=str(repo), facets=[
+        TechnologyFacet("language.javascript", "language", ["."], ["index.js"])
+    ],
                         git=GitProvenance(head="f" * 40))
 
     class _Proc:
@@ -99,7 +101,9 @@ def test_analyze_fails_closed_on_invalid_json(monkeypatch, tmp_path):
     _stub_tooldef(monkeypatch)
     repo = tmp_path / "web"
     repo.mkdir()
-    target = RepoTarget(repo_id="web-1", path=str(repo), stacks=["js"],
+    target = RepoTarget(repo_id="web-1", path=str(repo), facets=[
+        TechnologyFacet("language.javascript", "language", ["."], ["index.js"])
+    ],
                         git=GitProvenance(head="f" * 40))
 
     class _Proc:

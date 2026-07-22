@@ -3,7 +3,7 @@
 import json
 
 from analysis_wrapper.depmap import go_lane
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget
+from analysis_wrapper.targetspec import GitProvenance, RepoTarget, TechnologyFacet
 
 _MODULE = "example.com/app"
 
@@ -62,13 +62,17 @@ def test_parse_stream_handles_concatenated_objects():
 def _target(tmp_path, *, go_mod: bool = True) -> RepoTarget:
     if go_mod:
         (tmp_path / "go.mod").write_text(f"module {_MODULE}\n")
-    return RepoTarget(repo_id="app-1", path=str(tmp_path), stacks=["go"],
+    return RepoTarget(repo_id="app-1", path=str(tmp_path), facets=[
+        TechnologyFacet("language.go", "language", ["."], ["go.mod"])
+    ],
                       git=GitProvenance(head="c" * 40))
 
 
 def test_analyze_fails_closed_without_module_directive(tmp_path):
     (tmp_path / "go.mod").write_text("// no module directive\n")
-    target = RepoTarget(repo_id="app-1", path=str(tmp_path), stacks=["go"],
+    target = RepoTarget(repo_id="app-1", path=str(tmp_path), facets=[
+        TechnologyFacet("language.go", "language", ["."], ["go.mod"])
+    ],
                         git=GitProvenance(head="c" * 40))
     payload, cov = go_lane.analyze(
         target, repository_ref="app", artifact_key="app",

@@ -62,6 +62,14 @@ def test_discover_emits_valid_targetspec_with_candidates(tmp_path):
     ws = _workspace(tmp_path)
     spec, report = emit.discover(ws)
     assert {r.path.split("/")[-1] for r in spec.repos} == {"billing-app", "audit-svc"}
+    by_name = {Path(repo.path).name: repo for repo in spec.repos}
+    assert {facet.profile_id for facet in by_name["billing-app"].facets} >= {
+        "ecosystem.node", "framework.express", "language.javascript",
+    }
+    assert {facet.profile_id for facet in by_name["audit-svc"].facets} >= {
+        "ecosystem.go-module", "language.go",
+    }
+    assert "stacks" not in json.loads(spec.to_json())["repos"][0]
     kinds = {c.value: c.signal_kind for c in spec.integration_candidates}
     assert kinds["pay-sdk"] == "client_init+dependency+import"
     assert kinds["PAY_API_KEY"] == "env"

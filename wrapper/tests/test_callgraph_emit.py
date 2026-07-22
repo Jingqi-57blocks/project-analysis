@@ -9,7 +9,7 @@ import pytest
 from analysis_wrapper import identity, node_env
 from analysis_wrapper.callgraph import emit, js_lane
 from analysis_wrapper.targetspec import (GitProvenance, RepoTarget, TargetSpec,
-                                         stable_repo_id)
+                                         TechnologyFacet, stable_repo_id)
 
 _NODE = shutil.which("node")
 _TS = node_env.typescript_lib().exists()
@@ -20,18 +20,20 @@ requires_node = pytest.mark.skipif(
 
 def test_select_lanes_by_stack_and_manifest(tmp_path):
     (tmp_path / "go.mod").write_text("module x\n")
-    go_target = RepoTarget(repo_id="g", path=str(tmp_path), stacks=["go"])
+    go_target = RepoTarget(repo_id="g", path=str(tmp_path), facets=[
+        TechnologyFacet("language.go", "language", ["."], ["go.mod"])
+    ])
     assert emit.select_lanes(go_target) == ["go"]
 
     js_dir = tmp_path / "js"
     js_dir.mkdir()
     (js_dir / "package.json").write_text("{}\n")
-    js_target = RepoTarget(repo_id="j", path=str(js_dir), stacks=[])
+    js_target = RepoTarget(repo_id="j", path=str(js_dir))
     assert emit.select_lanes(js_target) == ["js"]
 
     other = tmp_path / "other"
     other.mkdir()
-    assert emit.select_lanes(RepoTarget(repo_id="o", path=str(other), stacks=["rust"])) == []
+    assert emit.select_lanes(RepoTarget(repo_id="o", path=str(other))) == []
 
 
 def _js_spec(tmp_path):
@@ -42,7 +44,10 @@ def _js_spec(tmp_path):
     (repo / "src" / "b.ts").write_text("export function helper(): number { return 1; }\n")
     (repo / "src" / "a.ts").write_text(
         "import { helper } from './b';\nexport function run(): void { helper(); }\n")
-    target = RepoTarget(repo_id="widget", path=str(repo), stacks=["ts"],
+    target = RepoTarget(repo_id="widget", path=str(repo), facets=[
+                            TechnologyFacet("language.typescript", "language",
+                                            ["src"], ["tsconfig.json"])
+                        ],
                         git=GitProvenance(head="a" * 40))
     return TargetSpec(repos=[target]), repo
 
@@ -100,7 +105,7 @@ def test_run_callgraph_skips_unsupported_repos(tmp_path):
     other = tmp_path / "docs"
     other.mkdir()
     (other / "readme.md").write_text("# hi\n")
-    spec = TargetSpec(repos=[RepoTarget(repo_id="docs", path=str(other), stacks=["md"])])
+    spec = TargetSpec(repos=[RepoTarget(repo_id="docs", path=str(other))])
     out = tmp_path / "out"
     identities = _identity(out, spec, tmp_path)
     report = emit.run_callgraph(

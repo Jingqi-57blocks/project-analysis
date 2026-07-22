@@ -17,6 +17,20 @@
       "analysis_roots": [
         "src"
       ],
+      "facets": [
+        {
+          "confidence": "high",
+          "evidence": [
+            "src/main.ts"
+          ],
+          "kind": "language",
+          "profile_id": "language.typescript",
+          "scope_roots": [
+            "src"
+          ],
+          "state": "resolved"
+        }
+      ],
       "git": {
         "branch": "main",
         "commit_count": 5,
@@ -32,12 +46,10 @@
         "name": "yarn"
       },
       "repo_id": "api-11112222",
-      "stacks": [
-        "typescript"
-      ],
       "tier2_exclusions": [
         "generated"
       ]
     }
-  ]
+  ],
+  "schema_version": "2.0.0"
 }

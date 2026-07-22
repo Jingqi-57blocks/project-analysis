@@ -24,12 +24,31 @@ _PROJECT = stable_repo_id("/ws")
 
 def _targets() -> dict:
     return {
+        "schema_version": "2.0.0",
         "repos": [
-            {"repo_id": _API, "path": "/ws/api", "stacks": ["go"],
+            {"repo_id": _API, "path": "/ws/api", "facets": [
+                {"profile_id": "ecosystem.go-module", "kind": "ecosystem",
+                 "scope_roots": ["."], "evidence": ["go.mod"],
+                 "confidence": "high", "state": "resolved"},
+                {"profile_id": "language.go", "kind": "language",
+                 "scope_roots": ["."], "evidence": ["go.mod"],
+                 "confidence": "high", "state": "resolved"},
+                {"profile_id": "framework.gin", "kind": "framework",
+                 "scope_roots": ["."],
+                 "evidence": ["go.mod#require:github.com/gin-gonic/gin"],
+                 "confidence": "high", "state": "resolved"},
+             ],
              "pm": {"name": "go"},
              "git": {"head": _HA, "branch": "main", "commit_count": 3,
                      "oldest_commit_date": "2024-01-01"}},
-            {"repo_id": _WEB, "path": "/ws/web", "stacks": ["ts"],
+            {"repo_id": _WEB, "path": "/ws/web", "facets": [
+                {"profile_id": "ecosystem.node", "kind": "ecosystem",
+                 "scope_roots": ["."], "evidence": ["package.json"],
+                 "confidence": "high", "state": "resolved"},
+                {"profile_id": "language.typescript", "kind": "language",
+                 "scope_roots": ["src"], "evidence": ["tsconfig.json"],
+                 "confidence": "high", "state": "resolved"},
+             ],
              "pm": {"name": "npm"},
              "git": {"head": _HB, "branch": "main", "commit_count": 2}},
         ],

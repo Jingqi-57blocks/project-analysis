@@ -33,13 +33,7 @@ class ProfileRegistry:
         if len(provider_ids) != len(set(provider_ids)):
             raise ValueError("duplicate provider_id in bundled registry")
 
-        declared_capabilities = {
-            capability_id
-            for profile in profiles
-            for capability_id in profile.capability_ids
-        }
         profile_id_set = set(profile_ids)
-        provider_capabilities: list[str] = []
         for provider in providers:
             _validated_id(provider.provider_id, "provider_id")
             _validated_id(provider.capability_id, "capability_id")
@@ -70,11 +64,6 @@ class ProfileRegistry:
                         f"provider {provider.provider_id!r} capability is not declared "
                         f"by profile {profile_id!r}"
                     )
-            provider_capabilities.append(provider.capability_id)
-
-        missing = sorted(declared_capabilities - set(provider_capabilities))
-        if missing:
-            raise ValueError("capabilities without bundled providers: " + ", ".join(missing))
 
     def profile(self, profile_id: str) -> Profile:
         for profile in self.profiles:
@@ -92,4 +81,11 @@ class ProfileRegistry:
         self.profile(profile_id)
         return tuple(
             provider for provider in self.providers if profile_id in provider.profile_ids
+        )
+
+    def profiles_for_capability(self, capability_id: str) -> tuple[Profile, ...]:
+        _validated_id(capability_id, "capability_id")
+        return tuple(
+            profile for profile in self.profiles
+            if capability_id in profile.capability_ids
         )

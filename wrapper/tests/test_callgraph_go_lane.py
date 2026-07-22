@@ -3,7 +3,7 @@
 import subprocess
 
 from analysis_wrapper.callgraph import go_lane
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget
+from analysis_wrapper.targetspec import GitProvenance, RepoTarget, TechnologyFacet
 
 MODULE = "example.com/app"
 
@@ -119,7 +119,9 @@ def test_module_path_absent(tmp_path):
 def test_analyze_unavailable_when_tool_absent(tmp_path):
     (tmp_path / "go.mod").write_text("module example.com/app\n")
     (tmp_path / "main.go").write_text("package main\nfunc main() {}\n")
-    target = RepoTarget(repo_id="app", path=str(tmp_path), stacks=["go"],
+    target = RepoTarget(repo_id="app", path=str(tmp_path), facets=[
+        TechnologyFacet("language.go", "language", ["."], ["go.mod"])
+    ],
                         git=GitProvenance(head="d" * 40))
 
     def fail_run(*_a, **_k):  # the tool must never be invoked when it is absent
@@ -139,7 +141,9 @@ def test_analyze_failed_on_nonzero_exit(tmp_path):
     gobin.mkdir()
     (gobin / "callgraph").write_text("#!/bin/sh\nexit 1\n")
     (gobin / "callgraph").chmod(0o755)
-    target = RepoTarget(repo_id="app", path=str(tmp_path), stacks=["go"],
+    target = RepoTarget(repo_id="app", path=str(tmp_path), facets=[
+        TechnologyFacet("language.go", "language", ["."], ["go.mod"])
+    ],
                         git=GitProvenance(head="d" * 40))
 
     def run(argv, **kwargs):

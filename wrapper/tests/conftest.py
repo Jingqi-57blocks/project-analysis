@@ -6,7 +6,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # wrapper/ on path
 
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget, stable_repo_id
+from analysis_wrapper.targetspec import (
+    GitProvenance, RepoTarget, TechnologyFacet, stable_repo_id,
+)
 from analysis_wrapper import gitinfo
 
 
@@ -35,7 +37,9 @@ def target(synthetic_repo) -> RepoTarget:
     return RepoTarget(
         repo_id=stable_repo_id(str(synthetic_repo)),
         path=str(synthetic_repo),
-        stacks=["js"],
+        facets=[TechnologyFacet(
+            "language.javascript", "language", ["."], ["index.js"]
+        )],
         git=GitProvenance(
             head=gitinfo.head(synthetic_repo),
             branch="main",

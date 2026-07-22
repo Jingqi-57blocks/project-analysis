@@ -195,8 +195,11 @@ anchored):
    place. A partially available toolchain is fine (disclosed per lens); absent lens
    definitions are not.
 1. **Inventory + provenance.** Discover repos (`.git` directories AND `.git` files —
-   worktrees/submodules), stacks, analysis roots, package managers (conflicts disclosed,
-   never silently resolved). Write the run provenance block: per repo — path, HEAD,
+   worktrees/submodules), evidence-backed technology facets (language, ecosystem,
+   framework, and unresolved repository traits), analysis roots, and package managers
+   (conflicts disclosed, never silently resolved). JavaScript, TypeScript, and Go remain
+   separate facets even when observed in the same repository. Write the run provenance
+   block: per repo — path, HEAD,
    branch, credential-redacted remote URL, HEAD timestamp, `git describe`, dirty detail,
    submodule pins, history completeness (shallow flag, oldest commit, commit count);
    run-level — analyzer package/Git version and state, model id or `unknown`, effort or

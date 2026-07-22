@@ -19,7 +19,7 @@ from analysis_wrapper.cli import main
 from analysis_wrapper.depmap import emit as dm_emit
 from analysis_wrapper.executor import WrapperSafetyError
 from analysis_wrapper.targetspec import (GitProvenance, RepoTarget, TargetSpec,
-                                         stable_repo_id)
+                                         TechnologyFacet, stable_repo_id)
 
 _MODULE = "example.com/app"
 _STREAM = "\n".join(json.dumps(o) for o in [
@@ -40,7 +40,9 @@ def _go_target(tmp_path):
     repo = tmp_path / "app"
     repo.mkdir()
     (repo / "go.mod").write_text(f"module {_MODULE}\n")
-    return repo, RepoTarget(repo_id="app-1", path=str(repo), stacks=["go"],
+    return repo, RepoTarget(repo_id="app-1", path=str(repo), facets=[
+        TechnologyFacet("language.go", "language", ["."], ["go.mod"])
+    ],
                             git=GitProvenance(head="e" * 40))
 
 

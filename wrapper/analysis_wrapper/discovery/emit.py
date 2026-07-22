@@ -20,10 +20,13 @@ import json
 import os
 import shutil
 import tempfile
+from dataclasses import asdict
 from pathlib import Path
 
 from .. import identity
 from ..executor import write_new_text
+from ..profiles.bundled import bundled_registry
+from ..profiles import detection as profile_detection
 from ..sanitize import redact
 from ..targetspec import (RepoTarget, TargetSpec, overlapping_repo_pairs,
                           path_contains, stable_repo_id)
@@ -39,9 +42,13 @@ def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
     if manifest.is_file():
         try:
             data = json.loads(manifest.read_text("utf-8"))
+            if not isinstance(data, dict):
+                data = {}
             for section in ("dependencies", "devDependencies",
                             "optionalDependencies", "peerDependencies"):
-                deps.update({k: str(v) for k, v in (data.get(section) or {}).items()})
+                values = data.get(section) or {}
+                if isinstance(values, dict):
+                    deps.update({k: str(v) for k, v in values.items()})
         except (OSError, ValueError):
             pass
     requires: list[str] = []
@@ -53,15 +60,6 @@ def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
 
 
 _DIRECT_PROJECT_MANIFESTS = ("package.json", "go.mod")
-_SERVER_FRAMEWORKS = {
-    "express", "koa", "fastify", "@nestjs/core", "hapi",
-    "github.com/gin-gonic/gin", "github.com/labstack/echo",
-    "github.com/gofiber/fiber", "github.com/go-chi/chi",
-    "github.com/gorilla/mux",
-}
-_UI_FRAMEWORKS = {"react", "vue", "@angular/core", "svelte", "next", "nuxt"}
-
-
 def _has_direct_project_manifest(path: Path) -> bool:
     return any((path / name).is_file() for name in _DIRECT_PROJECT_MANIFESTS)
 
@@ -99,7 +97,23 @@ def _non_git_projects(root: Path, repo_paths: list[str]) -> tuple[list[Path], li
 
 def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     """Run every per-repo producer for one target."""
-    stack_report = stacks.detect(path)
+    detected = profile_detection.detect(path)
+    registry = bundled_registry()
+    stack_report = stacks.StackReport(
+        stacks=sorted(
+            registry.profile(facet.profile_id).display_name
+            for facet in detected.facets if facet.kind == "language"
+        ),
+        analysis_roots=list(detected.analysis_roots),
+        frameworks=sorted(
+            registry.profile(facet.profile_id).display_name
+            for facet in detected.facets if facet.kind == "framework"
+        ),
+        evidence=sorted({
+            f"{facet.profile_id}: {item}"
+            for facet in detected.facets for item in facet.evidence
+        }),
+    )
     pm_report = pm.identify(path)
     tier2 = generated.derive(path)
     prov_block = provenance.repo_provenance(path, repo_id)
@@ -114,7 +128,7 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
 
     target = RepoTarget(
         repo_id=repo_id, path=str(path),
-        stacks=stack_report.stacks,
+        facets=list(detected.facets),
         analysis_roots=stack_report.analysis_roots,
         tier2_exclusions=tier2.exclusions,
         pm=pm_report,
@@ -127,6 +141,9 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
                    "analysis_roots": stack_report.analysis_roots,
                    "frameworks": stack_report.frameworks,
                    "evidence": stack_report.evidence},
+        "technology_facets": [asdict(facet) for facet in detected.facets],
+        "unclassified_file_inventory": list(detected.unclassified_inventory),
+        "technology_detection_notes": list(detected.notes),
         "package_manager": {"name": pm_report.name,
                             "lockfile": pm_report.lockfile,
                             "evidence": pm_report.evidence},
@@ -275,12 +292,11 @@ def discover(workspace_root: str | Path,
         has_routes = any(_produce_has_routes(r) for r in repo_reports
                          if r["repo_id"] == t.repo_id)
         repo_report = next((r for r in repo_reports if r["repo_id"] == t.repo_id), {})
-        frameworks = set(repo_report.get("stacks", {}).get("frameworks", []))
         stacks_l = {s.lower() for s in t.stacks}
-        if has_routes or frameworks & _SERVER_FRAMEWORKS:
+        if has_routes or t.profiles_for_capability("route-inventory"):
             backends.append((t.repo_id, t.path, _tier2(t.repo_id)))
-        if (frameworks & _UI_FRAMEWORKS or
-                (not frameworks & _SERVER_FRAMEWORKS and
+        if (t.profiles_for_capability("ui-route-linkage") or
+                (not t.profiles_for_capability("route-inventory") and
                  stacks_l & {"ts", "tsx", "js"} and
                  (Path(t.path) / "src").is_dir() and not has_routes)):
             frontends.append(t)

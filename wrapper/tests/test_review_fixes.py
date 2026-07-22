@@ -9,7 +9,7 @@ from analysis_wrapper.registry import (
     dependency_cruiser, jscpd, lizard, scc, _language_args,
 )
 from analysis_wrapper.sanitize import sanitize_text
-from analysis_wrapper.targetspec import RepoTarget, stable_repo_id
+from analysis_wrapper.targetspec import RepoTarget, TechnologyFacet, stable_repo_id
 
 
 # --- P1-1: Tier-2 exclusions must reach every tool's argv ----------------------
@@ -59,7 +59,9 @@ def test_depcruise_src_fallback_is_disclosed(target, synthetic_repo):
 # --- P3-13: typescript implies tsx ---------------------------------------------
 
 def test_typescript_stack_implies_tsx(target):
-    target.stacks = ["ts"]
+    target.facets = [TechnologyFacet(
+        "language.typescript", "language", ["."], ["tsconfig.json"]
+    )]
     args = _language_args(target)
     assert args.count("-l") == 2 and "typescript" in args and "tsx" in args
 
