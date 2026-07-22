@@ -264,6 +264,7 @@ def scc(target: RepoTarget) -> ToolDef:
         argv_builder=lambda _t: [binary, "--no-cocomo", "--exclude-dir",
                                  ",".join(excluded), "--format", "json", *_roots(target)],
         output_validator=parsers.validate_scc, view_builder=parsers.scc_view,
+        metrics_builder=parsers.scc_metrics,
         view_lines=120, applied_exclusions=excluded, cwd_mode="output",
     )
 

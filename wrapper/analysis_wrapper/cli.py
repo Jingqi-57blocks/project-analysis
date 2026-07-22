@@ -37,8 +37,9 @@ def _record_summary(out: Path, results: list[SignalResult]) -> None:
             {"tool": x.tool, "repo_id": x.repo_id, "status": x.status.value,
              "reason": x.reason,
              "view": x.view_path.name if x.view_path else "",
-             "manifest": manifests.get(
-                 (x.tool, x.repo_id, x.status.value), [""])[0]}
+             "manifest": (x.manifest_path.name if x.manifest_path else
+                          manifests.get(
+                              (x.tool, x.repo_id, x.status.value), [""])[0])}
             for x in sorted(results, key=lambda r: (r.repo_id, r.tool))
         ],
     }
@@ -435,7 +436,7 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     run exactly once.  Producer paths never depend on model effort.
     """
     from . import (capabilities, coverage_render, lifecycle, module_map,
-                   overview_audit, synthesis_input)
+                   overview_audit, synthesis_input, workspace_metrics)
     from .callgraph import emit as cg_emit
     from .depmap import emit as dm_emit
     from .system_model.assemble import assemble, dump
@@ -502,12 +503,14 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     module_map.write_candidates(run, model_doc)
     capabilities_path = capabilities.write(run)
     coverage_path = coverage_render.write(run)
+    metrics_path = workspace_metrics.write(run)
     packet_path = synthesis_input.write(run)
     audit_path = overview_audit.write(run)
     audit = _load_object(audit_path)
     capability_doc = _load_object(capabilities_path)
     print(f"wrote {capabilities_path}")
     print(f"wrote {coverage_path}")
+    print(f"wrote {metrics_path}")
     print(f"wrote {packet_path}")
     print(f"audit: {audit['status']} ({audit['failed_count']} failed checks)")
     if audit["status"] == "passed" and capability_doc["aggregate_status"] != "failed":

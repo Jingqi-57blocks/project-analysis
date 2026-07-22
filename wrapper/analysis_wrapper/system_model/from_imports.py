@@ -46,7 +46,15 @@ def _consume(builder: ModelBuilder, repo_id: str, head: str, path: Path,
         data = json.loads(path.read_text("utf-8"))
     except (OSError, ValueError):
         return
-    for module in data.get("modules", []):
+    modules = list(data.get("modules", []))
+    declared_sources = data.get("internal_sources")
+    internal_sources = ({str(source) for source in declared_sources if source}
+                        if isinstance(declared_sources, list) else
+                        {str(module.get("source", "")) for module in modules
+                         if module.get("source")})
+    modules = [module for module in modules
+               if str(module.get("source", "")) in internal_sources]
+    for module in modules:
         source = module.get("source", "")
         if not source:
             continue
@@ -54,15 +62,22 @@ def _consume(builder: ModelBuilder, repo_id: str, head: str, path: Path,
         src_id = builder.note_file(repo_id, source, producer=PRODUCER,
                                    evidence=src_citation)
         for dep in module.get("dependencies", []):
-            _dependency(builder, repo_id, head, src_id, dep, summary)
+            _dependency(builder, repo_id, head, src_id, dep, summary,
+                        internal_sources)
 
 
-def _dependency(builder, repo_id, head, src_id, dep, summary) -> None:
+def _dependency(builder, repo_id, head, src_id, dep, summary,
+                internal_sources: set[str]) -> None:
     resolved = dep.get("resolved", "")
     specifier = dep.get("module", "")
     circular = bool(dep.get("circular"))
-    in_repo = (resolved and not dep.get("couldNotResolve")
-               and "node_modules" not in resolved)
+    if "inRepo" in dep:
+        in_repo = bool(dep.get("inRepo"))
+    else:
+        dependency_types = set(dep.get("dependencyTypes", []) or [])
+        in_repo = (resolved and not dep.get("couldNotResolve")
+                   and "local" in dependency_types
+                   and resolved in internal_sources)
     if in_repo:
         citation = ids.make_citation(repo_id, head, resolved)
         dst_id = builder.note_file(repo_id, resolved, producer=PRODUCER,

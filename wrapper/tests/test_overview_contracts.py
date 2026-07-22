@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from analysis_wrapper import (capabilities, coverage_render, module_map,
-                              module_render, overview_audit, synthesis_input)
+                              module_render, overview_audit, synthesis_input,
+                              workspace_metrics)
 from analysis_wrapper.system_model import assemble as sm
 from system_model_fixtures import write_run
 
@@ -42,6 +43,7 @@ def _prepared(run):
     module_map.write_candidates(run, model.to_dict())
     capabilities.write(run)
     coverage_render.write(run)
+    workspace_metrics.write(run)
     synthesis_input.write(run)
     return run
 
@@ -73,6 +75,88 @@ def test_capability_manifest_and_packet_are_byte_deterministic(tmp_path):
                 for row in json.loads(first_cap)["capabilities"]}
     assert statuses["callgraph"] == "complete"
     assert statuses["dependency-map"] == "complete"
+
+
+def test_workspace_metrics_are_scoped_deterministic_and_audited(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    targets = json.loads((run / "targets.json").read_text())["repos"]
+    signals = []
+    for index, target in enumerate(sorted(targets, key=lambda row: row["repo_id"])):
+        repo_id = target["repo_id"]
+        name = f"scc-{repo_id}.manifest.json"
+        code = 60 if index == 0 else 40
+        (run / "signals" / name).write_text(json.dumps({
+            "tool": "scc", "status": "complete",
+            "repos": [{"repo_id": repo_id}],
+            "structured_metrics": {"kind": "scc", "totals": {
+                "files": 1, "lines": code, "code": code,
+                "comments": 0, "complexity": 0}, "languages": []},
+        }), "utf-8")
+        signals.append({"tool": "scc", "repo_id": repo_id,
+                        "status": "complete", "reason": "", "view": "x.view.txt",
+                        "manifest": name})
+    (run / "signals" / "run-summary.json").write_text(json.dumps({
+        "aggregate_status": "complete", "signals": signals}), "utf-8")
+
+    first = workspace_metrics.write(run).read_bytes()
+    synthesis_input.write(run)
+    doc = json.loads(first)
+    by_ref = {row["metric_ref"]: row for row in doc["metrics"]}
+    assert by_ref["code.analyzed-scope.total"]["value"] == 100
+    shares = sorted(row["value"] for ref, row in by_ref.items()
+                    if ref.endswith(".share"))
+    assert shares == [40.0, 60.0]
+    repo_total = next(row for ref, row in by_ref.items()
+                      if ref.startswith("code.repo.") and ref.endswith(".total"))
+    assert repo_total["name"] == "code lines in repository SCC scope"
+    assert repo_total["scope"]["scope_ref"].endswith("#scope")
+    assert not any(ref.startswith("dependency-graph.analyzed-scope") for ref in by_ref)
+    assert any(ref.startswith("dependency-graph.lane.js.") for ref in by_ref)
+    assert workspace_metrics.write(run).read_bytes() == first
+    synthesis_input.write(run)
+    assert overview_audit.audit(run)["status"] == "passed"
+
+    tampered = json.loads((run / "workspace-metrics.json").read_text())
+    by_index = {row["metric_ref"]: index for index, row in enumerate(tampered["metrics"])}
+    tampered["metrics"][by_index["code.analyzed-scope.total"]]["value"] = 999
+    (run / "workspace-metrics.json").write_text(json.dumps(tampered), "utf-8")
+    result = overview_audit.audit(run)
+    assert any(row["check"] == "workspace-metrics-recomputation"
+               and row["status"] == "fail" for row in result["checks"])
+
+
+def test_workspace_metrics_packet_projection_is_explicitly_bounded():
+    doc = {
+        "schema_version": "1", "scope": {}, "coverage": {}, "rules": {},
+        "metrics": [{"metric_ref": f"metric-{index:04d}"} for index in range(450)],
+        "tool_signal_counts": [{"tool": f"tool-{index:03d}"} for index in range(120)],
+        "lens_signal_counts": [{"lens_id": f"lens-{index:03d}"} for index in range(60)],
+    }
+
+    projected = synthesis_input._workspace_metrics_projection(doc)
+
+    assert projected["metrics"]["included_count"] == 400
+    assert projected["metrics"]["total_count"] == 450
+    assert projected["metrics"]["truncated"] is True
+    assert projected["tool_signal_counts"]["included_count"] == 100
+    assert projected["lens_signal_counts"]["included_count"] == 50
+
+
+def test_failed_dependency_lane_is_coverage_not_a_zero_metric(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    model = json.loads((run / "system-model.json").read_text())
+    depmap = json.loads((run / "imports" / "depmap-coverage.json").read_text())
+    for row in depmap["repos"]:
+        row["status"] = "failed"
+        row["map_file"] = ""
+
+    metrics, coverage = workspace_metrics._dependency_metrics(model, depmap)
+
+    assert not any(row["metric_ref"].startswith("dependency-graph.")
+                   for row in metrics)
+    assert coverage["lanes"] == [{
+        "lane": "js", "included_repo_ids": [],
+        "incomplete_repo_ids": ["web-22222222"]}]
 
 
 def test_ui_linkage_is_not_applicable_for_go_only_backend(tmp_path):

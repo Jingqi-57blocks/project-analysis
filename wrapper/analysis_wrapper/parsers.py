@@ -54,6 +54,25 @@ def scc_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
     return "\n".join(lines)
 
 
+def scc_metrics(_target: RepoTarget, stdout: str, _stderr: str) -> dict:
+    data = _json(stdout)
+    totals = {key: 0 for key in ("files", "lines", "code", "comments", "complexity")}
+    languages = []
+    for row in sorted(data, key=lambda item: str(item.get("Name", ""))):
+        values = {
+            "language": str(row.get("Name", "")),
+            "files": int(row.get("Count", 0)),
+            "lines": int(row.get("Lines", 0)),
+            "code": int(row.get("Code", 0)),
+            "comments": int(row.get("Comment", 0)),
+            "complexity": int(row.get("Complexity", 0)),
+        }
+        languages.append(values)
+        for key in totals:
+            totals[key] += values[key]
+    return {"kind": "scc", "totals": totals, "languages": languages}
+
+
 def nonempty_output(text: str, _exit: int) -> str:
     return "" if text.strip() else "expected non-empty output"
 

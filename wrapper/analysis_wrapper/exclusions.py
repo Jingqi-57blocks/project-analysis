@@ -10,6 +10,7 @@ without a circular import.
 from __future__ import annotations
 
 import re
+from pathlib import PurePosixPath
 
 from .targetspec import RepoTarget
 
@@ -23,6 +24,25 @@ TIER1_FILE_GLOBS = [
 ]
 
 NODE_ENV_REMOVALS = ["NODE_OPTIONS"]
+
+
+def is_excluded_relative(target: RepoTarget, relative_path: str) -> bool:
+    """Whether a repository-relative path is outside the analyzable source universe."""
+    path = PurePosixPath(relative_path)
+    parts = path.parts
+    if any(name in parts for name in TIER1_DIRS):
+        return True
+    if any(path.match(pattern) or
+           (pattern.startswith("**/") and path.match(pattern[3:]))
+           for pattern in TIER1_FILE_GLOBS):
+        return True
+    for value in target.tier2_exclusions:
+        normalized = value.strip("/")
+        if normalized and (relative_path == normalized
+                           or relative_path.startswith(normalized + "/")
+                           or normalized in parts):
+            return True
+    return False
 
 
 def _excluded_dirs(target: RepoTarget) -> list[str]:

@@ -60,6 +60,7 @@ class SignalResult:
     manifest: Manifest
     raw_path: Path | None       # containment zone — never model-read, never shipped
     view_path: Path | None      # sanitized bounded view — the readable artifact
+    manifest_path: Path | None = None
 
 
 def _stamp(target: RepoTarget) -> RepoStamp:
@@ -309,6 +310,7 @@ def run_tool(
     version: str | None = None
     drift = ""
     prep = PrepareResult()
+    structured_metrics: dict = {}
 
     def finish(status: Status, reason: str, *, exit_code=None, wall=None,
                raw: Path | None = None, view: Path | None = None,
@@ -336,10 +338,11 @@ def run_tool(
             declared_reads=list(dict.fromkeys(tooldef.declared_reads(target) + list(prep.reads))),
             version_drift=drift,
             notes="; ".join(x for x in (tooldef.extra_notes, prep.notes, notes) if x),
+            structured_metrics=structured_metrics,
         )
-        manifest.write(out, name)
+        manifest_path, _ = manifest.write(out, name)
         return SignalResult(tooldef.name, target.repo_id, status, reason,
-                            manifest, raw, view)
+                            manifest, raw, view, manifest_path)
 
     # 1. authorization + guards BEFORE every invocation, including version probes.
     if tooldef.network and not allow_network:
@@ -481,6 +484,13 @@ def run_tool(
     if view_error:
         return finish(Status.PARTIAL, view_error,
                       exit_code=exit_code, wall=wall, raw=raw_path, view=None)
+
+    try:
+        structured_metrics = tooldef.build_metrics(target, stdout, stderr)
+    except Exception as exc:
+        return finish(Status.PARTIAL,
+                      f"structured-metrics failure: {type(exc).__name__}: {exc}",
+                      exit_code=exit_code, wall=wall, raw=raw_path, view=view_path)
 
     # Post-run manifest annotation (metrics that only exist after the run, e.g.
     # depcruise edge-resolution ratios). Best-effort — never fails the run.

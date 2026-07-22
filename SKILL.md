@@ -200,7 +200,8 @@ anchored):
    `--since` before the subcommand; add `--include-network` only with explicit user
    authorization). The wrapper owns the stage plan and canonical locations for signals,
    call graph, dependency map, system model, `capabilities.json`,
-   `module-candidates.json`, `consistency-audit.json`, and `synthesis-input.json`.
+   `module-candidates.json`, `workspace-metrics.json`, `consistency-audit.json`,
+   and `synthesis-input.json`.
    Never invoke or relocate those producers manually. Resume by rerunning this command;
    it reuses only validated canonical checkpoints.
 3. **Run the grouped lenses** against the identical bounded

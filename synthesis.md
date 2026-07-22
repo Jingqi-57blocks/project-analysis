@@ -52,10 +52,14 @@ context):**
   human-facing document) the SECTION HEADINGS render in the run language too;
   in `technical-overview.md` and `project-map.md` the structural headings stay
   English so cross-references stay stable.
-- **Verify before you write:** any count, cap, status, superlative, or per-repo
-  attribution you state must be re-checked against `discovery-report.json` /
-  `run-summary.json` at writing time — do not repeat another document's
-  paraphrase of a number when the source artifact is available. Every count,
+- **Use canonical metrics; do not calculate in prose.** For code totals/shares,
+  dependency counts/percentages, and tool/lens signal counts, quote the exact
+  `metric_ref` or count row from `workspace-metrics.json` (a bounded, explicitly
+  counted projection is embedded in `synthesis-input.json`). Never divide, add,
+  blend JS and Go lane semantics,
+  or change the declared repo scope yourself. For other counts, caps, statuses,
+  superlatives, or per-repo attribution, re-check the authoritative structured
+  artifact at writing time — do not repeat another document's paraphrase. Every count,
   quantifier, and superlative in `overview.md` must EQUAL the number in the
   evidence it cites; when the evidence count differs, use the evidence count or
   narrow the claim to what the rows show (`N of M`) — never round a partial up to

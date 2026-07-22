@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "lenses": [
+    {
+      "lens_id": "complexity",
+      "tools": ["lizard", "scc"]
+    },
+    {
+      "lens_id": "dead-code",
+      "tools": ["staticcheck"]
+    },
+    {
+      "lens_id": "dependencies-cycles",
+      "tools": ["dependency-cruiser", "go-list", "staticcheck"]
+    },
+    {
+      "lens_id": "dependency-risk",
+      "tools": ["osv-scanner", "outdated"]
+    },
+    {
+      "lens_id": "duplication",
+      "tools": ["jscpd", "jscpd-cross"]
+    },
+    {
+      "lens_id": "hotspots-change-friction",
+      "tools": ["git-history"]
+    },
+    {
+      "lens_id": "open-lens",
+      "tools": []
+    },
+    {
+      "lens_id": "safety-net",
+      "tools": ["scc"]
+    },
+    {
+      "lens_id": "structure-inventory",
+      "tools": ["scc", "dependency-cruiser", "go-list"]
+    }
+  ]
+}
