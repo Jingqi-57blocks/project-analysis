@@ -44,8 +44,21 @@ _GO_METHOD_LIT = re.compile(r'return\s+"([^"]+)"')
 _GO_METHOD_CONST = re.compile(r'return\s+constant\.(\w+)')
 _GO_TABLE_LIT = re.compile(r'\.Table\(\s*"([^"]+)"')
 _GO_TABLE_CONST = re.compile(r'\.Table\(\s*constant\.(\w+)')
+_MONGOOSE_COLLECTION_OPTION = re.compile(
+    r"\bcollection\s*:\s*['\"`]([^'\"`]+)['\"`]")
 
-SUPPORTED_FAMILIES = ("gorm", "sequelize", "sql")
+
+def _literal_value(value: str) -> str | None:
+    value = value.strip()
+    if len(value) >= 2 and value[0] in "'\"`" and value[-1] == value[0]:
+        return value[1:-1]
+    return None
+
+
+def _quoted_var(text: str, value: str) -> bool:
+    return bool(value and re.search(r"['\"`]" + re.escape(value) + r"['\"`]", text))
+
+SUPPORTED_FAMILIES = ("gorm", "mongodb-native", "mongoose", "sequelize", "sql")
 _PACKAGE_FAMILIES = {
     "sequelize": "sequelize",
     "gorm.io/gorm": "gorm",
@@ -72,6 +85,7 @@ class TableEvidence:
     registry_coverage: dict = field(default_factory=dict)
     sql_coverage: dict = field(default_factory=dict)
     detector_coverage: dict = field(default_factory=dict)
+    store_metadata: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
     # ast-grep version/path/drift for this scan()-derived signal (57B-37). The
     # SQL sub-lane (SQLGlot) records its own coverage under ``sql_coverage``.
@@ -89,6 +103,8 @@ class TableEvidence:
             "registry_coverage": self.registry_coverage,
             "sql_coverage": self.sql_coverage,
             "detector_coverage": self.detector_coverage,
+            "store_metadata": {name: value for name, value in sorted(
+                self.store_metadata.items())},
             "notes": self.notes,
             **self.astgrep,
         }
@@ -221,6 +237,44 @@ def _classify_astgrep(matches, tier2: set[str]):
             found = _STR_ARG.search(match.text)
             if found:
                 add(found.group(1), "declaration", where)
+        elif rid in ("mongodb-collection-js", "mongodb-collection-ts"):
+            name = match.vars.get("N", "")
+            add(name, "unresolved", where)
+        elif rid in ("mongodb-collection-dynamic-js",
+                     "mongodb-collection-dynamic-ts"):
+            value = match.vars.get("N", "")
+            if _quoted_var(match.text, value):
+                add(value, "unresolved", where)
+            else:
+                unresolved.append({"kind": "mongodb-dynamic-collection",
+                                   "evidence": where,
+                                   "expression": match.vars.get("N", "")[:120]})
+        elif rid in ("mongoose-model-physical-js", "mongoose-model-physical-ts"):
+            name = match.vars.get("COLLECTION", "")
+            add(name, "declaration", where)
+        elif rid in ("mongoose-model-dynamic-physical-js",
+                     "mongoose-model-dynamic-physical-ts"):
+            physical = match.vars.get("COLLECTION", "")
+            if _quoted_var(match.text, physical):
+                add(physical, "declaration", where)
+            else:
+                unresolved.append({
+                    "kind": "mongoose-dynamic-collection",
+                    "logical_name": _literal_value(match.vars.get("MODEL", "")),
+                    "evidence": where,
+                    "expression": match.vars.get("COLLECTION", "")[:120],
+                })
+        elif rid in ("mongoose-model-logical-js", "mongoose-model-logical-ts"):
+            unresolved.append({
+                "kind": "mongoose-logical-model",
+                "logical_name": match.vars.get("MODEL", "").strip("'\"`"),
+                "evidence": where,
+                "reason": "physical collection is not explicit; pluralization is not guessed",
+            })
+        elif rid in ("mongoose-schema-options-js", "mongoose-schema-options-ts"):
+            found = _MONGOOSE_COLLECTION_OPTION.search(match.text)
+            if found:
+                add(found.group(1), "declaration", where)
         elif rid == "go-table-const":
             spec = _GO_CONST_SPEC.match(match.text.strip())
             if spec and _TABLE_NAME.match(spec.group(2)):
@@ -267,6 +321,52 @@ def _classify_astgrep(matches, tier2: set[str]):
                                "evidence": where,
                                "constant": cref.group(1) if cref else None})
     return tables, unresolved, registry, referenced, flags["truncated"]
+
+
+def _store_metadata(matches, tables: dict) -> dict:
+    accum: dict[str, dict[str, set[str]]] = {}
+
+    def document(physical: str, family: str, logical: str = "") -> None:
+        if physical not in tables:
+            return
+        row = accum.setdefault(physical, {"families": set(), "logical_names": set()})
+        row["families"].add(family)
+        if logical:
+            row["logical_names"].add(logical)
+
+    for match in matches:
+        if match.rule_id in ("mongodb-collection-js", "mongodb-collection-ts"):
+            document(match.vars.get("N", ""), "mongodb-native")
+        elif match.rule_id in ("mongodb-collection-dynamic-js",
+                               "mongodb-collection-dynamic-ts"):
+            value = match.vars.get("N", "")
+            if _quoted_var(match.text, value):
+                document(value, "mongodb-native")
+        elif match.rule_id in ("mongoose-model-physical-js",
+                               "mongoose-model-physical-ts"):
+            document(match.vars.get("COLLECTION", ""), "mongoose",
+                     match.vars.get("MODEL", ""))
+        elif match.rule_id in ("mongoose-model-dynamic-physical-js",
+                               "mongoose-model-dynamic-physical-ts"):
+            physical = match.vars.get("COLLECTION", "")
+            if _quoted_var(match.text, physical):
+                document(physical, "mongoose", match.vars.get("MODEL", ""))
+        elif match.rule_id in ("mongoose-schema-options-js",
+                               "mongoose-schema-options-ts"):
+            found = _MONGOOSE_COLLECTION_OPTION.search(match.text)
+            if found:
+                document(found.group(1), "mongoose")
+
+    metadata = {}
+    for name in tables:
+        row = accum.get(name)
+        metadata[name] = {
+            "kind": "collection" if row else "table",
+            "families": sorted(row["families"]) if row else ["relational"],
+            "physical_name": name,
+            "logical_names": sorted(row["logical_names"]) if row else [],
+        }
+    return metadata
 
 
 def _iter_sql(root: Path, tier2: set[str]):
@@ -384,6 +484,13 @@ def generate(repo_path: str | Path, repo_id: str, *,
     # an unsorted cap would silently retain a different subset each run).
     matches = sorted(astgrep.scan(repo_path, [astgrep.RULES_DIR / _RULE]),
                      key=lambda m: (m.file, m.line, m.rule_id, m.text))
+    manifest_families = set(detector.get("detected_families", []))
+    matches = [match for match in matches
+               if not match.rule_id.startswith("mongodb-") or
+               bool(manifest_families & {"mongodb-native", "mongoose"})]
+    matches = [match for match in matches
+               if not match.rule_id.startswith("mongoose-") or
+               "mongoose" in manifest_families]
     tables, unresolved, registry, referenced, astgrep_truncated = \
         _classify_astgrep(matches, scan_tier2)
     sql_coverage = _sql_coverage(root, tables, scan_tier2, sql_dialect)
@@ -393,9 +500,28 @@ def generate(repo_path: str | Path, repo_id: str, *,
     if any(match.rule_id.startswith("go-") or "gorm" in match.rule_id
            for match in matches):
         extracted_families.add("gorm")
+    if any(match.rule_id in ("mongodb-collection-js", "mongodb-collection-ts") or
+           (match.rule_id.startswith("mongodb-collection-dynamic-") and
+            _quoted_var(match.text, match.vars.get("N", "")))
+           for match in matches):
+        extracted_families.add("mongodb-native")
+    if any(match.rule_id.startswith("mongoose-model-physical-") or
+           (match.rule_id.startswith("mongoose-model-dynamic-physical-") and
+            _quoted_var(match.text, match.vars.get("COLLECTION", ""))) or
+           (match.rule_id.startswith("mongoose-schema-options-") and
+            _MONGOOSE_COLLECTION_OPTION.search(match.text))
+           for match in matches):
+        extracted_families.add("mongoose")
     if sql_coverage.get("parsed_files", 0):
         extracted_families.add("sql")
+    detected = set(detector.get("detected_families", [])) | extracted_families
+    if any(match.rule_id.startswith("mongoose-model-logical-") for match in matches):
+        detected.add("mongoose")
+    detector["detected_families"] = sorted(detected)
+    detector["supported_families"] = sorted(detected & set(SUPPORTED_FAMILIES))
+    detector["unsupported_families"] = sorted(detected - set(SUPPORTED_FAMILIES))
     detector["extracted_families"] = sorted(extracted_families)
+    metadata = _store_metadata(matches, tables)
     registry_coverage = {
         "typed_constants": len(registry),
         "referenced": len(referenced),
@@ -428,4 +554,4 @@ def generate(repo_path: str | Path, repo_id: str, *,
                 for name, buckets in tables.items()},
         unresolved=unresolved, registry_coverage=registry_coverage,
         sql_coverage=sql_coverage, detector_coverage=detector,
-        notes=notes, astgrep=provenance)
+        store_metadata=metadata, notes=notes, astgrep=provenance)

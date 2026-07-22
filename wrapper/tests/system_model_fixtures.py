@@ -61,7 +61,8 @@ def _api_block(*, capped_routes: bool, table_available: bool,
             "tables": ({"users": {"declaration": ["internal/model/user.go:10"],
                                   "write": ["internal/repo/user.go:20"]}}
                        if table_available else {}),
-            "unresolved": [{"kind": "gorm-access", "evidence": "internal/x.go:3"}],
+            "unresolved": ([{"kind": "gorm-access", "evidence": "internal/x.go:3"}]
+                           if not sql_complete else []),
             "registry_coverage": {},
             "notes": [_CAP_NOTE] if tables_capped else [],
             "sql_coverage": {"available": sql_complete, "complete": sql_complete},

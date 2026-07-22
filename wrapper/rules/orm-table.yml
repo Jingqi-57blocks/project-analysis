@@ -97,3 +97,82 @@ rule:
           field: function
           kind: selector_expression
           has: { field: field, regex: '^Table$' }
+---
+# MongoDB native driver: a literal collection argument proves only the physical
+# collection name. The Python adapter keeps its operation unresolved unless a
+# separate structural access rule proves more.
+id: mongodb-collection-js
+language: JavaScript
+rule:
+  pattern: $DB.collection($N)
+constraints:
+  N: { kind: string }
+---
+id: mongodb-collection-ts
+language: TypeScript
+rule:
+  pattern: $DB.collection($N)
+constraints:
+  N: { kind: string }
+---
+id: mongodb-collection-dynamic-js
+language: JavaScript
+rule:
+  pattern: $DB.collection($N)
+---
+id: mongodb-collection-dynamic-ts
+language: TypeScript
+rule:
+  pattern: $DB.collection($N)
+---
+# Mongoose: only the explicit third argument proves a physical collection.
+# Two-argument declarations remain unresolved; pluralization is never guessed.
+id: mongoose-model-physical-js
+language: JavaScript
+rule:
+  pattern: $M.model($MODEL, $SCHEMA, $COLLECTION)
+constraints:
+  MODEL: { kind: string }
+  COLLECTION: { kind: string }
+---
+id: mongoose-model-physical-ts
+language: TypeScript
+rule:
+  pattern: $M.model($MODEL, $SCHEMA, $COLLECTION)
+constraints:
+  MODEL: { kind: string }
+  COLLECTION: { kind: string }
+---
+id: mongoose-model-dynamic-physical-js
+language: JavaScript
+rule:
+  pattern: $M.model($MODEL, $SCHEMA, $COLLECTION)
+---
+id: mongoose-model-dynamic-physical-ts
+language: TypeScript
+rule:
+  pattern: $M.model($MODEL, $SCHEMA, $COLLECTION)
+---
+id: mongoose-model-logical-js
+language: JavaScript
+rule:
+  pattern: $M.model($MODEL, $SCHEMA)
+constraints:
+  MODEL: { kind: string }
+---
+id: mongoose-model-logical-ts
+language: TypeScript
+rule:
+  pattern: $M.model($MODEL, $SCHEMA)
+constraints:
+  MODEL: { kind: string }
+---
+id: mongoose-schema-options-js
+language: JavaScript
+rule:
+  pattern: new $M.Schema($FIELDS, $OPTIONS)
+---
+id: mongoose-schema-options-ts
+language: TypeScript
+rule:
+  pattern: new $M.Schema($FIELDS, $OPTIONS)

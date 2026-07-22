@@ -1,5 +1,6 @@
 """system_model.coverage — caps, partial/failed/unavailable partitions."""
 
+import json
 import pytest
 
 import analysis_wrapper.system_model.assemble as sm
@@ -56,6 +57,26 @@ def test_tables_partial_when_sql_sublane_incomplete(tmp_path):
 def test_tables_use_uncapped_evidence_source(tmp_path):
     tables = _coverage(write_run(tmp_path / "run"))["tables"]
     assert any("UNCAPPED" in n or "uncapped" in n for n in tables["notes"])
+
+
+def test_store_reference_is_not_promoted_to_declaration(tmp_path):
+    run = write_run(tmp_path / "run")
+    path = run / "discovery-report.json"
+    report = json.loads(path.read_text("utf-8"))
+    evidence = report["repos"][0]["table_evidence"]
+    evidence["tables"] = {"events": {"unresolved": ["internal/events.go:4"]}}
+    evidence["store_metadata"] = {"events": {
+        "kind": "collection", "families": ["document-driver"],
+        "physical_name": "events", "logical_names": []}}
+    evidence["detector_coverage"] = {
+        "complete": True, "detected_families": ["document-driver"],
+        "supported_families": ["document-driver"],
+        "unsupported_families": [], "extracted_families": ["document-driver"]}
+    path.write_text(json.dumps(report), "utf-8")
+    model = sm.assemble(run)
+    node = next(node for node in model.nodes
+                if node.kind == "data-store" and node.label == "events")
+    assert node.evidence_basis == "static-reference"
 
 
 def test_dependency_partition_partial_when_absent(tmp_path):
