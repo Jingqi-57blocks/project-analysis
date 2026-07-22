@@ -80,6 +80,25 @@ def test_signal_records_astgrep_version_and_path():
     assert d["version_drift"] == p.drift
 
 
+def test_detector_reports_family_coverage_separately_from_extraction():
+    coverage = tables.generate(str(FIXDB), "db-fix").detector_coverage
+    assert coverage["complete"]
+    assert "sql" in coverage["detected_families"]
+    assert "sql" in coverage["supported_families"]
+    assert "sql" in coverage["extracted_families"]
+
+
+def test_detector_recognizes_unsupported_family_without_claiming_no_data_model(tmp_path):
+    nested = tmp_path / "packages" / "api"
+    nested.mkdir(parents=True)
+    (nested / "package.json").write_text(
+        '{"dependencies":{"mongoose":"1.0.0"}}', "utf-8")
+    coverage = tables.generate(tmp_path, "sample").detector_coverage
+    assert coverage["complete"]
+    assert coverage["detected_families"] == ["mongoose"]
+    assert coverage["unsupported_families"] == ["mongoose"]
+
+
 @pytest.mark.skipif(not _HAS_SQLGLOT, reason="sqlglot not installed")
 def test_sqlglot_read_write_join_and_explicit_coverage():
     ev = tables.generate(str(FIXDB), "db-fix")

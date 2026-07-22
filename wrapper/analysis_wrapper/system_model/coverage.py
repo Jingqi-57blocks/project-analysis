@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .builder import ModelBuilder
+from ..datastore_coverage import classify as classify_data_model
 
 PARTITION_STATES = ("complete", "partial", "failed", "unavailable", "not-applicable")
 
@@ -217,35 +218,12 @@ def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
 
 
 def _tables(builder: ModelBuilder, blocks: dict) -> Partition:
-    total = len(blocks)
-    available, unresolved_total, sql_incomplete = 0, 0, 0
-    for block in blocks.values():
-        te = block.get("table_evidence", {})
-        if not te.get("available"):          # ast-grep unavailable -> extraction failed here
-            continue
-        available += 1
-        unresolved_total += len(te.get("unresolved", []))
-        sql = te.get("sql_coverage", {})
-        if not sql.get("available") or not sql.get("complete", True):
-            sql_incomplete += 1
+    classified = classify_data_model(list(blocks.values()))
+    status = classified.status
     evidence_capped = _capped(blocks, "table_evidence")
-    if available == 0:
-        status = "unavailable"
-    elif available < total or sql_incomplete or evidence_capped:
-        status = "partial"
-    else:
-        status = "complete"
-    if (status == "complete" and _node_count(builder, "data-store") == 0
-            and unresolved_total == 0):
-        status = "not-applicable"
     notes = ["tables come from the UNCAPPED table_evidence map (deduped by name), "
              "not the capped module_signals.tables summary."]
-    if available < total:
-        notes.append(f"ORM table extraction unavailable in {total - available} "
-                     "repo(s) (ast-grep missing) — those repos contribute no tables.")
-    if sql_incomplete:
-        notes.append("raw-SQL DDL sub-lane incomplete (sqlglot missing or parse "
-                     "failures) in >=1 repo — table set from ORM/ast-grep only there.")
+    notes.extend(classified.notes)
     if evidence_capped:
         notes.append("per-(table, access-type) evidence hit its 8-site cap in >=1 "
                      "repo — some data edges (access sites) were NOT recorded "
@@ -254,13 +232,20 @@ def _tables(builder: ModelBuilder, blocks: dict) -> Partition:
         status=status, producers=["discovery/tables"], node_kinds=["data-store"],
         edge_types=["data"],
         counts={"data_stores": _node_count(builder, "data-store"),
-                "data_edges": _edge_count(builder, "data")},
+                "data_edges": _edge_count(builder, "data"),
+                "detector_complete": classified.detector_complete,
+                "detected_families": list(classified.detected_families),
+                "supported_families": list(classified.supported_families),
+                "extracted_families": list(classified.extracted_families),
+                "unresolved_families": list(classified.unresolved_families),
+                "per_repo": list(classified.details)},
         caps=["access evidence capped at 8 sites per (table, access-type) bucket.",
               "Go typed-constant registry: unreferenced constants capped at 40."],
         source_universe="ORM declarations + access sites (ast-grep) and raw-SQL "
                         "DDL (SQLGlot); name-match alone is never confirmed "
                         "shared persistence (access-type ladder preserved).",
-        unresolved={"table_bindings": unresolved_total}, notes=notes)
+        unresolved={"table_bindings": classified.unresolved_bindings,
+                    "families": list(classified.unresolved_families)}, notes=notes)
 
 
 def _capped(blocks: dict, section: str) -> bool:
