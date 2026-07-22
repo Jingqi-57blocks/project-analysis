@@ -22,10 +22,10 @@ def _by_file(rule: str) -> dict[str, list]:
 def test_route_registration_positives_and_negatives():
     by = _by_file("route-registration.yml")
     js_paths = {m.vars.get("P") for m in by.get("routes.js", [])}
-    assert js_paths == {"/widgets", "/gadgets/:id"}          # app.use / map excluded
+    assert js_paths == {"/widgets", "/gadgets/:id", "/mounted"}  # mounts retained
     go_text = " ".join(m.text for m in by.get("routes.go", []))
     assert "/widgets" in go_text and "/gadgets" in go_text
-    assert "Group" not in go_text and "Print" not in go_text  # mounts / non-routes
+    assert "Group" in go_text and "Print" not in go_text      # mounts / non-routes
 
 
 def test_http_call_positives_and_negatives():

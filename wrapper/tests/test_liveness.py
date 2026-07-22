@@ -166,6 +166,31 @@ def test_tier2_excluded_dir_not_scanned_for_routes(tmp_path):
     assert "/real" in paths and "/generated" not in paths
 
 
+def test_mounts_are_separate_from_leaf_endpoints(tmp_path):
+    backend = tmp_path / "svc"
+    _write(backend / "app.js",
+           "app.use('/api', router); router.get('/items', h);\n")
+    leaf = liveness.route_registrations(backend)
+    complete = liveness.route_registrations(backend, include_mounts=True)
+    assert {(row.method, row.path) for row in leaf} == {("GET", "/items")}
+    assert {(row.method, row.path) for row in complete} == {
+        ("USE", "/api"), ("GET", "/items")}
+
+
+def test_ui_linkage_requires_compatible_http_method(tmp_path):
+    frontend = tmp_path / "web"
+    _write(frontend / "src" / "api.ts",
+           "get(`${api}/items`); get(`${api}/health`);\n")
+    backend = tmp_path / "svc"
+    _write(backend / "app.js",
+           "router.get('/items', h); router.post('/items', h); "
+           "router.get('/health', h);\n")
+    report = liveness.liveness(frontend, [("svc", str(backend), [])])
+    rows = {(row.method, row.path): row for row in report.rows}
+    assert rows[("GET", "/items")].status == "ui-called"
+    assert rows[("POST", "/items")].status == "method-unresolved"
+
+
 def test_astgrep_fallback_note_disclosed(tmp_path, monkeypatch):
     be = tmp_path / "svc"
     _write(be / "main.go", 'package main\nfunc r(){ e.GET("/v2/thing", h) }\n')

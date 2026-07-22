@@ -26,7 +26,7 @@ def test_capped_route_summary_is_recorded_but_not_used_as_source(tmp_path):
     routes = cov["routes"]
     assert routes["status"] == "complete"        # detailed liveness IS available
     assert any("200-row cap" in n for n in routes["notes"])
-    assert any("route_liveness" in n for n in routes["notes"])
+    assert any("route_inventory" in n for n in routes["notes"])
 
 
 def test_routes_partial_when_only_capped_summary_available(tmp_path):
