@@ -6,7 +6,9 @@ from pathlib import Path
 from analysis_wrapper import parsers
 from analysis_wrapper.registry import dependency_cruiser, outdated, staticcheck
 from analysis_wrapper.status import Status
-from analysis_wrapper.targetspec import PackageManager, RepoTarget, stable_repo_id
+from analysis_wrapper.targetspec import (
+    PackageManager, RepoTarget, TechnologyFacet, stable_repo_id,
+)
 
 
 def test_yarn_empty_success_is_valid_but_empty_error_is_not():
@@ -252,7 +254,9 @@ def test_jscpd_multi_qualifies_cross_repo_and_ambiguous_endpoints(tmp_path):
         (root / "src").mkdir(parents=True)
         (root / "src" / "shared.js").write_text("x\n", "utf-8")
     (left / "src" / "only-left.js").write_text("x\n", "utf-8")
-    targets = [RepoTarget(stable_repo_id(str(root)), str(root), stacks=["js"])
+    targets = [RepoTarget(stable_repo_id(str(root)), str(root), facets=[
+        TechnologyFacet("language.javascript", "language", ["."], ["index.js"])
+    ])
                for root in (left, right)]
     stdout = (
         "Clone found (javascript)\n"
@@ -275,7 +279,9 @@ def test_jscpd_multi_qualifies_cross_repo_and_ambiguous_endpoints(tmp_path):
 def test_jscpd_multi_does_not_publish_absolute_paths_outside_targets(tmp_path):
     root = tmp_path / "target"
     root.mkdir()
-    target = RepoTarget(stable_repo_id(str(root)), str(root), stacks=["js"])
+    target = RepoTarget(stable_repo_id(str(root)), str(root), facets=[
+        TechnologyFacet("language.javascript", "language", ["."], ["index.js"])
+    ])
     outside = tmp_path / "outside" / "secret.js"
     stdout = (
         "Clone found (javascript)\n"
@@ -295,7 +301,9 @@ def test_jscpd_paths_resolve_against_analysis_roots_and_reject_escapes(tmp_path)
     source.mkdir(parents=True)
     (source / "page.tsx").write_text("x\n", "utf-8")
     (repo / "outside.ts").write_text("x\n", "utf-8")
-    target = RepoTarget(stable_repo_id(str(repo)), str(repo), stacks=["tsx"],
+    target = RepoTarget(stable_repo_id(str(repo)), str(repo), facets=[
+        TechnologyFacet("language.typescript", "language", ["src"], ["src/app.tsx"])
+    ],
                         analysis_roots=["src"])
     stdout = (
         "Clone found (tsx)\n"
@@ -316,7 +324,9 @@ def test_jscpd_attribution_summary_counts_ambiguity_beyond_sample(tmp_path):
     for root in (left, right):
         (root / "src").mkdir(parents=True)
         (root / "src" / "shared.js").write_text("x\n", "utf-8")
-    targets = [RepoTarget(stable_repo_id(str(root)), str(root), stacks=["js"])
+    targets = [RepoTarget(stable_repo_id(str(root)), str(root), facets=[
+        TechnologyFacet("language.javascript", "language", ["."], ["index.js"])
+    ])
                for root in (left, right)]
     blocks = []
     for index in range(61):

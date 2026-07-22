@@ -11,6 +11,12 @@ filesystem plugin discovery, target-owned extension, or executable rule configur
 Providers that need an external tool receive only the existing executor-backed
 `ToolAccess` boundary.
 
+TargetSpec v2 records technology as independent evidence-backed facets. Languages
+(including JavaScript, TypeScript, and Go), ecosystems, and frameworks are not bundled
+into one stack label, so a polyglot repository can carry multiple independently scoped
+observations. Only reviewed bundled profiles are accepted; target repositories cannot
+load executable plugins.
+
 Create the project-local virtual environment first. The host Python is used only
 to create the environment; all packages are installed into `wrapper/.venv`.
 
@@ -62,8 +68,8 @@ project/repository IDs to real display names, unambiguous repository references,
 portable artifact keys. Ordinary repositories retain their basename; duplicate
 basenames use the shortest unique workspace-relative suffix. New consumers must use this
 mapping instead of adding hash-stripping rules; existing consumers migrate in follow-up
-changes. Completed older runs are resolved in memory from their recorded targets and
-discovery scope and are never rewritten.
+changes. TargetSpec v2 is a direct cutover: runs using an older target contract must be
+regenerated and are not adapted in memory.
 
 The output directory must not already exist and must be outside every target repository.
 Raw stdout/stderr stays under the self-gitignoring `signals/raw/` containment directory.

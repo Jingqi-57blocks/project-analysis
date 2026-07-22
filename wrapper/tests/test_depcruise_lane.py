@@ -5,7 +5,11 @@ from pathlib import Path
 
 from analysis_wrapper import node_env, parsers
 from analysis_wrapper.depcruise_lane import dependency_cruiser
-from analysis_wrapper.targetspec import RepoTarget
+from analysis_wrapper.targetspec import RepoTarget, TechnologyFacet
+
+
+def _language(target, profile_id, evidence):
+    target.facets = [TechnologyFacet(profile_id, "language", ["."], [evidence])]
 
 
 def test_binary_is_the_analyzer_env_never_global(target):
@@ -14,12 +18,12 @@ def test_binary_is_the_analyzer_env_never_global(target):
 
 
 def test_ts_guard_passes_for_plain_js(target):
-    target.stacks = ["js"]  # fixture repo has no tsconfig
+    _language(target, "language.javascript", "index.js")
     assert dependency_cruiser(target).check_guards(target) == ""
 
 
 def test_ts_guard_unavailable_when_env_lacks_ts(monkeypatch, target):
-    target.stacks = ["ts", "tsx"]
+    _language(target, "language.typescript", "tsconfig.json")
     monkeypatch.setattr(node_env, "probe", lambda *a, **k: node_env.NodeToolInfo(
         available=True, reason="", supports_ts=False, supports_tsx=False))
     reason = dependency_cruiser(target).check_guards(target)
@@ -27,14 +31,14 @@ def test_ts_guard_unavailable_when_env_lacks_ts(monkeypatch, target):
 
 
 def test_ts_guard_unavailable_when_env_absent(monkeypatch, target):
-    target.stacks = ["ts"]
+    _language(target, "language.typescript", "tsconfig.json")
     monkeypatch.setattr(node_env, "probe", lambda *a, **k: node_env.NodeToolInfo(
         available=False, reason="analyzer node_tools env not installed"))
     assert "unavailable" in dependency_cruiser(target).check_guards(target)
 
 
 def test_ts_guard_passes_when_env_supports_ts(monkeypatch, target):
-    target.stacks = ["ts"]
+    _language(target, "language.typescript", "tsconfig.json")
     monkeypatch.setattr(node_env, "probe", lambda *a, **k: node_env.NodeToolInfo(
         available=True, reason="", supports_ts=True, supports_tsx=True))
     assert dependency_cruiser(target).check_guards(target) == ""
@@ -42,7 +46,7 @@ def test_ts_guard_passes_when_env_supports_ts(monkeypatch, target):
 
 def test_argv_fallback_uses_no_config_without_prepared_config(target, synthetic_repo):
     (synthetic_repo / "tsconfig.json").write_text("{}")
-    target.stacks = ["ts"]
+    _language(target, "language.typescript", "tsconfig.json")
     argv = dependency_cruiser(target).build_argv(target)
     assert "--no-config" in argv and "--ts-config" in argv
     assert argv[0].replace("\\", "/").endswith("node_modules/.bin/depcruise")

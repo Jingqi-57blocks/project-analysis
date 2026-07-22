@@ -1,14 +1,18 @@
 from analysis_wrapper import gitinfo
 from analysis_wrapper.executor import run_tool
 from analysis_wrapper.status import Status
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget, stable_repo_id
+from analysis_wrapper.targetspec import (
+    GitProvenance, RepoTarget, TechnologyFacet, stable_repo_id,
+)
 
 from test_executor import bash_tool, identities_for
 
 
 def _target(repo):
     return RepoTarget(
-        repo_id=stable_repo_id(str(repo)), path=str(repo), stacks=["js"],
+        repo_id=stable_repo_id(str(repo)), path=str(repo), facets=[
+            TechnologyFacet("language.javascript", "language", ["."], ["index.js"])
+        ],
         git=GitProvenance(head=gitinfo.head(repo), branch="main",
                           dirty_detail=gitinfo.dirty_detail(repo), commit_count=1),
     )

@@ -19,6 +19,15 @@ if TYPE_CHECKING:
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+FINGERPRINT_KINDS = {
+    "config-file",
+    "fallback",
+    "go-require",
+    "manifest-default",
+    "manifest-file",
+    "package-dependency",
+    "source-extension",
+}
 
 
 def _validated_id(value: str, label: str) -> str:
@@ -50,6 +59,8 @@ class Fingerprint:
 
     def __post_init__(self) -> None:
         _validated_id(self.kind, "fingerprint kind")
+        if self.kind not in FINGERPRINT_KINDS:
+            raise ValueError(f"unsupported fingerprint kind {self.kind!r}")
         if not isinstance(self.value, str) or not self.value.strip():
             raise ValueError("fingerprint value must be a non-empty string")
 
@@ -58,18 +69,19 @@ class Fingerprint:
 class Profile:
     profile_id: str
     kind: str
+    display_name: str
     fingerprints: tuple[Fingerprint, ...]
     capability_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
         _validated_id(self.profile_id, "profile_id")
         _validated_id(self.kind, "profile kind")
+        if not isinstance(self.display_name, str) or not self.display_name.strip():
+            raise ValueError(f"profile {self.profile_id!r} needs a display name")
         object.__setattr__(self, "fingerprints", tuple(self.fingerprints))
         object.__setattr__(self, "capability_ids", tuple(self.capability_ids))
         if not self.fingerprints:
             raise ValueError(f"profile {self.profile_id!r} needs at least one fingerprint")
-        if not self.capability_ids:
-            raise ValueError(f"profile {self.profile_id!r} needs at least one capability")
         if not all(isinstance(item, Fingerprint) for item in self.fingerprints):
             raise ValueError("profile fingerprints must be Fingerprint values")
         for capability_id in self.capability_ids:

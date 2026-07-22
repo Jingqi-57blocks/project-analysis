@@ -39,7 +39,8 @@ def _profile(profile_id="synthetic-profile", capability="synthetic-capability"):
     return Profile(
         profile_id=profile_id,
         kind="language",
-        fingerprints=(Fingerprint("file", "synthetic.marker"),),
+        display_name=profile_id,
+        fingerprints=(Fingerprint("manifest-file", "synthetic.marker"),),
         capability_ids=(capability,),
     )
 
@@ -62,7 +63,7 @@ def test_registry_is_explicit_deterministic_and_has_no_mutation_api():
     assert [item.provider_id for item in registry.providers] == [
         "synthetic-provider", "z-provider"]
     assert not hasattr(registry, "register")
-    assert bundled_registry().profiles == () and bundled_registry().providers == ()
+    assert bundled_registry().profiles and bundled_registry().providers == ()
 
 
 def test_registry_rejects_duplicates_unknowns_and_untrusted_shapes():
@@ -77,7 +78,9 @@ def test_registry_rejects_duplicates_unknowns_and_untrusted_shapes():
     with pytest.raises(ValueError, match="explicit Profile"):
         ProfileRegistry(({"profile_id": "from-target"},), ())
     with pytest.raises(ValueError, match="Fingerprint"):
-        Profile("p", "language", (lambda: None,), ("c",))
+        Profile("p", "language", "p", (lambda: None,), ("c",))
+    with pytest.raises(ValueError, match="unsupported fingerprint kind"):
+        Fingerprint("typo-rule", "synthetic.marker")
     with pytest.raises(ValueError, match="duplicate profile IDs"):
         ProfileRegistry(
             (_profile(),),
