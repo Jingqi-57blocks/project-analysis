@@ -6,7 +6,7 @@ from analysis_wrapper.datastore_coverage import classify
 def _repo(*, detected=(), supported=(), extracted=(), tables=None,
           complete=True, available=True, sql_available=True, sql_complete=True):
     return {
-        "repo_id": "sample-11111111",
+        "repository_ref": "sample",
         "table_evidence": {
             "available": available,
             "tables": tables or {},
@@ -50,7 +50,7 @@ def test_mixed_extracted_and_unsupported_families_is_partial():
 
 def test_missing_or_failed_detector_fails_closed():
     assert classify([_repo(complete=False)]).status == "unavailable"
-    legacy = {"repo_id": "legacy", "table_evidence": {"available": True,
+    legacy = {"repository_ref": "legacy", "table_evidence": {"available": True,
               "tables": {}, "unresolved": []}}
     assert classify([legacy]).status == "unavailable"
 

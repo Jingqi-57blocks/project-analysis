@@ -85,14 +85,14 @@ def test_coverage_status_complete_partial():
 
 def test_repo_coverage_rejects_bad_status():
     with pytest.raises(ValueError):
-        RepoCoverage(repo_id="r", lang="go", status="mysterious")
+        RepoCoverage(repository_ref="r", lang="go", status="mysterious")
 
 
 def test_coverage_report_json_is_deterministic_and_sorted():
-    cov_a = RepoCoverage(repo_id="b", lang="go", status="complete")
-    cov_b = RepoCoverage(repo_id="a", lang="ts", status="partial")
+    cov_a = RepoCoverage(repository_ref="b", lang="go", status="complete")
+    cov_b = RepoCoverage(repository_ref="a", lang="ts", status="partial")
     report = CoverageReport(scan_date="2026-07-17", repos=[cov_a, cov_b])
     first = report.to_json()
     assert report.to_json() == first                 # stable bytes
-    ids = [r["repo_id"] for r in __import__("json").loads(first)["repos"]]
+    ids = [r["repository_ref"] for r in __import__("json").loads(first)["repos"]]
     assert ids == ["a", "b"]                          # sorted

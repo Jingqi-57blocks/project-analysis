@@ -2,10 +2,14 @@
 generic synthetic repos; fake tools are bash one-liners."""
 
 import json
+import os
+from pathlib import Path
 
+from analysis_wrapper import identity
 from analysis_wrapper.executor import run_tool
 from analysis_wrapper.status import Status
 from analysis_wrapper.tooldefs import ToolDef
+from analysis_wrapper.targetspec import TargetSpec, stable_repo_id
 
 SCAN_DATE = "2026-07-16"
 
@@ -20,9 +24,21 @@ def bash_tool(name, script, **kw) -> ToolDef:
     )
 
 
+def identities_for(*targets):
+    paths = [str(Path(target.path).resolve()) for target in targets]
+    workspace = Path(os.path.commonpath(paths))
+    if len(paths) == 1:
+        workspace = Path(paths[0]).parent
+    return identity.build(
+        TargetSpec(list(targets)), workspace_root=workspace,
+        project_id=stable_repo_id(str(workspace)))
+
+
 def run(td, target, tmp_path, *, allow_network=False):
+    identities = identities_for(target)
     return run_tool(
         td, target, tmp_path / "signals", SCAN_DATE,
+        identities.repository(target.repo_id),
         allow_network=allow_network,
     )
 
@@ -136,7 +152,7 @@ def test_manifest_is_structured_and_sanitized(target, tmp_path):
     td = bash_tool("leaker", "echo 'token=abc123'",
                    env={"MY_FLAG": "1"})
     r = run(td, target, tmp_path)
-    jpath = tmp_path / "signals" / f"leaker-{target.repo_id}.manifest.json"
+    jpath = tmp_path / "signals" / "leaker-widget-api.manifest.json"
     data = json.loads(jpath.read_text())
     assert data["argv"][0] == "bash" and isinstance(data["argv"], list)
     assert data["env"] == {"MY_FLAG": "1"}

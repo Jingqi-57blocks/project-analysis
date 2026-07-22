@@ -5,11 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from analysis_wrapper import (capabilities, coverage_render, findings, module_map,
+from analysis_wrapper import (capabilities, coverage_render, findings, identity, module_map,
                               module_render, overview_audit, synthesis_input,
                               workspace_metrics)
 from analysis_wrapper.cli import main
 from analysis_wrapper.system_model import assemble as sm
+from analysis_wrapper.targetspec import TargetSpec, stable_repo_id
 from system_model_fixtures import write_run
 
 
@@ -18,13 +19,15 @@ def _prepared(run):
     signals.mkdir()
     manifest_name = "structure-api.manifest.json"
     (signals / manifest_name).write_text(json.dumps({
+        "schema_version": "2.0.0",
         "tool": "structure", "status": "complete",
-        "repos": [{"repo_id": "api-11111111"}],
+        "repos": [{"repository_ref": "api"}],
     }), "utf-8")
     (signals / "x.view.txt").write_text("items: 1\n", "utf-8")
     (signals / "run-summary.json").write_text(json.dumps({
+        "schema_version": "2.0.0",
         "aggregate_status": "complete",
-        "signals": [{"tool": "structure", "repo_id": "api-11111111",
+        "signals": [{"tool": "structure", "repository_ref": "api",
                      "status": "complete", "reason": "", "view": "x.view.txt",
                      "manifest": manifest_name}],
     }), "utf-8")
@@ -34,8 +37,9 @@ def _prepared(run):
     imports.mkdir(exist_ok=True)
     maps = sorted(imports.glob("*.json"))
     (imports / "depmap-coverage.json").write_text(json.dumps({
+        "schema_version": "2.0.0",
         "scan_date": "2026-02-02",
-        "repos": [{"repo_id": "web-22222222", "lane": "js",
+        "repos": [{"repository_ref": "web", "lane": "js",
                    "status": "complete", "map_file": maps[0].name, "units": 1}]
         if maps else [],
     }), "utf-8")
@@ -175,22 +179,29 @@ def test_findings_finalize_renders_verified_dev_and_pm_projections(tmp_path, cap
 def test_findings_source_refs_require_recorded_revision_and_real_line(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True))
     _complete_map(run)
-    source_root = tmp_path / "api-source"
+    workspace = tmp_path / "ws"
+    source_root = workspace / "api"
     (source_root / "internal").mkdir(parents=True)
     (source_root / "internal" / "service.go").write_text(
         "package internal\nfunc Work() {}\n", "utf-8")
     targets = json.loads((run / "targets.json").read_text("utf-8"))
     targets["repos"][0]["path"] = str(source_root)
+    targets["repos"][1]["path"] = str(workspace / "web")
+    (workspace / "web").mkdir(parents=True)
     (run / "targets.json").write_text(json.dumps(targets), "utf-8")
+    (run / identity.FILENAME).unlink()
+    identity.write_mapping(run, identity.build(
+        TargetSpec.from_dict(targets), workspace_root=workspace,
+        project_id=stable_repo_id(str(workspace))))
     _complete_findings(run)
     doc = json.loads((run / "findings.json").read_text("utf-8"))
-    exact = f"api-11111111@{'a' * 40}:internal/service.go:2"
+    exact = f"api@{'a' * 40}:internal/service.go:2"
     doc["findings"][0]["evidence"][0]["refs"] = [exact]
     (run / "findings.json").write_text(json.dumps(doc), "utf-8")
     findings.validate(run)
 
     doc["findings"][0]["evidence"][0]["refs"] = [
-        f"api-11111111@{'b' * 40}:internal/service.go:2"]
+        f"api@{'b' * 40}:internal/service.go:2"]
     (run / "findings.json").write_text(json.dumps(doc), "utf-8")
     with pytest.raises(ValueError, match="revision mismatch"):
         findings.validate(run)
@@ -200,7 +211,9 @@ def test_findings_renderer_uses_run_language_map(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True))
     _complete_map(run)
     (run / "run-state.json").write_text(json.dumps({
-        "run_id": "zh-fixture", "project_id": "fixture", "language": "zh-CN",
+        "run_id": "zh-fixture",
+        "project_id": identity.load(run).project.internal_id,
+        "language": "zh-CN",
     }), "utf-8")
     technical, pm = _complete_findings(run)
     assert "## 主要问题" in technical
@@ -248,23 +261,26 @@ def test_capability_manifest_and_packet_are_byte_deterministic(tmp_path):
 def test_workspace_metrics_are_scoped_deterministic_and_audited(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True))
     targets = json.loads((run / "targets.json").read_text())["repos"]
+    identities = identity.load(run)
     signals = []
     for index, target in enumerate(sorted(targets, key=lambda row: row["repo_id"])):
         repo_id = target["repo_id"]
-        name = f"scc-{repo_id}.manifest.json"
+        repository = identities.repository(repo_id)
+        name = f"scc-{repository.artifact_key}.manifest.json"
         code = 60 if index == 0 else 40
         (run / "signals" / name).write_text(json.dumps({
-            "tool": "scc", "status": "complete",
-            "repos": [{"repo_id": repo_id}],
+            "schema_version": "2.0.0", "tool": "scc", "status": "complete",
+            "repos": [{"repository_ref": repository.reference}],
             "structured_metrics": {"kind": "scc", "totals": {
                 "files": 1, "lines": code, "code": code,
                 "comments": 0, "complexity": 0}, "languages": []},
         }), "utf-8")
-        signals.append({"tool": "scc", "repo_id": repo_id,
+        signals.append({"tool": "scc", "repository_ref": repository.reference,
                         "status": "complete", "reason": "", "view": "x.view.txt",
                         "manifest": name})
     (run / "signals" / "run-summary.json").write_text(json.dumps({
-        "aggregate_status": "complete", "signals": signals}), "utf-8")
+        "schema_version": "2.0.0", "aggregate_status": "complete",
+        "signals": signals}), "utf-8")
 
     first = workspace_metrics.write(run).read_bytes()
     synthesis_input.write(run)
@@ -318,21 +334,22 @@ def test_failed_dependency_lane_is_coverage_not_a_zero_metric(tmp_path):
         row["status"] = "failed"
         row["map_file"] = ""
 
-    metrics, coverage = workspace_metrics._dependency_metrics(model, depmap)
+    metrics, coverage = workspace_metrics._dependency_metrics(
+        model, depmap, identity.load(run))
 
     assert not any(row["metric_ref"].startswith("dependency-graph.")
                    for row in metrics)
     assert coverage["lanes"] == [{
-        "lane": "js", "included_repo_ids": [],
-        "incomplete_repo_ids": ["web-22222222"]}]
+        "lane": "js", "included_repository_refs": [],
+        "incomplete_repository_refs": ["web"]}]
 
 
 def test_ui_linkage_is_not_applicable_for_go_only_backend(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True,
-                              route_liveness=False))
+                              with_routes=False))
     report = json.loads((run / "discovery-report.json").read_text())
     report["repos"] = [row for row in report["repos"]
-                       if row["repo_id"] == "api-11111111"]
+                       if row["repository_ref"] == "api"]
     (run / "discovery-report.json").write_text(json.dumps(report), "utf-8")
     states = {row["capability_id"]: row["status"]
               for row in capabilities.build(run)["capabilities"]}
@@ -342,10 +359,10 @@ def test_ui_linkage_is_not_applicable_for_go_only_backend(tmp_path):
 
 def test_full_stack_node_shape_never_claims_ui_not_applicable(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True,
-                              route_liveness=False))
+                              with_routes=False))
     report = json.loads((run / "discovery-report.json").read_text())
     api = next(row for row in report["repos"]
-               if row["repo_id"] == "api-11111111")
+               if row["repository_ref"] == "api")
     api["stacks"] = {"stacks": ["ts", "tsx"], "frameworks": [], "evidence": []}
     api["module_signals"]["folders"] = ["src"]
     report["repos"] = [api]
@@ -444,13 +461,13 @@ def test_candidate_rules_allow_an_honest_unresolved_remainder(tmp_path):
 
 def test_candidate_rule_selectors_are_structural_and_fail_closed():
     candidate = {
-        "candidate_id": "mc-123", "repo_id": "api-11111111",
+        "candidate_id": "mc-123", "repository_ref": "api",
         "signal_kind": "route", "value": "/items/:id",
-        "evidence": [f"api-11111111@{'a' * 40}:internal/items.go:12"],
+        "evidence": [f"api@{'a' * 40}:internal/items.go:12"],
         "node_ids": ["route:abc"],
     }
     assert module_map._selector_matches({
-        "repo_ids": ["api-11111111"], "signal_kinds": ["route"],
+        "repository_refs": ["api"], "signal_kinds": ["route"],
         "value_prefixes": ["/items"],
         "evidence_path_prefixes": ["internal/"],
         "node_ids": ["route:abc"],
@@ -483,6 +500,52 @@ def test_audit_rejects_misplaced_artifact_and_accepts_canonical_consumption(tmp_
     assert "canonical-placement" in failed
 
 
+def test_audit_rejects_old_contracts_and_internal_ids_in_readable_evidence(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    summary = json.loads((run / "signals" / "run-summary.json").read_text())
+    summary["schema_version"] = "1.0.0"
+    (run / "signals" / "run-summary.json").write_text(json.dumps(summary), "utf-8")
+    result = overview_audit.audit(run)
+    assert any(row["check"] == "artifact-contract-versions"
+               and row["status"] == "fail" for row in result["checks"])
+
+    summary["schema_version"] = "2.0.0"
+    (run / "signals" / "run-summary.json").write_text(json.dumps(summary), "utf-8")
+    internal_id = identity.load(run).repositories[0].internal_id
+    (run / "signals" / "x.view.txt").write_text(
+        f"items: 1\ninternal: {internal_id}\n", "utf-8")
+    result = overview_audit.audit(run)
+    assert any(row["check"] == "external-identity-boundary"
+               and row["status"] == "fail" for row in result["checks"])
+
+    (run / "signals" / "x.view.txt").write_text("items: 1\n", "utf-8")
+    project_internal_id = identity.load(run).project.internal_id
+    (run / "overview.md").write_text(
+        f"# Overview\n\n{project_internal_id}\n", "utf-8")
+    result = overview_audit.audit(run)
+    boundary = next(row for row in result["checks"]
+                    if row["check"] == "external-identity-boundary")
+    assert boundary["status"] == "fail"
+    assert "overview.md: content" in boundary["detail"]
+
+    (run / "overview.md").write_text(f"# Overview\n\n{internal_id}\n", "utf-8")
+    result = overview_audit.audit(run)
+    assert any(row["check"] == "external-identity-boundary"
+               and row["status"] == "fail" for row in result["checks"])
+
+
+def test_synthesis_candidates_use_repository_references_not_internal_ids(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    document = json.loads((run / "synthesis-input.json").read_text())
+    internal_ids = {item.internal_id for item in identity.load(run).repositories}
+    serialized = json.dumps(document, ensure_ascii=False)
+
+    assert document["integration_candidates"]["items"]
+    assert all(not candidate["candidate_id"].startswith(tuple(internal_ids))
+               for candidate in document["integration_candidates"]["items"])
+    assert all(internal_id not in serialized for internal_id in internal_ids)
+
+
 def test_audit_rejects_overlapping_analysis_targets(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True))
     targets_path = run / "targets.json"
@@ -492,6 +555,10 @@ def test_audit_rejects_overlapping_analysis_targets(tmp_path):
     nested["path"] = str(Path(nested["path"]) / "nested")
     targets["repos"].append(nested)
     targets_path.write_text(json.dumps(targets), "utf-8")
+    (run / identity.FILENAME).unlink()
+    identity.write_mapping(run, identity.build(
+        TargetSpec.from_dict(targets), workspace_root="/ws",
+        project_id=stable_repo_id("/ws")))
 
     result = overview_audit.audit(run)
 
@@ -614,7 +681,7 @@ def test_synthesis_packet_bounds_large_inventories_with_disclosure(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True))
     doc = json.loads((run / "module-candidates.json").read_text())
     doc["candidates"] = [
-        {"candidate_id": f"mc-{i:04d}", "repo_id": "api-11111111",
+        {"candidate_id": f"mc-{i:04d}", "repository_ref": "api",
          "signal_kind": "folder", "value": f"part-{i}",
          "evidence": [], "node_ids": []}
         for i in range(750)]
@@ -634,9 +701,9 @@ def test_evidence_backed_added_candidate_is_accounted_and_materialized(tmp_path)
     mapping = json.loads((run / "module-map.json").read_text())
     mapping["additional_candidates"] = [{
         "candidate_id": "mc-added-cross-cutting",
-        "repo_id": "api-11111111",
+        "repository_ref": "api",
         "value": "cross-cutting",
-        "evidence": [f"api-11111111@{'a' * 40}:internal/x.go:1"],
+        "evidence": [f"api@{'a' * 40}:internal/x.go:1"],
         "node_ids": [],
     }]
     mapping["candidate_dispositions"].append({

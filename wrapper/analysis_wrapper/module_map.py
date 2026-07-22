@@ -13,14 +13,15 @@ import json
 import re
 from pathlib import Path
 
+from . import identity
 from .sanitize import sanitize_text
 from .executor import replace_artifact_text
 from .system_model import ids
 from .system_model.builder import ModelBuilder
 from .targetspec import TargetSpec
 
-CANDIDATE_SCHEMA_VERSION = "1.1.0"
-MAP_SCHEMA_VERSION = "1.0.0"
+CANDIDATE_SCHEMA_VERSION = "2.0.0"
+MAP_SCHEMA_VERSION = "2.0.0"
 DISPOSITIONS = (
     "standalone", "merged", "platform", "shared-infrastructure",
     "excluded", "unresolved",
@@ -30,7 +31,7 @@ _MODULE_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _ADDED_CANDIDATE_ID = re.compile(
     r"^mc-added-[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _RULE_SELECTOR_FIELDS = {
-    "candidate_ids", "repo_ids", "signal_kinds", "values",
+    "candidate_ids", "repository_refs", "signal_kinds", "values",
     "value_prefixes", "evidence_path_prefixes", "node_ids",
 }
 _RULE_FIELDS = {
@@ -57,7 +58,7 @@ def _citation(repo_id: str, head: str, position: str) -> str:
 def _node_index(model: dict) -> dict[tuple[str, str], list[str]]:
     index: dict[tuple[str, str], list[str]] = {}
     for node in model.get("nodes", []):
-        repo_id = str(node.get("repo_id", ""))
+        repo_id = str(node.get("repository_ref", ""))
         kind = str(node.get("kind", ""))
         label = str(node.get("label", ""))
         attrs = node.get("attrs", {})
@@ -76,14 +77,17 @@ def _node_index(model: dict) -> dict[tuple[str, str], list[str]]:
 def build_candidates(run_dir: str | Path, model: dict | None = None) -> dict:
     run = Path(run_dir).expanduser().resolve()
     spec = TargetSpec.load(run / "targets.json")
-    report = _load(run / "discovery-report.json")
+    identities = identity.load(run)
+    report = identity.load_discovery_report(run, identities)
     model = model or _load(run / "system-model.json")
-    heads = {repo.repo_id: repo.git.head for repo in spec.repos}
+    heads = {identities.reference_for(repo.repo_id): repo.git.head
+             for repo in spec.repos}
     node_index = _node_index(model)
     file_nodes_by_repo: dict[str, list[tuple[str, str]]] = {}
     for node in model.get("nodes", []):
         if node.get("kind") == "file":
-            file_nodes_by_repo.setdefault(str(node.get("repo_id", "")), []).append(
+            file_nodes_by_repo.setdefault(
+                str(node.get("repository_ref", "")), []).append(
                 (str(node.get("label", "")), str(node.get("id", ""))))
     candidates: dict[str, dict] = {}
 
@@ -94,7 +98,7 @@ def build_candidates(run_dir: str | Path, model: dict | None = None) -> dict:
         candidate_id = _candidate_id(repo_id, kind, value)
         row = candidates.setdefault(candidate_id, {
             "candidate_id": candidate_id,
-            "repo_id": repo_id,
+            "repository_ref": repo_id,
             "signal_kind": kind,
             "value": value,
             "evidence": [],
@@ -106,8 +110,10 @@ def build_candidates(run_dir: str | Path, model: dict | None = None) -> dict:
             linked.update(node_index.get((repo_id, f"{key_kind}:{key_value}"), []))
         row["node_ids"] = sorted(linked)
 
-    for block in sorted(report.get("repos", []), key=lambda row: row.get("repo_id", "")):
-        repo_id = str(block.get("repo_id", ""))
+    for block in sorted(
+            report.get("repos", []),
+            key=lambda row: row.get("repository_ref", "")):
+        repo_id = str(block.get("repository_ref", ""))
         head = heads.get(repo_id, "")
         signals = block.get("module_signals", {})
         for folder in signals.get("folders", []):
@@ -128,7 +134,7 @@ def build_candidates(run_dir: str | Path, model: dict | None = None) -> dict:
         kind = str(node.get("kind", ""))
         if kind not in {"route", "data-store"}:
             continue
-        repo_id = str(node.get("repo_id", ""))
+        repo_id = str(node.get("repository_ref", ""))
         attrs = node.get("attrs", {})
         if kind == "route":
             method = str(attrs.get("method", "")).upper()
@@ -145,7 +151,7 @@ def build_candidates(run_dir: str | Path, model: dict | None = None) -> dict:
 
     return {
         "schema_version": CANDIDATE_SCHEMA_VERSION,
-        "project_id": report.get("project_id", ""),
+        "project_ref": identities.project.reference,
         "candidate_count": len(candidates),
         "candidates": [candidates[key] for key in sorted(candidates)],
         "limitations": [
@@ -169,7 +175,7 @@ def _candidate_universe(run: Path, candidates_doc: dict,
                         module_doc: dict) -> tuple[dict[str, dict], int, int]:
     mechanical = {row["candidate_id"]: row
                   for row in candidates_doc.get("candidates", [])}
-    repo_ids = {repo.repo_id for repo in TargetSpec.load(run / "targets.json").repos}
+    repo_ids = {item.reference for item in identity.load(run).repositories}
     candidates = dict(mechanical)
     additional = module_doc.get("additional_candidates", [])
     if not isinstance(additional, list):
@@ -188,15 +194,16 @@ def _candidate_universe(run: Path, candidates_doc: dict,
         if not isinstance(evidence, list) or not evidence or not all(
                 isinstance(item, str) and item for item in evidence):
             raise ValueError(f"additional candidate {candidate_id!r} needs evidence")
-        if row.get("repo_id") not in repo_ids or not row.get("value"):
-            raise ValueError(f"additional candidate {candidate_id!r} needs repo_id and value")
+        if row.get("repository_ref") not in repo_ids or not row.get("value"):
+            raise ValueError(
+                f"additional candidate {candidate_id!r} needs repository_ref and value")
         node_ids = row.get("node_ids", [])
         if not isinstance(node_ids, list) or not all(isinstance(item, str)
                                                      for item in node_ids):
             raise ValueError(f"additional candidate {candidate_id!r}.node_ids must be strings")
         candidates[candidate_id] = {
             "candidate_id": candidate_id,
-            "repo_id": row["repo_id"],
+            "repository_ref": row["repository_ref"],
             "signal_kind": "synthesis-added",
             "value": row["value"],
             "evidence": evidence,
@@ -226,7 +233,9 @@ def _selector_matches(selector: dict, candidate: dict) -> bool:
     if "candidate_ids" in selector and candidate["candidate_id"] not in string_list(
             "candidate_ids"):
         return False
-    if "repo_ids" in selector and candidate.get("repo_id") not in string_list("repo_ids"):
+    if ("repository_refs" in selector
+            and candidate.get("repository_ref") not in string_list(
+                "repository_refs")):
         return False
     if "signal_kinds" in selector and candidate.get("signal_kind") not in string_list(
             "signal_kinds"):
@@ -445,7 +454,7 @@ def validate(run_dir: str | Path) -> tuple[dict, dict]:
     return universe, module_doc
 
 
-def load_into(builder: ModelBuilder, run_dir: str | Path, project_id: str) -> dict:
+def load_into(builder: ModelBuilder, run_dir: str | Path, project_ref: str) -> dict:
     run = Path(run_dir).expanduser().resolve()
     if not (run / "module-map.json").is_file():
         return {"present": False, "modules": 0, "candidates": 0,
@@ -468,7 +477,7 @@ def load_into(builder: ModelBuilder, run_dir: str | Path, project_id: str) -> di
                            for cite in candidates[cid].get("evidence", [])})
         confidence = {"high": 0.9, "medium": 0.6, "low": 0.3}[module["confidence"]]
         node_id = builder.add_node(
-            "module", [project_id, module_id], label=module.get("name", module_id),
+            "module", [project_ref, module_id], label=module.get("name", module_id),
             status="inferred", producer="synthesis/module-map",
             evidence=evidence, confidence=confidence,
             evidence_basis="inferred-linkage",

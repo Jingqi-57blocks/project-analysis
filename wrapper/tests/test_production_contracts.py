@@ -238,8 +238,9 @@ def test_jscpd_view_extracts_ranked_cross_file_clone_pairs(target):
     )
     view = parsers.jscpd_view(target, stdout, "")
     # cross-file pair present with span + both endpoints; same-file pair excluded
-    assert (f"15\twithin-repo\t{target.repo_id}:a/x.js:10-25\t"
-            f"{target.repo_id}:b/y.js:40-55") in view
+    repository_ref = Path(target.path).name
+    assert (f"15\twithin-repo\t{repository_ref}:a/x.js:10-25\t"
+            f"{repository_ref}:b/y.js:40-55") in view
     assert "c/z.js:1-6\tc/z.js" not in view.split("cross-file", 1)[1].split("summary", 1)[0]
     assert "1 same-file" in view
 
@@ -265,10 +266,10 @@ def test_jscpd_multi_qualifies_cross_repo_and_ambiguous_endpoints(tmp_path):
     view = parsers.jscpd_multi_view(targets, stdout, "")
 
     assert "\tcross-repo\t" in view
-    assert f"{targets[0].repo_id}:src/only-left.js" in view
-    assert f"{targets[1].repo_id}:src/shared.js" in view
+    assert "left:src/only-left.js" in view
+    assert "right:src/shared.js" in view
     assert "\tambiguous\t?{" in view
-    assert targets[0].repo_id in view and targets[1].repo_id in view
+    assert "left" in view and "right" in view
 
 
 def test_jscpd_multi_does_not_publish_absolute_paths_outside_targets(tmp_path):
@@ -304,8 +305,8 @@ def test_jscpd_paths_resolve_against_analysis_roots_and_reject_escapes(tmp_path)
 
     view = parsers.jscpd_multi_view([target], stdout, "")
 
-    assert f"{target.repo_id}:src/page.tsx" in view
-    assert f"{target.repo_id}:../outside.ts" not in view
+    assert "client:src/page.tsx" in view
+    assert "client:../outside.ts" not in view
     assert "unresolved=1" in view
 
 

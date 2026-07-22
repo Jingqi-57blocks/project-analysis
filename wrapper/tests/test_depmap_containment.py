@@ -13,11 +13,13 @@ from pathlib import Path
 
 import pytest
 
+from analysis_wrapper import identity
 from analysis_wrapper.callgraph import emit as cg_emit
 from analysis_wrapper.cli import main
 from analysis_wrapper.depmap import emit as dm_emit
 from analysis_wrapper.executor import WrapperSafetyError
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget, TargetSpec
+from analysis_wrapper.targetspec import (GitProvenance, RepoTarget, TargetSpec,
+                                         stable_repo_id)
 
 _MODULE = "example.com/app"
 _STREAM = "\n".join(json.dumps(o) for o in [
@@ -40,6 +42,12 @@ def _go_target(tmp_path):
     (repo / "go.mod").write_text(f"module {_MODULE}\n")
     return repo, RepoTarget(repo_id="app-1", path=str(repo), stacks=["go"],
                             git=GitProvenance(head="e" * 40))
+
+
+def _identities(tmp_path, target):
+    return identity.build(
+        TargetSpec([target]), workspace_root=tmp_path,
+        project_id=stable_repo_id(str(tmp_path)))
 
 
 def test_cli_refuses_dangling_symlink_marker_into_target(tmp_path, target):
@@ -78,11 +86,12 @@ def test_run_depmap_refuses_dangling_symlink_map_file(tmp_path):
     run = tmp_path / "run"
     (run / "imports").mkdir(parents=True)
     planted = repo / "PWNED.json"
-    (run / "imports" / "app-1.golist.json").symlink_to(planted)
+    (run / "imports" / "app.golist.json").symlink_to(planted)
 
     with pytest.raises(OSError):                       # FileExistsError (EEXIST)
-        dm_emit.run_depmap(TargetSpec(repos=[tgt]), run, "2026-07-18",
-                           run=_fake_go_run)
+        dm_emit.run_depmap(
+            TargetSpec(repos=[tgt]), run, "2026-07-18",
+            identities=_identities(tmp_path, tgt), run=_fake_go_run)
     assert not planted.exists()
 
 
@@ -96,6 +105,7 @@ def test_run_callgraph_refuses_symlinked_stage_dir(tmp_path):
     (run / "callgraph").symlink_to(evil)
 
     with pytest.raises(WrapperSafetyError):
-        cg_emit.run_callgraph(TargetSpec(repos=[tgt]), run, "2026-07-18",
-                              run=_fake_go_run)
+        cg_emit.run_callgraph(
+            TargetSpec(repos=[tgt]), run, "2026-07-18",
+            identities=_identities(tmp_path, tgt), run=_fake_go_run)
     assert list(evil.iterdir()) == []

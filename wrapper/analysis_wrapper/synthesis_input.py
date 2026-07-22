@@ -14,8 +14,9 @@ from pathlib import Path
 
 from .sanitize import sanitize_text
 from .executor import replace_artifact_text
+from . import identity
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "2.0.0"
 _LIST_LIMIT = 200
 _HUB_LIMIT = 100
 _VIEW_LINE_LIMIT = 120
@@ -60,7 +61,7 @@ def _coverage_projection(coverage: dict) -> dict:
         if isinstance(counts.get("per_repo"), list):
             counts["per_repo"] = _bounded(
                 counts["per_repo"], key=lambda item: (
-                    str(item.get("repo_id", "")), str(item.get("lang", ""))))
+                    str(item.get("repository_ref", "")), str(item.get("lang", ""))))
         row["counts"] = counts
         projected[name] = row
     return projected
@@ -72,7 +73,7 @@ def _capability_projection(doc: dict) -> dict:
         row = dict(capability)
         row["details"] = _bounded(
             list(row.get("details", [])), key=lambda item: (
-                str(item.get("repo_id", "")),
+                str(item.get("repository_ref", "")),
                 str(item.get("lang", item.get("lane", ""))),
                 str(item.get("tool", ""))))
         rows.append(row)
@@ -93,20 +94,21 @@ def _graph_projection(model: dict) -> dict:
     hubs = [{"node_id": node_id,
              "kind": by_id.get(node_id, {}).get("kind", ""),
              "label": by_id.get(node_id, {}).get("label", ""),
-             "repo_id": by_id.get(node_id, {}).get("repo_id", ""),
+             "repository_ref": by_id.get(node_id, {}).get("repository_ref", ""),
              "degree": count,
              "evidence_basis": by_id.get(node_id, {}).get("evidence_basis", "")}
             for node_id, count in degree.items()]
     node_groups = {}
     for kind in ("repository", "module", "route", "data-store",
                  "external-boundary", "deployable-unit"):
-        rows = [{"id": node.get("id", ""), "repo_id": node.get("repo_id", ""),
+        rows = [{"id": node.get("id", ""),
+                 "repository_ref": node.get("repository_ref", ""),
                  "label": node.get("label", ""), "status": node.get("status", ""),
                  "evidence_basis": node.get("evidence_basis", ""),
                  "evidence": node.get("evidence", []), "attrs": node.get("attrs", {})}
                 for node in nodes if node.get("kind") == kind]
         node_groups[kind] = _bounded(
-            rows, key=lambda row: (row["repo_id"], row["label"], row["id"]))
+            rows, key=lambda row: (row["repository_ref"], row["label"], row["id"]))
     edge_counts: dict[str, dict[str, int]] = {}
     for edge in edges:
         edge_type = str(edge.get("type", ""))
@@ -129,7 +131,7 @@ def _graph_projection(model: dict) -> dict:
 def _signal_views(run: Path, summary: dict) -> dict:
     rows = []
     signals = sorted(summary.get("signals", []), key=lambda row: (
-            str(row.get("repo_id", "")), str(row.get("tool", "")),
+            str(row.get("repository_ref", "")), str(row.get("tool", "")),
             str(row.get("view", ""))))
     for signal in signals[:_SIGNAL_LIMIT]:
         rel = str(signal.get("view", ""))
@@ -138,7 +140,7 @@ def _signal_views(run: Path, summary: dict) -> dict:
                  if path and path.is_file() else [])
         rows.append({
             "tool": signal.get("tool", ""),
-            "repo_id": signal.get("repo_id", ""),
+            "repository_ref": signal.get("repository_ref", ""),
             "status": signal.get("status", ""),
             "reason": signal.get("reason", ""),
             "view": f"signals/{rel}" if rel else "",
@@ -171,9 +173,26 @@ def _workspace_metrics_projection(doc: dict) -> dict:
     }
 
 
+def _integration_candidates(rows: list[dict], identities: identity.IdentityMap) -> list[dict]:
+    projected = []
+    for source in rows:
+        internal_id = str(source.get("repo_id", ""))
+        repository_ref = identities.reference_for(internal_id)
+        row = {key: value for key, value in source.items() if key != "repo_id"}
+        candidate_id = str(row.get("candidate_id", ""))
+        prefix = internal_id + ":"
+        if not candidate_id.startswith(prefix):
+            raise ValueError("integration candidate ID is not anchored to its repository")
+        row["candidate_id"] = repository_ref + candidate_id[len(internal_id):]
+        row["repository_ref"] = repository_ref
+        projected.append(row)
+    return projected
+
+
 def build(run_dir: str | Path) -> dict:
     run = Path(run_dir).expanduser().resolve()
-    discovery = _load(run / "discovery-report.json")
+    identities = identity.load(run)
+    discovery = identity.load_discovery_report(run, identities)
     targets = _load(run / "targets.json")
     capabilities = _load(run / "capabilities.json")
     model = _load(run / "system-model.json")
@@ -183,12 +202,15 @@ def build(run_dir: str | Path) -> dict:
     workspace_metrics = _load(run / "workspace-metrics.json")
 
     repos = []
-    report_by_id = {row.get("repo_id", ""): row
+    report_by_ref = {row.get("repository_ref", ""): row
                     for row in discovery.get("repos", [])}
-    for repo in sorted(targets.get("repos", []), key=lambda row: row.get("repo_id", "")):
-        block = report_by_id.get(repo.get("repo_id", ""), {})
+    for repo_identity in identities.repositories:
+        repo = next(row for row in targets.get("repos", [])
+                    if row.get("repo_id") == repo_identity.internal_id)
+        block = report_by_ref.get(repo_identity.reference, {})
         repos.append({
-            "repo_id": repo.get("repo_id", ""),
+            "repository_ref": repo_identity.reference,
+            "display_name": repo_identity.display_name,
             "stacks": repo.get("stacks", []),
             "analysis_roots": repo.get("analysis_roots", []),
             "tier2_exclusions": repo.get("tier2_exclusions", []),
@@ -218,15 +240,15 @@ def build(run_dir: str | Path) -> dict:
     }
     return {
         "schema_version": SCHEMA_VERSION,
-        "project_id": discovery.get("project_id", ""),
+        "project_ref": identities.project.reference,
         "input_artifact_sha256": dict(sorted(artifact_digests.items())),
         "capabilities": _capability_projection(capabilities),
-        "repositories": _bounded(repos, key=lambda row: row["repo_id"]),
+        "repositories": _bounded(repos, key=lambda row: row["repository_ref"]),
         "signal_summary": {
             "aggregate_status": signal_summary.get("aggregate_status", "failed"),
             "signals": _bounded(
                 list(signal_summary.get("signals", [])), key=lambda row: (
-                    str(row.get("repo_id", "")), str(row.get("tool", "")),
+                    str(row.get("repository_ref", "")), str(row.get("tool", "")),
                     str(row.get("view", ""))), limit=_SIGNAL_LIMIT),
         },
         "signal_views": _signal_views(run, signal_summary),
@@ -253,37 +275,36 @@ def build(run_dir: str | Path) -> dict:
                 limit=_CANDIDATE_LIMIT),
         }),
         "integration_candidates": _bounded(
-            list(targets.get("integration_candidates", [])),
+            _integration_candidates(list(targets.get("integration_candidates", [])),
+                                    identities),
             key=lambda row: row.get("candidate_id", ""),
             limit=_CANDIDATE_LIMIT),
-        "route_inventory": (None if not (discovery.get("route_inventory") or
-                                          discovery.get("route_liveness")) else {
-            "rows": _bounded(list((discovery.get("route_inventory") or
-                                    discovery.get("route_liveness") or {}).get(
-                                        "rows", [])),
-                             key=lambda row: (str(row.get("repo_id", "")),
+        "route_inventory": (None if not discovery.get("route_inventory") else {
+            "rows": _bounded(list(discovery["route_inventory"].get("rows", [])),
+                             key=lambda row: (str(row.get("repository_ref", "")),
                                               str(row.get("method", "")),
                                               str(row.get("path", ""))),
                              limit=_CANDIDATE_LIMIT),
-            "notes": (discovery.get("route_inventory") or
-                      discovery.get("route_liveness") or {}).get("notes", []),
+            "notes": discovery["route_inventory"].get("notes", []),
         }),
         "ui_route_linkage": (None if not discovery.get("ui_route_linkage") else {
             "frontends": discovery["ui_route_linkage"].get("frontends", []),
-            "calls_by_frontend": discovery["ui_route_linkage"].get(
-                "calls_by_frontend", {}),
+            "calls_by_frontend_repository": discovery["ui_route_linkage"].get(
+                "calls_by_frontend_repository", {}),
             "rows": _bounded(list(discovery["ui_route_linkage"].get("rows", [])),
-                             key=lambda row: (str(row.get("frontend_repo_id", "")),
-                                              str(row.get("repo_id", "")),
+                             key=lambda row: (
+                                              str(row.get("frontend_repository_ref", "")),
+                                              str(row.get("repository_ref", "")),
                                               str(row.get("method", "")),
                                               str(row.get("path", ""))),
                              limit=_CANDIDATE_LIMIT),
             "notes": discovery["ui_route_linkage"].get("notes", []),
         }),
-        "role_catalog_by_repo": _bounded(
-            [{"repo_id": key, "roles": value}
-             for key, value in discovery.get("role_catalog_by_repo", {}).items()],
-            key=lambda row: row["repo_id"]),
+        "role_catalog_by_repository": _bounded(
+            [{"repository_ref": key, "roles": value}
+             for key, value in discovery.get(
+                 "role_catalog_by_repository", {}).items()],
+            key=lambda row: row["repository_ref"]),
         "not_targeted": _bounded(
             [{"value": value} for value in discovery.get("not_targeted", [])],
             key=lambda row: row["value"]),

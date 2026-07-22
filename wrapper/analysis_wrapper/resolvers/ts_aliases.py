@@ -51,6 +51,7 @@ def resolve_and_generate(
     target: RepoTarget,
     out: Path,
     *,
+    artifact_key: str,
     tsconfig: str,
     exclude_re: str,
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
@@ -111,7 +112,7 @@ def resolve_and_generate(
         "extends": str(root / tsconfig),
         "compilerOptions": {"baseUrl": base_url, "paths": merged_paths},
     }
-    tsconfig_path = Path(out) / f"tsconfig-analysis-{target.repo_id}.json"
+    tsconfig_path = Path(out) / f"tsconfig-analysis-{artifact_key}.json"
     tsconfig_path.write_text(
         json.dumps(analysis_tsconfig, indent=2, sort_keys=True) + "\n", "utf-8")
 
@@ -127,7 +128,7 @@ def resolve_and_generate(
             },
         },
     }
-    config_path = Path(out) / f"depcruise-config-{target.repo_id}.json"
+    config_path = Path(out) / f"depcruise-config-{artifact_key}.json"
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", "utf-8")
 
     notes = (

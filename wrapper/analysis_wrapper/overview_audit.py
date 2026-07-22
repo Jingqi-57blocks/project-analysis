@@ -13,14 +13,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import (coverage_render, findings, module_map, module_render,
+from . import (coverage_render, findings, identity, module_map, module_render,
                synthesis_input, workspace_metrics)
 from .executor import replace_artifact_text
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec, overlapping_repo_pairs
 
-SCHEMA_VERSION = "1.0.0"
-_CITATION = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*)@([0-9a-fA-F]{7,40}):")
+SCHEMA_VERSION = "2.0.0"
 _FENCE = re.compile(r"```.*?```", re.S)
 _MERMAID_FENCE = re.compile(r"```mermaid\s*\n(.*?)```", re.S | re.IGNORECASE)
 _HTML_ENTITY = re.compile(r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);")
@@ -65,6 +64,14 @@ def _is_source_path_label(label: str) -> bool:
     if basename in {"Dockerfile", "Makefile", "Procfile", "Rakefile"}:
         return True
     return bool(Path(basename).suffix) and not basename.startswith(".")
+
+
+def _has_source_citation(text: str, identities: identity.IdentityMap) -> bool:
+    return any(re.search(
+        rf"(?<![A-Za-z0-9._/%-]){re.escape(item.reference)}@"
+        r"(?:[0-9a-fA-F]{7,40}|WORKTREE|NON-GIT):",
+        text,
+    ) for item in identities.repositories)
 
 
 def _mermaid_integrity_problems(name: str, markdown: str) -> list[str]:
@@ -113,6 +120,7 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
                        "detail": detail})
 
     spec = TargetSpec.load(run / "targets.json")
+    identities = identity.load(run)
     overlaps = overlapping_repo_pairs(spec.repos)
     check(
         "non-overlapping-targets", not overlaps,
@@ -123,6 +131,33 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
     capabilities = _load(run / "capabilities.json")
     model = _load(run / "system-model.json")
     coverage = model.get("coverage", {})
+
+    current_contracts = [
+        "discovery-report.json", "capabilities.json", "callgraph-coverage.json",
+        "imports/depmap-coverage.json", "system-model.json",
+        "module-candidates.json", "workspace-metrics.json",
+        "synthesis-input.json", "signals/run-summary.json",
+    ]
+    if (run / "module-map.json").is_file():
+        current_contracts.append("module-map.json")
+    if (run / "findings.json").is_file():
+        current_contracts.append("findings.json")
+    version_problems = []
+    for rel in current_contracts:
+        path = run / rel
+        if not path.is_file():
+            continue
+        version = _load(path).get("schema_version")
+        if version != SCHEMA_VERSION:
+            version_problems.append(f"{rel}: {version!r}")
+    for path in sorted((run / "signals").glob("*.manifest.json")):
+        version = _load(path).get("schema_version")
+        if version != SCHEMA_VERSION:
+            version_problems.append(f"{path.relative_to(run)}: {version!r}")
+    check("artifact-contract-versions", not version_problems,
+          "all machine evidence uses the current 2.0.0 contract"
+          if not version_problems else
+          "unsupported artifact contracts: " + "; ".join(version_problems[:20]))
 
     metrics_path = run / workspace_metrics.FILENAME
     if metrics_path.is_file():
@@ -156,12 +191,12 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
             if row.get("status") in {"complete", "partial"} and (
                     not view_name or not (run / "signals" / view_name).is_file()):
                 signal_mismatches.append(
-                    f"{row.get('repo_id', '')}/{row.get('tool', '')}: valid view missing")
+                    f"{row.get('repository_ref', '')}/{row.get('tool', '')}: valid view missing")
             manifest_name = str(row.get("manifest", ""))
             manifests = [run / "signals" / manifest_name] if manifest_name else []
             if len(manifests) != 1 or not manifests[0].is_file():
                 signal_mismatches.append(
-                    f"{row.get('repo_id', '')}/{row.get('tool', '')}: manifest missing")
+                    f"{row.get('repository_ref', '')}/{row.get('tool', '')}: manifest missing")
                 continue
             manifest = _load(manifests[0])
             if manifest.get("status") != row.get("status"):
@@ -246,20 +281,19 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         mapped_rows = [row for row in dep_cov.get("repos", []) if row.get("map_file")]
         missing_maps = [row["map_file"] for row in mapped_rows
                         if not (run / "imports" / row["map_file"]).is_file()]
-        mapped_repos = len({row.get("repo_id", "") for row in mapped_rows})
+        mapped_repos = len({row.get("repository_ref", "") for row in mapped_rows})
         consumed_repos = int(coverage.get("dependency_imports", {}).get(
             "counts", {}).get("repos_with_maps", 0))
         check("dependency-map-producer-shape", not missing_maps and not invalid_complete,
               "all complete rows declare existing maps"
               if not missing_maps and not invalid_complete else
               f"missing maps={missing_maps}; complete rows without maps="
-              f"{[row.get('repo_id', '') for row in invalid_complete]}")
+              f"{[row.get('repository_ref', '') for row in invalid_complete]}")
         check("dependency-map-consumption", mapped_repos == consumed_repos,
               f"producer repos={mapped_repos}, system-model repos={consumed_repos}")
 
-    report = _load(run / "discovery-report.json")
-    route_rows = ((report.get("route_inventory") or report.get("route_liveness"))
-                  or {}).get("rows", [])
+    report = identity.load_discovery_report(run, identities)
+    route_rows = (report.get("route_inventory") or {}).get("rows", [])
     route_nodes = int(coverage.get("routes", {}).get("counts", {}).get("routes", 0))
     check("route-liveness-consumption", not route_rows or route_nodes > 0,
           f"producer rows={len(route_rows)}, system-model routes={route_nodes}")
@@ -314,7 +348,8 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
             check("module-disposition-accounting", False, str(exc))
 
-    heads = {repo.repo_id: repo.git.head.lower() for repo in spec.repos if repo.git.head}
+    heads = {identities.reference_for(repo.repo_id): repo.git.head.lower()
+             for repo in spec.repos if repo.git.head}
     citation_problems: list[str] = []
     artifact_names = ["system-model.json", "module-candidates.json", "module-map.json",
                       "module-summary.md"]
@@ -333,17 +368,60 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
                 citation_problems.append(f"missing {name}")
             continue
         text = path.read_text("utf-8", errors="replace")
-        for repo_id, revision in _CITATION.findall(text):
-            expected = heads.get(repo_id)
-            if expected and revision.lower() != expected:
-                citation_problems.append(
-                    f"{name}: {repo_id}@{revision} is not full recorded HEAD")
+        for repository_ref, expected in heads.items():
+            citation = re.compile(
+                rf"(?<![A-Za-z0-9._/%-]){re.escape(repository_ref)}@"
+                r"([0-9a-fA-F]{7,40}):")
+            for revision in citation.findall(text):
+                if revision.lower() != expected:
+                    citation_problems.append(
+                        f"{name}: {repository_ref}@{revision} is not full recorded HEAD")
         for repo in spec.repos:
             if repo.path and repo.path in text:
                 citation_problems.append(f"{name}: contains absolute target path")
     check("revision-and-path-citations", not citation_problems,
           "citations use full recorded revisions and no target absolute paths"
           if not citation_problems else "; ".join(citation_problems[:20]))
+
+    leakage = []
+    external_identities = [identities.project, *identities.repositories]
+    evidence_files = [
+        "discovery-report.json", "capabilities.json", "callgraph-coverage.json",
+        "imports/depmap-coverage.json", "system-model.json",
+        "module-candidates.json", "module-map.json", "workspace-metrics.json",
+        "synthesis-input.json", "findings.json", "signals/run-summary.json",
+    ]
+    for rel in evidence_files:
+        path = run / rel
+        if not path.is_file():
+            continue
+        text = path.read_text("utf-8", errors="replace")
+        for item in external_identities:
+            if item.internal_id != item.reference and item.internal_id in text:
+                leakage.append(f"{rel}: {item.internal_id}")
+    for directory, suffixes in ((run / "signals", (".manifest.json", ".view.txt")),
+                                (run / "callgraph", (".jsonl",)),
+                                (run / "imports", (".depcruise.json", ".golist.json"))):
+        if not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            if any(path.name.endswith(suffix) for suffix in suffixes):
+                text = path.read_text("utf-8", errors="replace")
+                for item in external_identities:
+                    if item.internal_id != item.artifact_key \
+                            and item.internal_id in path.name:
+                        leakage.append(f"{path.relative_to(run)}: filename")
+                    if item.internal_id != item.reference \
+                            and item.internal_id in text:
+                        leakage.append(f"{path.relative_to(run)}: content")
+    for path in sorted(run.glob("*.md")):
+        text = path.read_text("utf-8", errors="replace")
+        for item in external_identities:
+            if item.internal_id != item.reference and item.internal_id in text:
+                leakage.append(f"{path.name}: content")
+    check("external-identity-boundary", not leakage,
+          "evidence, reports, and artifact filenames contain no internal repository IDs"
+          if not leakage else "; ".join(leakage[:20]))
 
     if require_reports:
         technical = (run / "technical-overview.md").read_text(
@@ -406,7 +484,7 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         check("pm-reading-budget", minutes <= 10.5,
               f"estimated prose reading time={minutes:.1f} minutes (limit 10.5)")
         pm_leaks = []
-        if _CITATION.search(overview):
+        if _has_source_citation(overview, identities):
             pm_leaks.append("source citation present")
         file_labels = {str(node.get("label", "")) for node in model.get("nodes", [])
                        if node.get("kind") == "file"

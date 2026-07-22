@@ -322,7 +322,7 @@ def generate_from_inputs(
     main_title = (
         rendered[primary_doc.doc_id].sections[0].text
         if primary_doc and rendered[primary_doc.doc_id].sections
-        else inputs.project_id
+        else inputs.project_ref
     )
     out_pages.append(pages.Page(
         "index", P["index"],

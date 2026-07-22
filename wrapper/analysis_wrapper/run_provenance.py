@@ -184,9 +184,7 @@ def load(run_dir: str | Path) -> dict[str, Any]:
     path = path_for(run_dir)
     if not path.is_file():
         raise ValueError(
-            "run lacks run-provenance.json; completed legacy runs remain exportable, "
-            "but an incomplete legacy run cannot resume under the new contract"
-        )
+            "run lacks run-provenance.json and must be regenerated under the current contract")
     value = json.loads(path.read_text("utf-8"))
     if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("run-provenance.json has an unsupported shape or version")

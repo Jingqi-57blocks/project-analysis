@@ -33,12 +33,12 @@ links; generate it LAST so it matches the final document exactly}}
 
 - **Run:** `{{run_id}}` · analyzed at {{analyzed_at_utc}} · language `{{language}}`
 - **Project Analysis:** version {{analysis_version}} · wrapper {{wrapper_version}} · model `{{model_id}}`
-- **Workspace:** `{{workspace_label — basename/logical name ONLY; absolute machine paths
-  must never appear in persisted reports}}` → project-id `{{project_id}}`
+- **Workspace:** `{{project_ref — exact logical name from identity-map.json; absolute
+  machine paths and internal IDs must never appear in persisted reports}}`
 
 | repo | HEAD | branch | describe | HEAD date | remote (redacted) | dirty | history |
 |---|---|---|---|---|---|---|---|
-| {{repo_id}} | {{head_short}} | {{branch}} | {{git_describe}} | {{head_timestamp}} | {{remote_redacted}} | {{dirty_detail}} | {{history_completeness}} |
+| {{repository_ref}} | {{head_short}} | {{branch}} | {{git_describe}} | {{head_timestamp}} | {{remote_redacted}} | {{dirty_detail}} | {{history_completeness}} |
 
 Submodule pins: {{submodule_pins_or_none}}
 
@@ -145,7 +145,7 @@ signal, no omissions.
 
 | signal | repo | status | reason (verbatim) |
 |---|---|---|---|
-| {{tool}} | {{repo_id}} | {{status}} | {{reason_or_empty}} |
+| {{tool}} | {{repository_ref}} | {{status}} | {{reason_or_empty}} |
 
 ## Assumptions & open questions
 

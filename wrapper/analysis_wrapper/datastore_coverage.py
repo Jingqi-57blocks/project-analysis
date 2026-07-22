@@ -55,7 +55,9 @@ def classify(repos: list[dict]) -> DataModelCoverage:
             supported = set()
             extracted = set()
             unsupported = set()
-            notes.append(f"{block.get('repo_id', '')}: detector metadata unavailable")
+            notes.append(
+                f"{block.get('repository_ref', '')}: "
+                "detector metadata unavailable")
         else:
             complete = bool(detector.get("complete"))
             detected = {str(v) for v in detector.get("detected_families", [])}
@@ -99,7 +101,7 @@ def classify(repos: list[dict]) -> DataModelCoverage:
         else:
             repo_status = "unavailable"
         details.append({
-            "repo_id": block.get("repo_id", ""),
+            "repository_ref": block.get("repository_ref", ""),
             "status": repo_status,
             "detector_complete": complete,
             "detected_families": sorted(detected),
@@ -137,6 +139,7 @@ def classify(repos: list[dict]) -> DataModelCoverage:
         detector_complete=detector_complete,
         data_store_count=store_count,
         unresolved_bindings=binding_count,
-        details=tuple(sorted(details, key=lambda row: str(row.get("repo_id", "")))),
+        details=tuple(sorted(
+            details, key=lambda row: str(row.get("repository_ref", "")))),
         notes=tuple(notes),
     )

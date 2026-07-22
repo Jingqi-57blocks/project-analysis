@@ -50,7 +50,8 @@ def _module_kind(root: Path) -> str:
     return "commonjs"
 
 
-def _edges_from(payload: dict, target: RepoTarget, repo_root: Path) -> list[CallEdge]:
+def _edges_from(payload: dict, target: RepoTarget, repo_root: Path,
+                repository_ref: str) -> list[CallEdge]:
     commit = target.git.head
     edges: set[CallEdge] = set()
     for raw in payload.get("edges", []):
@@ -61,12 +62,12 @@ def _edges_from(payload: dict, target: RepoTarget, repo_root: Path) -> list[Call
                 kind=raw["kind"],
                 caller_symbol=raw["callerSymbol"] or "<module>",
                 caller_citation=contract.citation_from_position(
-                    raw["callerDecl"], target.repo_id, commit, repo_root),
+                    raw["callerDecl"], repository_ref, commit, repo_root),
                 callee_symbol=raw["calleeSymbol"],
                 callee_citation=contract.citation_from_position(
-                    raw["calleeDecl"], target.repo_id, commit, repo_root),
+                    raw["calleeDecl"], repository_ref, commit, repo_root),
                 callsite_citation=contract.citation_from_position(
-                    raw["callsite"], target.repo_id, commit, repo_root),
+                    raw["callsite"], repository_ref, commit, repo_root),
             ))
         except (KeyError, ValueError):
             continue
@@ -83,7 +84,7 @@ def _analyzed_by_ext(analyzed: list[str], repo_root: Path,
     return counts
 
 
-def analyze(target: RepoTarget, *,
+def analyze(target: RepoTarget, *, repository_ref: str,
             run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
             node: str | None = None,
             probe: Callable[[], node_env.NodeToolInfo] = node_env.probe,
@@ -104,7 +105,8 @@ def analyze(target: RepoTarget, *,
             analyzed: dict | None = None, failures: int = 0,
             notes: str = "") -> RepoCoverage:
         return RepoCoverage(
-            repo_id=target.repo_id, lang="ts" if tsconfig else "js", status=status,
+            repository_ref=repository_ref,
+            lang="ts" if tsconfig else "js", status=status,
             reason=reason, tool="typescript", tool_version=version or info.typescript_version,
             algorithm=mode, candidates_by_ext=cand_ext, analyzed_by_ext=analyzed or {},
             excluded_by_reason=excl, parse_load_failures=failures,
@@ -147,7 +149,7 @@ def analyze(target: RepoTarget, *,
     if "error" in payload:
         return [], cov("failed", reason=str(payload["error"]))
 
-    edges = _edges_from(payload, target, repo_root)
+    edges = _edges_from(payload, target, repo_root, repository_ref)
     raw = payload.get("counts", {})
     counts = CallSiteCounts(
         resolved=int(raw.get("resolved", 0)), ambiguous=int(raw.get("ambiguous", 0)),

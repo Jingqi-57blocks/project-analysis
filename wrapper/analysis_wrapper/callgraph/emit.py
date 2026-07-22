@@ -2,7 +2,7 @@
 
 For each repo (sorted for determinism) this picks the Go and/or JS/TS lane by
 stack, writes one JSON Lines file of sorted call edges to
-``<out>/callgraph/<repo_id>.jsonl``, and collects a per-repo/lane coverage
+``<out>/callgraph/<artifact-key>.jsonl``, and collects a per-repo/lane coverage
 entry into ``<out>/callgraph-coverage.json``. A repo can drive both lanes
 (a fullstack repo); its edges are merged and sorted together.
 
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..executor import create_stage_dir, write_new_text
+from .. import identity
 from ..sanitize import sanitize_text
 from ..status import Status, aggregate
 from ..targetspec import RepoTarget, TargetSpec
@@ -53,26 +54,32 @@ def _write_jsonl(path: Path, edges: list[CallEdge]) -> None:
 
 def run_callgraph(spec: TargetSpec, out_dir: str | Path, scan_date: str, *,
                   allow_network: bool = False,
+                  identities: identity.IdentityMap | None = None,
                   run: Callable[..., subprocess.CompletedProcess] = subprocess.run
                   ) -> CoverageReport:
     """Run the call-graph stage over a TargetSpec, writing artifacts under
     ``out_dir`` and returning the coverage report."""
     out = Path(out_dir).expanduser().resolve()
+    identities = identities or identity.load(out)
     cg_dir = create_stage_dir(out / "callgraph")   # never write THROUGH a symlink
     coverages: list[RepoCoverage] = []
     for target in sorted(spec.repos, key=lambda r: r.repo_id):
+        repo_identity = identities.repository(target.repo_id)
         lanes = select_lanes(target)
         if not lanes:
             continue
         edges: list[CallEdge] = []
         for lane in lanes:
             if lane == "go":
-                lane_edges, cov = go_lane.analyze(target, allow_network=allow_network, run=run)
+                lane_edges, cov = go_lane.analyze(
+                    target, repository_ref=repo_identity.reference,
+                    allow_network=allow_network, run=run)
             else:
-                lane_edges, cov = js_lane.analyze(target, run=run)
+                lane_edges, cov = js_lane.analyze(
+                    target, repository_ref=repo_identity.reference, run=run)
             edges.extend(lane_edges)
             coverages.append(cov)
-        _write_jsonl(cg_dir / f"{target.repo_id}.jsonl", edges)
+        _write_jsonl(cg_dir / f"{repo_identity.artifact_key}.jsonl", edges)
     report = CoverageReport(scan_date=scan_date, repos=coverages)
     write_new_text(out / "callgraph-coverage.json", sanitize_text(report.to_json()))
     return report

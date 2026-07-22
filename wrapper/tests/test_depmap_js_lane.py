@@ -81,11 +81,12 @@ def test_analyze_captures_and_sorts_the_map(monkeypatch, tmp_path):
         stdout = json.dumps(_UNSORTED)
         stderr = ""
 
-    payload, cov = js_lane.analyze(target, tmp_path / "cfg",
+    payload, cov = js_lane.analyze(
+        target, tmp_path / "cfg", repository_ref="web", artifact_key="web",
                                    run=lambda *a, **k: _Proc())
     assert cov.status == "complete"
     assert cov.lane == "js"
-    assert cov.map_file == "web-1.depcruise.json"
+    assert cov.map_file == "web.depcruise.json"
     assert [m["source"] for m in payload["modules"]] == ["src/a.ts", "src/b.ts"]
     assert cov.reference_counts == {
         "resolved_internal": 2, "resolved_external": 3,
@@ -106,7 +107,8 @@ def test_analyze_fails_closed_on_invalid_json(monkeypatch, tmp_path):
         stdout = "not json"
         stderr = ""
 
-    payload, cov = js_lane.analyze(target, tmp_path / "cfg",
+    payload, cov = js_lane.analyze(
+        target, tmp_path / "cfg", repository_ref="web", artifact_key="web",
                                    run=lambda *a, **k: _Proc())
     assert payload is None
     assert cov.status == "failed"

@@ -8,7 +8,7 @@ TS-support fail-closed guard). We reuse it verbatim through its executor-facing
 API and only capture the FULL ``--output-type json`` module graph, which the
 executor's bounded view would otherwise truncate.
 
-The captured map is written to ``imports/<repo_id>.depcruise.json`` in the RAW
+The captured map is written to ``imports/<artifact-key>.depcruise.json`` in the RAW
 dependency-cruiser shape (a ``modules`` array) the existing normalizer
 (:mod:`analysis_wrapper.system_model.from_imports`) already consumes — only the
 module/dependency lists are sorted so the file is byte-deterministic. depcruise
@@ -67,7 +67,8 @@ def _sorted_map(payload: dict, internal_sources: set[str] | None = None) -> dict
             else [module["source"] for module in modules if module.get("source")]}
 
 
-def analyze(target: RepoTarget, out_dir: Path, *,
+def analyze(target: RepoTarget, out_dir: Path, *, repository_ref: str,
+            artifact_key: str,
             run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
             timeout_s: int | None = None) -> tuple[dict | None, RepoDepCoverage]:
     """Run dependency-cruiser for one repo. Returns ``(payload, cov)``; ``payload``
@@ -77,9 +78,9 @@ def analyze(target: RepoTarget, out_dir: Path, *,
     def cov(status: str, *, reason: str = "", units: int = 0,
             version: str = "", reference_counts: dict | None = None) -> RepoDepCoverage:
         return RepoDepCoverage(
-            repo_id=target.repo_id, lane="js", status=status, reason=reason,
+            repository_ref=repository_ref, lane="js", status=status, reason=reason,
             tool=TOOL, tool_version=version,
-            map_file=f"{target.repo_id}.depcruise.json" if status == "complete" else "",
+            map_file=f"{artifact_key}.depcruise.json" if status == "complete" else "",
             units=units,
             reference_counts=dict(reference_counts or {}),
             notes="dependency-cruiser module graph; edges kept SEPARATE from the "
@@ -93,7 +94,7 @@ def analyze(target: RepoTarget, out_dir: Path, *,
     guard = tooldef.check_guards(target)
     if guard:
         return None, cov("unavailable", reason=guard)
-    prep = tooldef.run_prepare(target, out_dir)
+    prep = tooldef.run_prepare(target, out_dir, artifact_key)
     if not prep.ok:
         return None, cov("unavailable", reason=prep.reason or "prepare step failed")
 

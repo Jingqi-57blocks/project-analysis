@@ -12,10 +12,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from analysis_wrapper import identity
+from analysis_wrapper.targetspec import TargetSpec, stable_repo_id
+
 _API = "api-11111111"
 _WEB = "web-22222222"
 _HA = "a" * 40
 _HB = "b" * 40
+_PROJECT = stable_repo_id("/ws")
 
 
 def _targets() -> dict:
@@ -30,7 +34,8 @@ def _targets() -> dict:
              "git": {"head": _HB, "branch": "main", "commit_count": 2}},
         ],
         "integration_candidates": [
-            {"candidate_id": "c1", "repo_id": _API, "signal_kind": "dependency",
+            {"candidate_id": f"{_API}:c1", "repo_id": _API,
+             "signal_kind": "dependency",
              "value": "stripe", "evidence": ["package.json: dependency stripe"]},
         ],
     }
@@ -135,29 +140,35 @@ def _web_block() -> dict:
     }
 
 
-def _report(*, route_liveness: bool, capped_routes: bool, table_available: bool,
+def _report(*, with_routes: bool, capped_routes: bool, table_available: bool,
             sql_complete: bool, deploy_capped: bool, routes_capped: bool,
             tables_capped: bool, boundaries_capped: bool) -> dict:
-    liveness = None
-    if route_liveness:
-        liveness = {
-            "frontend": _WEB, "calls_by_base": {},
+    inventory = None
+    linkage = None
+    if with_routes:
+        rows = [
+            {"repo_id": _API, "method": "GET", "path": "/users",
+             "route_evidence": "internal/handlers/users.go:12",
+             "status": "ui-called", "caller_evidence": ["src/api/users.ts:8"]},
+            {"repo_id": _API, "method": "POST", "path": "/users",
+             "route_evidence": "internal/handlers/users.go:20",
+             "status": "no-direct-path-match", "caller_evidence": []},
+            {"repo_id": _API, "method": "GET", "path": "/:id",
+             "route_evidence": "internal/handlers/users.go:30",
+             "status": "match-ambiguous", "caller_evidence": []},
+        ]
+        inventory = {
             "notes": [_ROUTE_CAP_NOTE] if routes_capped else [],
-            "rows": [
-                {"repo_id": _API, "method": "GET", "path": "/users",
-                 "route_evidence": "internal/handlers/users.go:12",
-                 "status": "ui-called", "caller_evidence": ["src/api/users.ts:8"]},
-                {"repo_id": _API, "method": "POST", "path": "/users",
-                 "route_evidence": "internal/handlers/users.go:20",
-                 "status": "no-direct-path-match", "caller_evidence": []},
-                {"repo_id": _API, "method": "GET", "path": "/:id",
-                 "route_evidence": "internal/handlers/users.go:30",
-                 "status": "match-ambiguous", "caller_evidence": []},
-            ],
+            "rows": rows,
             "tool": "ast-grep", "tool_path": "/x", "tool_version": "ast-grep 0.44.1",
             "version_drift": ""}
+        linkage = {
+            "frontends": [_WEB], "calls_by_frontend": {_WEB: {}},
+            "notes": [],
+            "rows": [dict(rows[0], frontend_repo_id=_WEB)],
+        }
     return {
-        "project_id": "PROJ-1", "workspace_root": "/ws",
+        "project_id": _PROJECT, "workspace_root": "/ws",
         "repos": [_api_block(capped_routes=capped_routes,
                              table_available=table_available,
                              sql_complete=sql_complete,
@@ -165,7 +176,8 @@ def _report(*, route_liveness: bool, capped_routes: bool, table_available: bool,
                              tables_capped=tables_capped,
                              boundaries_capped=boundaries_capped), _web_block()],
         "not_targeted": [], "reduced_coverage_targets": [],
-        "integration_candidate_count": 1, "route_liveness": liveness,
+        "integration_candidate_count": 1, "route_inventory": inventory,
+        "ui_route_linkage": linkage,
         "role_catalog_by_repo": {},
     }
 
@@ -183,20 +195,21 @@ def _write_callgraph(run: Path) -> None:
     cg.mkdir()
     edges = [
         _edge("observed", "static-call", "internal/handlers.Foo",
-              f"{_API}@{_HA}:internal/handlers/foo.go:5", "internal/service.Bar",
-              f"{_API}@{_HA}:internal/service/bar.go:8",
-              f"{_API}@{_HA}:internal/handlers/foo.go:6:3"),
+              f"api@{_HA}:internal/handlers/foo.go:5", "internal/service.Bar",
+              f"api@{_HA}:internal/service/bar.go:8",
+              f"api@{_HA}:internal/handlers/foo.go:6:3"),
         _edge("inferred", "method-dispatch", "internal/service.Bar",
-              f"{_API}@{_HA}:internal/service/bar.go:8", "internal/service.Baz",
-              f"{_API}@{_HA}:internal/service/baz.go:3",
-              f"{_API}@{_HA}:internal/service/bar.go:12:5"),
+              f"api@{_HA}:internal/service/bar.go:8", "internal/service.Baz",
+              f"api@{_HA}:internal/service/baz.go:3",
+              f"api@{_HA}:internal/service/bar.go:12:5"),
     ]
-    (cg / f"{_API}.jsonl").write_text(
+    (cg / "api.jsonl").write_text(
         "".join(json.dumps(e, sort_keys=True) + "\n" for e in edges), "utf-8")
     coverage = {
         "scan_date": "2026-02-02",
         "determinism": "edges sorted; identical inputs yield identical bytes",
-        "repos": [{"repo_id": _API, "lang": "go", "status": "complete",
+        "schema_version": "2.0.0",
+        "repos": [{"repository_ref": "api", "lang": "go", "status": "complete",
                    "tool": "callgraph", "tool_version": "v0.48.0",
                    "call_sites": {"resolved": 2, "ambiguous": 0, "external": 1,
                                   "unresolved": 0, "total": 3},
@@ -218,11 +231,11 @@ def _write_imports(run: Path) -> None:
         ]},
         {"source": "src/b.ts", "dependencies": []},
     ]}
-    (imports / f"{_WEB}.depcruise.json").write_text(
+    (imports / "web.depcruise.json").write_text(
         json.dumps(payload, sort_keys=True), "utf-8")
 
 
-def write_run(run_dir, *, with_callgraph: bool = True, route_liveness: bool = True,
+def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
               capped_routes: bool = False, table_available: bool = True,
               sql_complete: bool = True, with_imports: bool = False,
               deploy_capped: bool = False, routes_capped: bool = False,
@@ -230,16 +243,23 @@ def write_run(run_dir, *, with_callgraph: bool = True, route_liveness: bool = Tr
     """Materialize a synthetic run dir; returns the run path."""
     run = Path(run_dir)
     run.mkdir(parents=True, exist_ok=True)
-    (run / "targets.json").write_text(json.dumps(_targets(), indent=2), "utf-8")
+    targets = _targets()
+    (run / "targets.json").write_text(json.dumps(targets, indent=2), "utf-8")
+    spec = TargetSpec.from_json(json.dumps(targets))
+    identities = identity.build(
+        spec, workspace_root="/ws", project_id=_PROJECT)
+    identity.write_mapping(run, identities)
+    report = _report(with_routes=with_routes,
+                     capped_routes=capped_routes,
+                     table_available=table_available,
+                     sql_complete=sql_complete,
+                     deploy_capped=deploy_capped,
+                     routes_capped=routes_capped,
+                     tables_capped=tables_capped,
+                     boundaries_capped=boundaries_capped)
     (run / "discovery-report.json").write_text(
-        json.dumps(_report(route_liveness=route_liveness,
-                           capped_routes=capped_routes,
-                           table_available=table_available,
-                           sql_complete=sql_complete,
-                           deploy_capped=deploy_capped,
-                           routes_capped=routes_capped,
-                           tables_capped=tables_capped,
-                           boundaries_capped=boundaries_capped), indent=2), "utf-8")
+        json.dumps(identity.externalize_discovery_report(report, identities), indent=2),
+        "utf-8")
     if with_callgraph:
         _write_callgraph(run)
     if with_imports:

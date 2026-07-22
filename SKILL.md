@@ -132,7 +132,7 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
 ## Runs, pointers, and immutability
 
 - Every overview run writes an **immutable snapshot** under
-  `output/<project-id>/overview/<run-id>/`. Never edit a completed run.
+  `output/<project-key>/overview/<run-id>/`. Never edit a completed run.
 - **`<run-id>`** = optional readable label (from `--run-id`) or UTC start timestamp,
   plus the short input digest: `<label>-<6-hex digest>` when supplied, otherwise
   `YYYYMMDDThhmmssZ-<6-hex digest of ordered repo HEADs, dirty markers, and language>`.
@@ -140,7 +140,7 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
   Timestamp and digest are labels, not a uniqueness guarantee: uniqueness comes from the
   rule that an existing run directory is NEVER reused — if the computed name already
   exists, append the first free `-2`, `-3`, … suffix.
-- Two pointers per project in `state/<project-id>/pointers.json`:
+- Two pointers per project in `state/<project-key>/pointers.json`:
   `latest_completed` (set automatically when any overview finishes) and `current` (set
   only on explicit user acceptance). `latest_completed` is for inspection only — it is
   NEVER an implicit drill-down source. When an overview completes cleanly, offer
@@ -201,9 +201,9 @@ anchored):
    submodule pins, history completeness (shallow flag, oldest commit, commit count);
    run-level — analyzer package/Git version and state, model id or `unknown`, effort or
    `unknown`, language, analyzed-at, bound preparation options, and observed tool versions.
-   `identity-map.json` is the canonical source for the staged presentation migration;
-   do not add another trailing-hash stripping rule. Older completed runs use the read-only
-   compatibility resolver and remain immutable.
+   `identity-map.json` is the canonical source for project/repository references and
+   artifact-safe filenames. Runs created under the previous identity contract are rejected
+   and must be regenerated; do not add fallback derivation or trailing-hash stripping.
 2. **Prepare deterministic evidence through ONE wrapper-owned path.** Run
    `project-analysis-wrapper prepare-overview --run <run-dir>` (put global flags such as
    `--since` before the subcommand; add `--include-network` only with explicit user
@@ -300,7 +300,7 @@ linkage — never create the directory by hand):
 Resolution is `--from-run` → `current` pointer → refusal listing completed runs;
 a stale source (any repo moved/dirtied since the overview) exits 5 naming the
 drift — run a new overview instead. The minted run lives in
-`output/<project-id>/drilldown/<run-id>/` with a `source_overview_run` link and
+`output/<project-key>/drilldown/<run-id>/` with a `source_overview_run` link and
 stages `resolve → prd → health` (same `mark-stage`/`rollback`/audit-before-mark
 discipline as overviews). Then produce two documents from the templates:
 - `prd.md` (`templates/module-prd.md`) — PM-facing; sections included **where
@@ -313,7 +313,7 @@ discipline as overviews). Then produce two documents from the templates:
 
 ## Confirmed facts
 
-`state/<project-id>/confirmed_facts.md` records ONLY corrections the user explicitly
+`state/<project-key>/confirmed_facts.md` records ONLY corrections the user explicitly
 confirmed in chat. Each record: scope, source, date, status
 (`active | superseded | conflicts_with_observation`). When a confirmed fact contradicts
 observed code, surface the conflict in the report — never silently prefer either side.
@@ -325,13 +325,17 @@ SKILL.md            this file
 lenses/             lens prompt definitions (analysis dimensions)
 templates/          overview (PM primary), technical-overview, project-map, module-prd, module-health
 wrapper/            Python tool-execution wrapper (see wrapper/README.md)
-state/<project-id>/     pointers.json, confirmed_facts.md   (runtime, per target)
-output/<project-id>/    overview/<run-id>/, drilldown/<run-id>/   (runtime, per target)
+state/<project-key>/     pointers.json, confirmed_facts.md   (runtime, per target)
+output/<project-key>/    overview/<run-id>/, drilldown/<run-id>/   (runtime, per target)
 ```
 
-`<project-id>` is deterministic from the canonical target workspace root (basename +
-short path hash — same rule the wrapper uses for repo-ids); module IDs are stable slugs
-preserved across runs, with renames/merges recorded as aliases.
+`<project-key>` is the portable filename form of the real workspace name. Ordinary
+names remain unchanged; only characters unsafe in a
+single path segment are reversibly encoded. Internal path-derived IDs remain confined
+to control-plane files. If two workspaces have the same name, the later namespace uses
+the shortest readable parent-path suffix that distinguishes it; their runs and pointers
+never share a directory. Module IDs are stable slugs preserved across runs, with
+renames/merges recorded as aliases.
 
 ## Running the wrapper
 
@@ -350,7 +354,7 @@ first bootstrap on a machine. Analysis itself touches no network unless
 ```
 "${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-analysis-wrapper" \
     --since <YYYY-MM-DD> prepare-overview \
-    --run "${CLAUDE_SKILL_DIR}/output/<project-id>/overview/<run-id>"
+    --run "${CLAUDE_SKILL_DIR}/output/<project-key>/overview/<run-id>"
 ```
 
 (If `CLAUDE_SKILL_DIR` is unset in your shell, substitute the absolute skill base

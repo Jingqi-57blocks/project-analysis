@@ -7,14 +7,12 @@ exporter directly.
 
 Exports are written to
 ``<skill-root>/exported/{project-name}-analysis/{run-id}/{format}/``
-where ``{project-name}`` is the run's project id with its trailing ``-<hash>``
-stripped (e.g. ``myapp-1a2b3c4d`` -> ``myapp``). That tree is gitignored —
-generated artifacts never enter the repo.
+where ``{project-name}`` is the run's readable, collision-free project
+namespace. That tree is gitignored — generated artifacts never enter the repo.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from ..report_html import run_inputs
@@ -47,10 +45,9 @@ def get_exporter(fmt: str) -> Exporter:
         ) from None
 
 
-def project_name(project_id: str) -> str:
-    """Strip the trailing ``-<hash>`` from a project id (``myapp-1a2b3c4d`` -> ``myapp``)."""
-    stripped = re.sub(r"-[0-9a-f]{6,}$", "", project_id or "")
-    return stripped or (project_id or "project")
+def project_name(project_ref: str) -> str:
+    """Return the exact project reference; identity parsing happens upstream."""
+    return project_ref or "project"
 
 
 def _path_segment(value: str, field: str) -> str:
@@ -62,10 +59,10 @@ def _path_segment(value: str, field: str) -> str:
 
 
 def export_output_dir(
-    skill_root: str | Path, project_id: str, run_id: str, fmt: str
+    skill_root: str | Path, project_ref: str, run_id: str, fmt: str
 ) -> Path:
     """The canonical export destination for one immutable run + format."""
-    project = _path_segment(project_name(project_id), "project id")
+    project = _path_segment(project_name(project_ref), "project reference")
     run = _path_segment(run_id, "run id")
     format_name = _path_segment(fmt, "format")
     return (
@@ -95,9 +92,11 @@ def export(
     if out_dir is None:
         if skill_root is None:
             raise ValueError("export needs either out_dir or skill_root")
-        out_dir = export_output_dir(
-            skill_root, inputs.project_id, inputs.run_id, fmt
-        )
+        run_path = Path(run_dir).expanduser().resolve()
+        project_key = (run_path.parent.parent.name
+                       if run_path.parent.name in {"overview", "drilldown"}
+                       else inputs.identity_map.project.artifact_key)
+        out_dir = export_output_dir(skill_root, project_key, inputs.run_id, fmt)
     return exporter.export(inputs, Path(out_dir))
 
 

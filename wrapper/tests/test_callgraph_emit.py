@@ -6,9 +6,10 @@ import subprocess
 
 import pytest
 
-from analysis_wrapper import node_env
+from analysis_wrapper import identity, node_env
 from analysis_wrapper.callgraph import emit, js_lane
-from analysis_wrapper.targetspec import GitProvenance, RepoTarget, TargetSpec
+from analysis_wrapper.targetspec import (GitProvenance, RepoTarget, TargetSpec,
+                                         stable_repo_id)
 
 _NODE = shutil.which("node")
 _TS = node_env.typescript_lib().exists()
@@ -46,11 +47,23 @@ def _js_spec(tmp_path):
     return TargetSpec(repos=[target]), repo
 
 
+def _identity(out, spec, workspace):
+    out.mkdir()
+    spec.save(out / "targets.json")
+    mapping = identity.build(
+        spec, workspace_root=workspace,
+        project_id=stable_repo_id(str(workspace)))
+    identity.write_mapping(out, mapping)
+    return mapping
+
+
 @requires_node
 def test_run_callgraph_writes_edges_and_coverage(tmp_path):
     spec, _repo = _js_spec(tmp_path)
     out = tmp_path / "out"
-    report = emit.run_callgraph(spec, out, "2026-07-17")
+    identities = _identity(out, spec, tmp_path)
+    report = emit.run_callgraph(
+        spec, out, "2026-07-17", identities=identities)
 
     jsonl = out / "callgraph" / "widget.jsonl"
     coverage = out / "callgraph-coverage.json"
@@ -61,7 +74,7 @@ def test_run_callgraph_writes_edges_and_coverage(tmp_path):
 
     data = json.loads(coverage.read_text())
     assert data["scan_date"] == "2026-07-17"
-    entry = next(r for r in data["repos"] if r["repo_id"] == "widget")
+    entry = next(r for r in data["repos"] if r["repository_ref"] == "widget")
     assert entry["status"] == "complete"
     assert entry["call_sites"]["resolved"] >= 1
     assert len(report.repos) == 1
@@ -71,8 +84,12 @@ def test_run_callgraph_writes_edges_and_coverage(tmp_path):
 def test_run_callgraph_is_byte_for_byte_deterministic(tmp_path):
     spec, _repo = _js_spec(tmp_path)
     out_a, out_b = tmp_path / "a", tmp_path / "b"
-    emit.run_callgraph(spec, out_a, "2026-07-17")
-    emit.run_callgraph(spec, out_b, "2026-07-17")
+    identities_a = _identity(out_a, spec, tmp_path)
+    identities_b = _identity(out_b, spec, tmp_path)
+    emit.run_callgraph(
+        spec, out_a, "2026-07-17", identities=identities_a)
+    emit.run_callgraph(
+        spec, out_b, "2026-07-17", identities=identities_b)
     assert (out_a / "callgraph" / "widget.jsonl").read_bytes() == \
            (out_b / "callgraph" / "widget.jsonl").read_bytes()
     assert (out_a / "callgraph-coverage.json").read_bytes() == \
@@ -85,7 +102,9 @@ def test_run_callgraph_skips_unsupported_repos(tmp_path):
     (other / "readme.md").write_text("# hi\n")
     spec = TargetSpec(repos=[RepoTarget(repo_id="docs", path=str(other), stacks=["md"])])
     out = tmp_path / "out"
-    report = emit.run_callgraph(spec, out, "2026-07-17")
+    identities = _identity(out, spec, tmp_path)
+    report = emit.run_callgraph(
+        spec, out, "2026-07-17", identities=identities)
     assert report.repos == []
     assert not (out / "callgraph" / "docs.jsonl").exists()
     assert (out / "callgraph-coverage.json").is_file()

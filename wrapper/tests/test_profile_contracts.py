@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from analysis_wrapper import identity
 from analysis_wrapper.profiles import (
     ArtifactRef,
     CapabilityResult,
@@ -14,7 +15,7 @@ from analysis_wrapper.profiles import (
     run_provider,
 )
 from analysis_wrapper.profiles.bundled import bundled_registry
-from analysis_wrapper.targetspec import TargetSpec
+from analysis_wrapper.targetspec import TargetSpec, stable_repo_id
 
 
 @dataclass(frozen=True)
@@ -109,9 +110,9 @@ def test_executor_tool_access_resolves_reviewed_id_then_delegates(monkeypatch, t
     seen = {}
     reviewed_tool = object()
 
-    def fake_run(tooldef, actual_target, out, scan_date, **kwargs):
+    def fake_run(tooldef, actual_target, out, scan_date, repo_identity, **kwargs):
         seen.update(tooldef=tooldef, target=actual_target, out=out,
-                    scan_date=scan_date, kwargs=kwargs)
+                    scan_date=scan_date, identity=repo_identity, kwargs=kwargs)
         return "result"
 
     def fake_resolve(tool_id, actual_target):
@@ -120,10 +121,15 @@ def test_executor_tool_access_resolves_reviewed_id_then_delegates(monkeypatch, t
 
     monkeypatch.setattr("analysis_wrapper.profiles.tool_access.tool_for", fake_resolve)
     monkeypatch.setattr("analysis_wrapper.profiles.tool_access.run_tool", fake_run)
+    spec = TargetSpec([target])
+    identities = identity.build(
+        spec, workspace_root=tmp_path,
+        project_id=stable_repo_id(str(tmp_path)))
     access = ExecutorToolAccess(
-        TargetSpec([target]), tmp_path, "2026-07-22", network_authorized=True)
+        spec, identities, tmp_path, "2026-07-22", network_authorized=True)
     assert access.execute("scc", target, signal_id="fixture") == "result"
     assert seen["tool_id"] == "scc"
     assert seen["tooldef"] is reviewed_tool
     assert seen["target"] is target
+    assert seen["identity"].reference == Path(target.path).name
     assert seen["kwargs"] == {"signal_id": "fixture", "allow_network": True}

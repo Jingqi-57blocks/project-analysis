@@ -153,7 +153,7 @@ class RepoCoverage:
     """Per-repo, per-language coverage — every tracked candidate is accounted
     for, so an eligible-but-unanalyzed file can never disappear silently."""
 
-    repo_id: str
+    repository_ref: str
     lang: str
     status: str                                   # one of COVERAGE_STATES
     tool: str = ""
@@ -175,7 +175,8 @@ class RepoCoverage:
 
     def to_dict(self) -> dict:
         return {
-            "repo_id": self.repo_id, "lang": self.lang, "status": self.status,
+            "repository_ref": self.repository_ref,
+            "lang": self.lang, "status": self.status,
             "tool": self.tool, "tool_version": self.tool_version,
             "algorithm": self.algorithm, "warm_cache": self.warm_cache,
             "reason": self.reason,
@@ -203,8 +204,9 @@ class CoverageReport:
                         "inputs yield identical bytes")
 
     def to_dict(self) -> dict:
-        ordered = sorted(self.repos, key=lambda c: (c.repo_id, c.lang))
+        ordered = sorted(self.repos, key=lambda c: (c.repository_ref, c.lang))
         return {
+            "schema_version": "2.0.0",
             "scan_date": self.scan_date,
             "determinism": self.determinism,
             "repos": [c.to_dict() for c in ordered],

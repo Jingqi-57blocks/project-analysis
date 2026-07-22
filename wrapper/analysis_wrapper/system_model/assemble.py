@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from .. import __version__
+from .. import identity
 from ..depmap import emit as depmap_emit
 from ..executor import replace_artifact_text
 from .. import module_map
@@ -36,14 +37,16 @@ def _resolve_scan_date(run: Path, cg: dict, override: str) -> str:
     return cov.get("scan_date", "")
 
 
-def _merge_imports(spec: TargetSpec, js: dict, go: dict) -> dict:
+def _merge_imports(spec: TargetSpec, identities: identity.IdentityMap,
+                   js: dict, go: dict) -> dict:
     """Fold the JS (dependency-cruiser) and Go (go list) import summaries into the
     one dict coverage consumes. ``expected_repos`` is every dependency-map-eligible
     repo (the stage's own lane selection); ``mapped_repos`` is those that actually
     produced a map — the gap is what makes the partition ``partial`` with
     disclosure."""
     mapped = sorted(set(js.get("repos", [])) | set(go.get("repos", [])))
-    expected = sorted(r.repo_id for r in spec.repos if depmap_emit.select_lanes(r))
+    expected = sorted(identities.reference_for(r.repo_id)
+                      for r in spec.repos if depmap_emit.select_lanes(r))
     return {
         "present": bool(js.get("present") or go.get("present")),
         "js": js, "go": go,
@@ -57,15 +60,18 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
     """Build the in-memory :class:`SystemModel` for ``run_dir``."""
     run = Path(run_dir).expanduser().resolve()
     spec = TargetSpec.load(run / "targets.json")
-    report = json.loads((run / "discovery-report.json").read_text("utf-8"))
-    heads = {r.repo_id: (r.git.head or "") for r in spec.repos}
+    identities = identity.load(run)
+    heads = {identities.reference_for(r.repo_id): (r.git.head or "")
+             for r in spec.repos}
+    report = identity.load_discovery_report(run, identities)
 
     builder = ModelBuilder()
-    disc = from_discovery.load(builder, spec, report)
-    cg = from_callgraph.load(builder, run)
-    imports = _merge_imports(spec,
-                             from_imports.load(builder, run, heads),
-                             from_go_imports.load(builder, run, heads))
+    disc = from_discovery.load(builder, spec, report, identities)
+    cg = from_callgraph.load(builder, run, identities)
+    imports = _merge_imports(
+        spec, identities,
+        from_imports.load(builder, run, heads, identities),
+        from_go_imports.load(builder, run, heads, identities))
     dep_coverage = run / "imports" / "depmap-coverage.json"
     if dep_coverage.is_file():
         try:
@@ -74,15 +80,16 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
         except (OSError, ValueError):
             imports["coverage_repos"] = [{"status": "failed"}]
     modules = module_map.load_into(
-        builder, run, report.get("project_id", ""))
+        builder, run, identities.project.reference)
     builder.resolve()
 
     resolved_scan_date = _resolve_scan_date(run, cg, scan_date)
     cov = coverage.build(spec, report, builder, cg, disc, imports, modules,
+                         identities=identities,
                          scan_date=resolved_scan_date)
     return SystemModel(
         scan_date=resolved_scan_date,
-        project_id=report.get("project_id", ""),
+        project_ref=identities.project.reference,
         generator=GENERATOR,
         nodes=builder.nodes, edges=builder.edges, coverage=cov)
 

@@ -223,8 +223,9 @@ def test_canonical_routes_and_datastores_bypass_summary_cap(tmp_path):
     _write(api / "package.json", '{"dependencies":{"express":"1"}}')
     _write(api / "app.js", "\n".join(
         f"app.get('/resource-{index}', h);" for index in range(230)))
-    _write(api / "schema.sql", "\n".join(
-        f"CREATE TABLE t_{index:03d} (id INT);" for index in range(230)))
+    _write(api / "migrations" / "schema.js", "\n".join(
+        f"queryInterface.createTable('t_{index:03d}', {{}});"
+        for index in range(230)))
     run = tmp_path / "run"
     spec, report = emit.discover(ws)
     emit.write_stage1(run, spec, report)

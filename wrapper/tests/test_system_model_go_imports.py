@@ -3,11 +3,14 @@
 import json
 from pathlib import Path
 
+from analysis_wrapper import identity
 from analysis_wrapper.system_model import from_go_imports
 from analysis_wrapper.system_model.builder import ModelBuilder
+from analysis_wrapper.targetspec import RepoTarget, TargetSpec, stable_repo_id
 
 _MODULE = "example.com/app"
 _REPO = "app-1"
+_REF = "app"
 _HEAD = "d" * 40
 
 
@@ -25,14 +28,23 @@ def _write_golist(run: Path) -> None:
         ],
         "stdlib": ["errors", "fmt"],
     }
-    (run / "imports" / f"{_REPO}.golist.json").write_text(
+    (run / "imports" / f"{_REF}.golist.json").write_text(
         json.dumps(payload, sort_keys=True), "utf-8")
+
+
+def _identities(tmp_path: Path):
+    repo = tmp_path / _REF
+    repo.mkdir(exist_ok=True)
+    return identity.build(
+        TargetSpec([RepoTarget(repo_id=_REPO, path=str(repo))]),
+        workspace_root=tmp_path, project_id=stable_repo_id(str(tmp_path)))
 
 
 def _load(tmp_path: Path):
     _write_golist(tmp_path)
     builder = ModelBuilder()
-    summary = from_go_imports.load(builder, tmp_path, {_REPO: _HEAD})
+    summary = from_go_imports.load(
+        builder, tmp_path, {_REF: _HEAD}, _identities(tmp_path))
     builder.resolve()
     return builder, summary
 
@@ -94,10 +106,11 @@ def test_dotless_third_party_import_is_unresolved_not_dropped(tmp_path):
         ],
         "stdlib": ["fmt"],                            # 'vanitypkg' is dotless but NOT stdlib
     }
-    (tmp_path / "imports" / f"{_REPO}.golist.json").write_text(
+    (tmp_path / "imports" / f"{_REF}.golist.json").write_text(
         json.dumps(payload, sort_keys=True), "utf-8")
     builder = ModelBuilder()
-    summary = from_go_imports.load(builder, tmp_path, {_REPO: _HEAD})
+    summary = from_go_imports.load(
+        builder, tmp_path, {_REF: _HEAD}, _identities(tmp_path))
     builder.resolve()
     unresolved = [e for e in builder.edges
                   if e.type == "dependency" and e.status == "unresolved"]
@@ -114,13 +127,14 @@ def test_package_nodes_carry_repo_relative_citations(tmp_path):
     assert "internal/store" in labels
     for node in files:
         for cite in node.evidence:
-            assert cite.startswith(f"{_REPO}@{_HEAD}:")
+            assert cite.startswith(f"{_REF}@{_HEAD}:")
             assert "/Users/" not in cite
 
 
 def test_absent_imports_dir_is_disclosed_not_fabricated(tmp_path):
     builder = ModelBuilder()
-    summary = from_go_imports.load(builder, tmp_path, {})
+    summary = from_go_imports.load(
+        builder, tmp_path, {}, _identities(tmp_path))
     assert summary["present"] is False
     assert summary["edges"] == 0
     assert not [e for e in builder.edges if e.type == "dependency"]

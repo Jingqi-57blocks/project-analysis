@@ -22,16 +22,16 @@ def test_get_unknown_format_raises():
         export_pkg.get_exporter("pdf")
 
 
-def test_project_name_strips_trailing_hash():
-    assert export_pkg.project_name("WCP-1cc51f1d") == "WCP"
-    assert export_pkg.project_name("my-service-deadbeef") == "my-service"
-    assert export_pkg.project_name("no-hash") == "no-hash"      # short segment kept
+def test_project_name_preserves_exact_reference():
+    assert export_pkg.project_name("WCP") == "WCP"
+    assert export_pkg.project_name("my-service-deadbeef") == "my-service-deadbeef"
+    assert export_pkg.project_name("no-hash") == "no-hash"
     assert export_pkg.project_name("") == "project"
 
 
 def test_export_output_dir_layout(tmp_path):
     d = export_pkg.export_output_dir(
-        tmp_path, "WCP-1cc51f1d", "low-effort-b15376", "html"
+        tmp_path, "WCP", "low-effort-b15376", "html"
     )
     assert d == (
         tmp_path / "exported" / "WCP-analysis" / "low-effort-b15376" / "html"
@@ -39,11 +39,11 @@ def test_export_output_dir_layout(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "project_id,run_id", [("../project", "safe-run"), ("project-123abc", "../run")]
+    "project_ref,run_id", [("../project", "safe-run"), ("project-123abc", "../run")]
 )
-def test_export_output_dir_rejects_path_traversal(tmp_path, project_id, run_id):
+def test_export_output_dir_rejects_path_traversal(tmp_path, project_ref, run_id):
     with pytest.raises(ValueError, match="invalid .* for export path"):
-        export_pkg.export_output_dir(tmp_path, project_id, run_id, "html")
+        export_pkg.export_output_dir(tmp_path, project_ref, run_id, "html")
 
 
 def test_export_writes_to_exported_location(tmp_path):
@@ -57,6 +57,21 @@ def test_export_writes_to_exported_location(tmp_path):
     )
     assert (result.out_dir / "index.html").is_file()
     assert result.format == "html"
+
+
+def test_export_preserves_collision_free_run_namespace(tmp_path):
+    source = make_run(tmp_path / "source")
+    run = (tmp_path / "skill" / "output" / "client-b%2Fapp" / "overview"
+           / "20260101T000000Z-demo")
+    run.parent.mkdir(parents=True)
+    source.rename(run)
+
+    result = export_pkg.export(run, "html", skill_root=tmp_path / "skill")
+
+    assert result.out_dir == (
+        tmp_path / "skill" / "exported" / "client-b%2Fapp-analysis"
+        / "20260101T000000Z-demo" / "html"
+    )
 
 
 def test_export_defaults_to_html(tmp_path):

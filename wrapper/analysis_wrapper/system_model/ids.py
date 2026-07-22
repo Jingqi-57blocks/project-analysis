@@ -6,7 +6,7 @@ repository revision therefore produce byte-identical IDs (the acceptance
 requirement). IDs are opaque ``{prefix}:{16-hex}`` handles; the human-readable
 identity lives in each node's ``label``/``key`` and its provenance citations.
 
-A citation is the callgraph contract's ``repo_id@commit:relpath:line[:col]`` — a
+A citation is the callgraph contract's ``repository_ref@commit:relpath:line[:col]`` — a
 repository-RELATIVE path, so identity carries no absolute machine path.
 """
 
@@ -57,31 +57,32 @@ def split_position(pos: str) -> tuple[str, int, int | None]:
 
 
 def parse_citation(citation: str) -> tuple[str, str, str, int, int | None]:
-    """``repo_id@commit:relpath:line[:col]`` -> (repo_id, commit, relpath, line, col).
+    """``repository_ref@commit:relpath:line[:col]`` ->
+    (repository_ref, commit, relpath, line, col).
 
     Tolerant: a citation missing the ``@commit`` or position tail degrades to
     empty/zero components rather than raising, so a malformed upstream evidence
     string can never crash the assembler (it becomes a weaker, still-explicit
     reference)."""
-    repo_id, at, rest = citation.partition("@")
-    if not at:
+    repository_ref, marker, remainder = citation.rpartition("@")
+    if not marker or ":" not in remainder:
         return "", "", citation, 0, None
-    commit, colon, tail = rest.partition(":")
-    if not colon:
-        return repo_id, commit, "", 0, None
+    commit, _, tail = remainder.partition(":")
+    if not repository_ref or not commit:
+        return "", "", citation, 0, None
     path, line, col = split_position(tail)
-    return repo_id, commit, path, line, col
+    return repository_ref, commit, path, line, col
 
 
-def make_citation(repo_id: str, commit: str, pos: str) -> str:
-    """Build a full ``repo_id@commit:relpath:line[:col]`` citation from a
+def make_citation(repository_ref: str, commit: str, pos: str) -> str:
+    """Build a full ``repository_ref@commit:relpath:line[:col]`` citation from a
     repository-relative ``file[:line[:col]]`` position (as emitted by the
     discovery producers). Non-git repos use the ``nogit`` commit sentinel."""
     path, line, col = split_position(pos)
     ref = commit or "nogit"
     if not line:
-        return f"{repo_id}@{ref}:{path}"
-    base = f"{repo_id}@{ref}:{path}:{line}"
+        return f"{repository_ref}@{ref}:{path}"
+    base = f"{repository_ref}@{ref}:{path}:{line}"
     return f"{base}:{col}" if col else base
 
 

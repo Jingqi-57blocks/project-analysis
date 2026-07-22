@@ -15,6 +15,7 @@ nodes + ``boundary`` edges, and ``deployable-unit`` nodes. Containment
 
 from __future__ import annotations
 
+from ..identity import IdentityMap, RepositoryIdentity
 from ..targetspec import TargetSpec
 from . import ids
 from .builder import ModelBuilder
@@ -28,29 +29,29 @@ DEPLOY = "discovery/deploy"
 ACCESS = "discovery/access"
 
 
-def load(builder: ModelBuilder, spec: TargetSpec, report: dict) -> dict:
+def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
+         identities: IdentityMap) -> dict:
     """Populate ``builder`` from ``targets.json`` (spec) + ``discovery-report``.
 
     Returns per-partition presence flags used by coverage (e.g. whether the
     detailed route artifact existed)."""
-    heads = {r.repo_id: (r.git.head or "") for r in spec.repos}
-    blocks = {b["repo_id"]: b for b in report.get("repos", [])}
+    heads = {identities.reference_for(r.repo_id): (r.git.head or "")
+             for r in spec.repos}
+    blocks = {b["repository_ref"]: b for b in report.get("repos", [])}
     for target in spec.repos:
-        block = blocks.get(target.repo_id, {})
-        _repository(builder, target, block)
-        _tables(builder, target.repo_id, heads, block.get("table_evidence", {}))
-        _integrations(builder, target.repo_id, heads,
+        repo_identity = identities.repository(target.repo_id)
+        block = blocks.get(repo_identity.reference, {})
+        _repository(builder, target, block, repo_identity)
+        _tables(builder, repo_identity.reference, heads,
+                block.get("table_evidence", {}))
+        _integrations(builder, repo_identity.reference, heads,
                       block.get("integration_evidence", {}))
-        _deploy(builder, target.repo_id, heads, block.get("deployable_units", {}))
-    _candidates(builder, spec)
-    inventory = report.get("route_inventory") or report.get("route_liveness")
+        _deploy(builder, repo_identity.reference, heads,
+                block.get("deployable_units", {}))
+    _candidates(builder, spec, identities)
+    inventory = report.get("route_inventory")
     linkage = report.get("ui_route_linkage")
-    if linkage is None and report.get("route_liveness"):
-        legacy = report["route_liveness"]
-        linkage = {"rows": [dict(row, frontend_repo_id=legacy.get("frontend", ""))
-                            for row in legacy.get("rows", [])
-                            if row.get("caller_evidence")]}
-    routes_present = _routes(builder, heads, inventory, linkage)
+    routes_present = _routes(builder, heads, inventory, linkage, identities)
     return {"routes_present": routes_present,
             "route_summary_capped": _summary_route_cap(blocks)}
 
@@ -59,13 +60,14 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict) -> dict:
 # repositories
 # --------------------------------------------------------------------------- #
 
-def _repository(builder: ModelBuilder, target, block: dict) -> str:
+def _repository(builder: ModelBuilder, target, block: dict,
+                repo_identity: RepositoryIdentity) -> str:
     prov = block.get("provenance", {})
     stacks = block.get("stacks", {})
     access = block.get("access_model", {})
     head = target.git.head or ""
     attrs = {
-        "name": target.repo_id.rsplit("-", 1)[0],
+        "name": repo_identity.display_name,
         "stacks": list(target.stacks),
         "frameworks": stacks.get("frameworks", []),
         "analysis_roots": list(target.analysis_roots),
@@ -80,14 +82,15 @@ def _repository(builder: ModelBuilder, target, block: dict) -> str:
         "access_model": _access_summary(access),
     }
     repo_id = builder.add_node(
-        "repository", [target.repo_id], label=target.repo_id, status="observed",
-        repo_id=target.repo_id, producer=REPO,
+        "repository", [repo_identity.reference], label=repo_identity.display_name,
+        status="observed", repository_ref=repo_identity.reference, producer=REPO,
         evidence_basis="declaration",
-        evidence=[f"{target.repo_id}@{head or 'nogit'}"] if head else [],
+        evidence=[f"{repo_identity.reference}@{head or 'nogit'}"] if head else [],
         attrs=attrs)
     # Policy artifacts (casbin model/policy) are located as files — surface them.
     for artifact in access.get("policy_artifacts", []):
-        builder.note_file(target.repo_id, artifact.get("path", ""), producer=ACCESS)
+        builder.note_file(repo_identity.reference, artifact.get("path", ""),
+                          producer=ACCESS)
     return repo_id
 
 
@@ -110,17 +113,18 @@ def _access_summary(access: dict) -> dict:
 # --------------------------------------------------------------------------- #
 
 def _routes(builder: ModelBuilder, heads: dict, inventory: dict | None,
-            linkage: dict | None) -> bool:
+            linkage: dict | None, identities: IdentityMap) -> bool:
     if not inventory:
         return False
     link_rows = (linkage or {}).get("rows", [])
     links_by_route: dict[tuple[str, str, str, str], list[dict]] = {}
     for row in link_rows:
-        key = (str(row.get("repo_id", "")), str(row.get("method", "")),
+        key = (str(row.get("repository_ref", "")),
+               str(row.get("method", "")),
                str(row.get("path", "")), str(row.get("route_evidence", "")))
         links_by_route.setdefault(key, []).append(row)
     for row in inventory.get("rows", []):
-        repo_id = row.get("repo_id", "")
+        repo_id = str(row.get("repository_ref", ""))
         method, path = row.get("method", ""), row.get("path", "")
         route_ev = row.get("route_evidence", "")
         registration_kind = row.get("registration_kind", "endpoint")
@@ -133,28 +137,30 @@ def _routes(builder: ModelBuilder, heads: dict, inventory: dict | None,
             "route", [repo_id, method, path, route_ev],
             label=f"{method} {path}",
             status=("unresolved" if registration_kind == "mount" else "observed"),
-            repo_id=repo_id, producer=LIVENESS,
+            repository_ref=repo_id, producer=LIVENESS,
             evidence_basis=("static-reference" if registration_kind == "mount"
                             else "declaration"), evidence=[citation],
             attrs={"method": method, "path": path,
                    "registration_kind": registration_kind,
                    "ui_linked": bool(linked),
-                   "ui_frontends": sorted(set(str(item.get("frontend_repo_id", ""))
+                   "ui_frontends": sorted(set(
+                       str(item.get("frontend_repository_ref", ""))
                                               for item in linked
-                                              if item.get("frontend_repo_id")))})
+                                              if item.get("frontend_repository_ref")))})
         builder.note_file(repo_id, ids.split_position(route_ev)[0],
                           producer=LIVENESS, evidence=citation)
         for link in all_links:
-            _route_callers(builder, link, repo_id, heads, route_id)
+            _route_callers(builder, link, repo_id, heads, route_id, identities)
     return True
 
 
-def _route_callers(builder, row, repo_id, heads, route_id) -> None:
+def _route_callers(builder, row, repo_id, heads, route_id,
+                   identities: IdentityMap) -> None:
     status = row.get("status", "")
     # ui-called callers live in the frontend repo; internal-called ones in the
     # route's own repo. no-direct-path-match / match-ambiguous carry no caller
     # (preserved as unresolved counts in coverage, not as fabricated edges).
-    caller_repo = (row.get("frontend_repo_id", "")
+    caller_repo = (str(row.get("frontend_repository_ref", ""))
                    if status in {"ui-called", "method-unresolved"} else repo_id)
     for caller_ev in row.get("caller_evidence", []):
         head = heads.get(caller_repo, "")
@@ -181,7 +187,7 @@ def _tables(builder: ModelBuilder, repo_id: str, heads: dict, te: dict) -> None:
         basis = "declaration" if buckets.get("declaration") else "observed-access"
         table_id = builder.add_node(
             "data-store", [repo_id, name], label=name, status="observed",
-            repo_id=repo_id, producer=TABLES,
+            repository_ref=repo_id, producer=TABLES,
             evidence_basis=("declaration" if basis == "declaration"
                             else "static-reference"),
             evidence=[first] if first else [],
@@ -246,7 +252,8 @@ def _boundary(builder, repo_id, head, node_key, value, evidence, producer, attrs
                          attrs={"kind": attrs["kind"]})
 
 
-def _candidates(builder: ModelBuilder, spec: TargetSpec) -> None:
+def _candidates(builder: ModelBuilder, spec: TargetSpec,
+                identities: IdentityMap) -> None:
     """Integration candidates from the TargetSpec (dependency/client_init/oauth/…).
 
     A candidate is a repo-scoped boundary signal; several signal kinds for the
@@ -260,7 +267,8 @@ def _candidates(builder: ModelBuilder, spec: TargetSpec) -> None:
                             & {"config", "env", "oauth_provider", "ci_resource"}
                             else "static-reference"),
             attrs={"kind": "integration-candidate"})
-        repo_node = ids.stable_id("repository", cand.repo_id)
+        repo_node = ids.stable_id(
+            "repository", identities.reference_for(cand.repo_id))
         builder.add_edge("boundary", repo_node, ext_id, status="observed",
                          producer=CANDIDATES, evidence=list(cand.evidence),
                          evidence_basis=("configuration" if set(cand.signal_kind.split("+"))
@@ -288,7 +296,7 @@ def _deploy(builder: ModelBuilder, repo_id: str, heads: dict, du: dict) -> None:
                 attrs[extra] = unit[extra]
         unit_id = builder.add_node(
             "deployable-unit", [repo_id, kind, name], label=f"{kind}:{name}",
-            status="observed", repo_id=repo_id, producer=DEPLOY,
+            status="observed", repository_ref=repo_id, producer=DEPLOY,
             evidence_basis="configuration",
             evidence=[citation] if citation else [], attrs=attrs)
         builder.add_edge("containment", repo_node, unit_id, status="observed",

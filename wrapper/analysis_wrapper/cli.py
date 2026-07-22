@@ -26,21 +26,24 @@ def _record_summary(out: Path, results: list[SignalResult]) -> None:
             continue
         try:
             doc = json.loads(path.read_text("utf-8"))
-            repo_id = (doc.get("repos") or [{}])[0].get("repo_id", "")
-            key = (doc.get("tool", ""), repo_id, doc.get("status", ""))
+            repository_ref = (doc.get("repos") or [{}])[0].get(
+                "repository_ref", "")
+            key = (doc.get("tool", ""), repository_ref, doc.get("status", ""))
             manifests.setdefault(key, []).append(path.name)
         except (OSError, ValueError, KeyError, IndexError):
             continue
     payload = {
+        "schema_version": "2.0.0",
         "aggregate_status": aggregate([x.status for x in results]).value,
         "signals": [
-            {"tool": x.tool, "repo_id": x.repo_id, "status": x.status.value,
+            {"tool": x.tool, "repository_ref": x.repository_ref,
+             "status": x.status.value,
              "reason": x.reason,
              "view": x.view_path.name if x.view_path else "",
              "manifest": (x.manifest_path.name if x.manifest_path else
                           manifests.get(
-                              (x.tool, x.repo_id, x.status.value), [""])[0])}
-            for x in sorted(results, key=lambda r: (r.repo_id, r.tool))
+                              (x.tool, x.repository_ref, x.status.value), [""])[0])}
+            for x in sorted(results, key=lambda r: (r.repository_ref, r.tool))
         ],
     }
     (out / "run-summary.json").write_text(
@@ -48,17 +51,20 @@ def _record_summary(out: Path, results: list[SignalResult]) -> None:
     )
 
 
-def _run_one(args: argparse.Namespace, spec: TargetSpec, out: Path) -> list[SignalResult]:
-    target = spec.repo(args.repo)
+def _run_one(args: argparse.Namespace, spec: TargetSpec, out: Path,
+             identities) -> list[SignalResult]:
+    target = spec.repo(identities.internal_id_for(args.repo))
     definition = git_history(target, args.since, args.coupling_sample_cap) \
         if args.tool == "git-history" else tool_for(args.tool, target)
     return [run_tool(
         definition, target, out, args.scan_date,
+        identities.repository(target.repo_id),
         allow_network=args.include_network,
     )]
 
 
-def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path) -> list[SignalResult]:
+def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
+           identities) -> list[SignalResult]:
     results: list[SignalResult] = []
     repos = sorted(spec.repos, key=lambda r: r.repo_id)
     for target in repos:
@@ -73,6 +79,7 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path) -> list[Signal
         for definition in definitions:
             results.append(run_tool(
                 definition, target, out, args.scan_date,
+                identities.repository(target.repo_id),
                 allow_network=args.include_network,
             ))
     # Cross-repo duplication runs per LANGUAGE FAMILY: Phase 0 proved jscpd is
@@ -84,7 +91,10 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path) -> list[Signal
         definition = jscpd_multi(members)
         results.append(run_tool(
             definition, members[0], out, args.scan_date,
+            identities.repository(members[0].repo_id),
             additional_targets=members[1:], signal_id=f"jscpd-cross-{family}",
+            additional_repository_identities=[
+                identities.repository(item.repo_id) for item in members[1:]],
             allow_network=args.include_network,
         ))
     return results
@@ -138,21 +148,22 @@ def parser() -> argparse.ArgumentParser:
     sub = result.add_subparsers(dest="command", required=True)
     one = sub.add_parser("run", help="run one tool against one repo")
     one.add_argument("--tool", required=True)
-    one.add_argument("--repo", required=True, help="stable repo_id from TargetSpec")
+    one.add_argument("--repo", required=True,
+                     help="repository reference from identity-map.json")
     one.add_argument("--include-network", action="store_true",
                      help="explicitly authorize a network-capable tool")
     sweep = sub.add_parser("sweep", help="run all applicable validated tools")
     sweep.add_argument("--include-network", action="store_true")
     cg = sub.add_parser(
         "callgraph", help="extract function/method call edges (57B-30) into "
-                          "<out>/callgraph/<repo_id>.jsonl + callgraph-coverage.json")
+                          "<out>/callgraph/<artifact-key>.jsonl + callgraph-coverage.json")
     cg.add_argument("--include-network", action="store_true",
                     help="authorize the Go module-cache warm for a cold cache "
                          "(offline-first; without it a cold cache fails closed)")
     dm = sub.add_parser(
         "dependency-map",
         help="produce per-repo import maps into <out>/imports/ "
-             "(<repo_id>.depcruise.json for JS/TS, <repo_id>.golist.json for Go); "
+             "(<artifact-key>.depcruise.json for JS/TS, <artifact-key>.golist.json for Go); "
              "the system-model stage consumes them into dependency edges")
     dm.add_argument("--include-network", action="store_true",
                     help="authorize the Go module-cache warm for a cold cache "
@@ -284,13 +295,13 @@ def _discover(args: argparse.Namespace) -> int:
 
 
 def _state_dir_for(run_dir: Path) -> Path:
-    """<skill-root>/output/<project-id>/overview/<run-id> -> <skill-root>/state/<project-id>."""
+    """Map a readable project output key to its matching state directory."""
     project_dir = run_dir.parent.parent
     return project_dir.parent.parent / "state" / project_dir.name
 
 
 def _new_run(args: argparse.Namespace) -> int:
-    from . import lifecycle, run_provenance
+    from . import identity, lifecycle, run_provenance
     from .discovery import emit, self_exclusion
     model = run_provenance.metadata_value(args.model, "model")
     effort = run_provenance.metadata_value(args.effort, "effort")
@@ -299,8 +310,14 @@ def _new_run(args: argparse.Namespace) -> int:
     spec, report = emit.discover(
         args.workspace, exclude_names=exclude,
         analyzer_root=args.analyzer_root or None)
-    overview_root = (Path(args.skill_root).expanduser().resolve()
-                     / "output" / report["project_id"] / "overview")
+    identities = identity.build(
+        spec,
+        workspace_root=report["workspace_root"],
+        project_id=report["project_id"],
+    )
+    output_root = Path(args.skill_root).expanduser().resolve() / "output"
+    project_key = identity.claim_project_namespace(output_root, identities)
+    overview_root = output_root / project_key / "overview"
     run_id = lifecycle.mint_run_id(
         [f"{r.repo_id}:{r.git.head}:{r.git.dirty_detail}" for r in spec.repos],
         args.language, label=args.run_id,
@@ -338,7 +355,8 @@ def _new_run(args: argparse.Namespace) -> int:
 def _new_drilldown(args: argparse.Namespace) -> int:
     from . import lifecycle, run_provenance
     root = Path(args.skill_root).expanduser().resolve()
-    projects = sorted(p for p in (root / "output").iterdir() if p.is_dir()) \
+    projects = sorted(p for p in (root / "output").iterdir()
+                      if p.is_dir() and not p.name.startswith(".")) \
         if (root / "output").is_dir() else []
     if args.project:
         projects = [p for p in projects if p.name == args.project]
@@ -431,9 +449,9 @@ def _callgraph(args: argparse.Namespace, spec: TargetSpec, out: Path) -> int:
     from .callgraph import emit as cg_emit
     report = cg_emit.run_callgraph(
         spec, out, args.scan_date, allow_network=args.include_network)
-    for cov in sorted(report.repos, key=lambda c: (c.repo_id, c.lang)):
+    for cov in sorted(report.repos, key=lambda c: (c.repository_ref, c.lang)):
         suffix = f": {cov.reason}" if cov.reason else ""
-        print(f"{cov.repo_id} [{cov.lang}] {cov.status} "
+        print(f"{cov.repository_ref} [{cov.lang}] {cov.status} "
               f"(edges={cov.edges_emitted}, resolved={cov.call_sites.resolved})"
               f"{suffix}")
     if not report.repos:
@@ -446,9 +464,9 @@ def _depmap(args: argparse.Namespace, spec: TargetSpec, out: Path) -> int:
     from .depmap import emit as dm_emit
     report = dm_emit.run_depmap(
         spec, out, args.scan_date, allow_network=args.include_network)
-    for cov in sorted(report.repos, key=lambda c: (c.repo_id, c.lane)):
+    for cov in sorted(report.repos, key=lambda c: (c.repository_ref, c.lane)):
         suffix = f": {cov.reason}" if cov.reason else ""
-        print(f"{cov.repo_id} [{cov.lane}] {cov.status} "
+        print(f"{cov.repository_ref} [{cov.lane}] {cov.status} "
               f"(units={cov.units}, map={cov.map_file or '-'}){suffix}")
     if not report.repos:
         print("no Go/JS/TS repositories in the TargetSpec — nothing to analyze")
@@ -549,7 +567,8 @@ def _prepare_overview(args: argparse.Namespace) -> int:
         if signals.exists():
             raise ValueError("signals/ exists without run-summary.json; refuse partial reuse")
         out = prepare_output_directory(signals, spec.repos)
-        results = _sweep(args, spec, out)
+        from . import identity
+        results = _sweep(args, spec, out, identity.load(run))
         _record_summary(out, results)
         print(f"signals: wrote {len(results)} result(s)")
 
@@ -706,9 +725,8 @@ def _lifecycle_cmd(args: argparse.Namespace) -> int:
     run_dir = Path(args.run).expanduser().resolve()
     state = lifecycle.RunState.load(run_dir)
     if args.command in ("mark-stage", "rollback", "accept"):
-        # Completed pre-0.3 runs remain readable/exportable.  They cannot be
-        # reopened, advanced, or accepted under a provenance contract they
-        # never recorded.
+        # Runs missing the current provenance contract cannot be reopened,
+        # advanced, or accepted; regenerate them under the current contract.
         provenance = run_provenance.load(run_dir)
         stale = state.staleness()
         spec = TargetSpec.load(run_dir / "targets.json")
@@ -802,11 +820,14 @@ def main(argv: list[str] | None = None) -> int:
                 args, spec, out)
         args.scan_date = args.scan_date or date.today().isoformat()
         out = prepare_output_directory(args.out, spec.repos)
-        results = _run_one(args, spec, out) if args.command == "run" else _sweep(args, spec, out)
+        from . import identity
+        identities = identity.load(Path(args.targets).expanduser().resolve().parent)
+        results = (_run_one(args, spec, out, identities)
+                   if args.command == "run" else _sweep(args, spec, out, identities))
         _record_summary(out, results)
         for item in results:
             suffix = f": {item.reason}" if item.reason else ""
-            print(f"{item.repo_id} {item.tool}: {item.status.value}{suffix}")
+            print(f"{item.repository_ref} {item.tool}: {item.status.value}{suffix}")
         return wrapper_exit_code([x.status for x in results])
     except WrapperSafetyError as exc:
         # Safety refusals are not input mistakes: distinct message + exit code.

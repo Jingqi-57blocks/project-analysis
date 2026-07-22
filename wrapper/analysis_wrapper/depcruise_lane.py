@@ -80,11 +80,12 @@ def dependency_cruiser(target: RepoTarget) -> ToolDef:
     # prepare (TS targets) fills this cell; argv reads it.
     prepared: dict[str, str] = {"config": ""}
 
-    def _prepare(t: RepoTarget, out: Path) -> PrepareResult:
+    def _prepare(t: RepoTarget, out: Path, artifact_key: str) -> PrepareResult:
         if not tsconfig or not _is_ts_target(t):
             return PrepareResult()
         result = ts_aliases.resolve_and_generate(
-            t, out, tsconfig=tsconfig, exclude_re=exclude_re)
+            t, out, artifact_key=artifact_key,
+            tsconfig=tsconfig, exclude_re=exclude_re)
         prepared["config"] = str(result.config_path) if result.config_path else ""
         return PrepareResult(notes=result.notes, reads=result.reads)
 

@@ -83,7 +83,8 @@ def project(text: str, module: str) -> dict:
     }
 
 
-def analyze(target: RepoTarget, *, allow_network: bool = False,
+def analyze(target: RepoTarget, *, repository_ref: str, artifact_key: str,
+            allow_network: bool = False,
             run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
             warm: Callable[..., tuple[bool, str]] = go_cache.warm,
             go_binary: str | None = None,
@@ -98,8 +99,8 @@ def analyze(target: RepoTarget, *, allow_network: bool = False,
             warm_cache: str = "n/a", reference_counts: dict | None = None
             ) -> RepoDepCoverage:
         return RepoDepCoverage(
-            repo_id=target.repo_id, lane="go", status=status, reason=reason,
-            tool=TOOL, map_file=f"{target.repo_id}.golist.json" if status == "complete" else "",
+            repository_ref=repository_ref, lane="go", status=status, reason=reason,
+            tool=TOOL, map_file=f"{artifact_key}.golist.json" if status == "complete" else "",
             units=units, warm_cache=warm_cache,
             reference_counts=dict(reference_counts or {}),
             notes="internal package import graph; stdlib/third-party imports "
