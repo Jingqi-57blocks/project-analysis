@@ -57,6 +57,28 @@ def stable_repo_id(repo_path: str) -> str:
     return f"{Path(canon).name}-{digest}"
 
 
+def path_contains(parent: str | Path, child: str | Path) -> bool:
+    """Return whether ``child`` is the same path as, or is inside, ``parent``.
+
+    Resolve first so containment is segment-aware (``app`` does not contain
+    ``application``) and symlink aliases cannot create duplicate targets.
+    """
+    parent_path = Path(parent).expanduser().resolve()
+    child_path = Path(child).expanduser().resolve()
+    return child_path == parent_path or child_path.is_relative_to(parent_path)
+
+
+def overlapping_repo_pairs(repos: list["RepoTarget"]) -> list[tuple[str, str]]:
+    """Canonical repo-id pairs whose source trees overlap."""
+    pairs: list[tuple[str, str]] = []
+    ordered = sorted(repos, key=lambda repo: repo.repo_id)
+    for index, left in enumerate(ordered):
+        for right in ordered[index + 1:]:
+            if path_contains(left.path, right.path) or path_contains(right.path, left.path):
+                pairs.append((left.repo_id, right.repo_id))
+    return pairs
+
+
 @dataclass
 class PackageManager:
     name: str = "npm"            # npm | yarn | pnpm | go | none
