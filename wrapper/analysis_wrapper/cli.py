@@ -211,6 +211,11 @@ def parser() -> argparse.ArgumentParser:
         help="validate complete candidate dispositions in module-map.json, "
              "materialize inferred module nodes, and refresh synthesis input")
     finalize_map.add_argument("--run", required=True, help="overview run directory")
+    finalize_findings = sub.add_parser(
+        "finalize-findings",
+        help="validate atomic findings against source/signal/metric refs and "
+             "render the protected technical and PM findings blocks")
+    finalize_findings.add_argument("--run", required=True, help="overview run directory")
     audit_overview = sub.add_parser(
         "audit-overview",
         help="audit final structured artifacts and reports before marking the "
@@ -540,6 +545,16 @@ def _finalize_module_map(args: argparse.Namespace) -> int:
     return 0 if audit["status"] == "passed" else 3
 
 
+def _finalize_findings(args: argparse.Namespace) -> int:
+    from . import findings
+    technical, pm = findings.write(args.run)
+    count = len(findings.validate(args.run).get("findings", []))
+    print(f"findings: {count} validated atomic finding(s)")
+    print(f"wrote {technical}")
+    print(f"wrote {pm}")
+    return 0
+
+
 def _audit_overview(args: argparse.Namespace) -> int:
     from . import overview_audit
     run = Path(args.run).expanduser().resolve()
@@ -644,6 +659,8 @@ def main(argv: list[str] | None = None) -> int:
             return _prepare_overview(args)
         if args.command == "finalize-module-map":
             return _finalize_module_map(args)
+        if args.command == "finalize-findings":
+            return _finalize_findings(args)
         if args.command == "audit-overview":
             return _audit_overview(args)
         if args.command == "export":

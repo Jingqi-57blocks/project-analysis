@@ -5,9 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from analysis_wrapper import (capabilities, coverage_render, module_map,
+from analysis_wrapper import (capabilities, coverage_render, findings, module_map,
                               module_render, overview_audit, synthesis_input,
                               workspace_metrics)
+from analysis_wrapper.cli import main
 from analysis_wrapper.system_model import assemble as sm
 from system_model_fixtures import write_run
 
@@ -63,6 +64,173 @@ def _complete_map(run):
     }
     (run / "module-map.json").write_text(json.dumps(payload), "utf-8")
     return len(ids)
+
+
+def _complete_findings(run):
+    payload = {
+        "schema_version": findings.SCHEMA_VERSION,
+        "findings": [{
+            "finding_id": "finding-sample-boundary",
+            "claim": "The sample boundary has observable change friction.",
+            "lens": "structure-inventory",
+            "affected_modules": ["sample-capability"],
+            "evidence": [{
+                "fact": "The bounded structure signal contains one observed item.",
+                "refs": ["signals/x.view.txt:1"],
+                "basis": "static-reference",
+            }],
+            "evidence_basis": ["static-reference"],
+            "impact": "A change crosses the observed boundary.",
+            "priority": "medium", "confidence": "medium",
+            "limitations": "Static evidence does not establish runtime frequency.",
+            "suggested_direction": "Clarify the boundary before changing it.",
+        }],
+    }
+    (run / "findings.json").write_text(json.dumps(payload), "utf-8")
+    findings.write(run)
+    return findings.render_technical(run), findings.render_pm(run)
+
+
+def test_findings_contract_rejects_uninspectable_and_non_independent_evidence(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    _complete_map(run)
+    _complete_findings(run)
+    valid = json.loads((run / "findings.json").read_text())
+
+    invalid = json.loads(json.dumps(valid))
+    invalid["findings"][0]["evidence"][0]["refs"] = ["signals/raw/secret.out:1"]
+    (run / "findings.json").write_text(json.dumps(invalid), "utf-8")
+    with pytest.raises(ValueError, match="raw|missing"):
+        findings.validate(run)
+
+    raw = run / "signals" / "raw"
+    raw.mkdir()
+    (raw / "secret.err").write_text("token=secret\n", "utf-8")
+    invalid = json.loads(json.dumps(valid))
+    invalid["findings"][0]["evidence"][0]["refs"] = ["signals/raw/secret.err:1"]
+    (run / "findings.json").write_text(json.dumps(invalid), "utf-8")
+    with pytest.raises(ValueError, match="indexed sanitized view"):
+        findings.validate(run)
+
+    summary = json.loads((run / "signals" / "run-summary.json").read_text("utf-8"))
+    summary["signals"][0]["status"] = "failed"
+    (run / "signals" / "run-summary.json").write_text(json.dumps(summary), "utf-8")
+    invalid = json.loads(json.dumps(valid))
+    (run / "findings.json").write_text(json.dumps(invalid), "utf-8")
+    with pytest.raises(ValueError, match="indexed sanitized view"):
+        findings.validate(run)
+    summary["signals"][0]["status"] = "complete"
+    (run / "signals" / "run-summary.json").write_text(json.dumps(summary), "utf-8")
+
+    invalid = json.loads(json.dumps(valid))
+    invalid["findings"][0]["evidence"][0]["refs"] = ["metric:not-recorded"]
+    (run / "findings.json").write_text(json.dumps(invalid), "utf-8")
+    with pytest.raises(ValueError, match="unknown metric ref"):
+        findings.validate(run)
+
+    invalid = json.loads(json.dumps(valid))
+    invalid["findings"][0]["confidence"] = "high"
+    (run / "findings.json").write_text(json.dumps(invalid), "utf-8")
+    with pytest.raises(ValueError, match="two independent signals"):
+        findings.validate(run)
+
+    invalid = json.loads(json.dumps(valid))
+    invalid["findings"][0]["confidence"] = "high"
+    invalid["findings"][0]["evidence"] = [
+        {"fact": "The dependency total is recorded.",
+         "refs": ["metric:dependency-graph.lane.js.analyzed-scope.total"],
+         "basis": "static-reference"},
+        {"fact": "The dependency percentage is recorded.",
+         "refs": ["metric:dependency-graph.lane.js.analyzed-scope.internal-percent"],
+         "basis": "static-reference"},
+    ]
+    (run / "findings.json").write_text(json.dumps(invalid), "utf-8")
+    with pytest.raises(ValueError, match="two independent signals"):
+        findings.validate(run)
+
+    invalid = json.loads(json.dumps(valid))
+    invalid["findings"][0]["evidence"][0]["basis"] = "runtime-observation"
+    invalid["findings"][0]["evidence_basis"] = ["runtime-observation"]
+    (run / "findings.json").write_text(json.dumps(invalid), "utf-8")
+    with pytest.raises(ValueError, match="no supported provenance"):
+        findings.validate(run)
+
+
+def test_findings_finalize_renders_verified_dev_and_pm_projections(tmp_path, capsys):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    _complete_map(run)
+    _complete_findings(run)
+
+    assert main(["finalize-findings", "--run", str(run)]) == 0
+    assert "validated atomic finding" in capsys.readouterr().out
+    technical = (run / findings.TECHNICAL_FILE).read_text("utf-8")
+    pm = (run / findings.PM_FILE).read_text("utf-8")
+    assert "Clarify the boundary" in technical
+    assert "Clarify the boundary" not in pm
+    assert "`medium`" in technical
+    assert "`medium`" not in pm
+    assert "technical-overview.md#finding-sample-boundary" in pm
+
+
+def test_findings_source_refs_require_recorded_revision_and_real_line(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    _complete_map(run)
+    source_root = tmp_path / "api-source"
+    (source_root / "internal").mkdir(parents=True)
+    (source_root / "internal" / "service.go").write_text(
+        "package internal\nfunc Work() {}\n", "utf-8")
+    targets = json.loads((run / "targets.json").read_text("utf-8"))
+    targets["repos"][0]["path"] = str(source_root)
+    (run / "targets.json").write_text(json.dumps(targets), "utf-8")
+    _complete_findings(run)
+    doc = json.loads((run / "findings.json").read_text("utf-8"))
+    exact = f"api-11111111@{'a' * 40}:internal/service.go:2"
+    doc["findings"][0]["evidence"][0]["refs"] = [exact]
+    (run / "findings.json").write_text(json.dumps(doc), "utf-8")
+    findings.validate(run)
+
+    doc["findings"][0]["evidence"][0]["refs"] = [
+        f"api-11111111@{'b' * 40}:internal/service.go:2"]
+    (run / "findings.json").write_text(json.dumps(doc), "utf-8")
+    with pytest.raises(ValueError, match="revision mismatch"):
+        findings.validate(run)
+
+
+def test_findings_renderer_uses_run_language_map(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    _complete_map(run)
+    (run / "run-state.json").write_text(json.dumps({
+        "run_id": "zh-fixture", "project_id": "fixture", "language": "zh-CN",
+    }), "utf-8")
+    technical, pm = _complete_findings(run)
+    assert "## 主要问题" in technical
+    assert "**原子证据:**" in technical
+    assert "**已观察到的影响:**" in pm
+
+
+def test_final_audit_rejects_tampered_findings_projection(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    _complete_map(run)
+    sm.dump(sm.assemble(run), run)
+    module_render.write(run)
+    synthesis_input.write(run)
+    technical_findings, pm_findings = _complete_findings(run)
+    (run / "project-map.md").write_text("# Map\n\n" + module_render.render(run), "utf-8")
+    (run / "overview.md").write_text("# Overview\n\n" + pm_findings, "utf-8")
+    (run / "technical-overview.md").write_text(
+        "# Technical\n\n" + coverage_render.render(run)
+        + technical_findings.replace("one observed item", "two observed items"), "utf-8")
+
+    result = overview_audit.audit(run, require_module_map=True, require_reports=True)
+    assert any(row["check"] == "machine-verified-technical-findings"
+               and row["status"] == "fail" for row in result["checks"])
+
+    (run / "technical-overview.md").write_text(
+        "# Technical\n\n" + coverage_render.render(run)
+        + technical_findings + technical_findings, "utf-8")
+    result = overview_audit.audit(run, require_module_map=True, require_reports=True)
+    assert any(row["check"] == "machine-verified-technical-findings"
+               and row["status"] == "fail" for row in result["checks"])
 
 
 def test_capability_manifest_and_packet_are_byte_deterministic(tmp_path):
@@ -345,17 +513,35 @@ def test_final_audit_requires_exact_machine_coverage_block(tmp_path):
     sm.dump(sm.assemble(run), run)
     module_render.write(run)
     synthesis_input.write(run)
+    technical_findings, pm_findings = _complete_findings(run)
     (run / "project-map.md").write_text("# Map\n\n" + module_render.render(run), "utf-8")
-    (run / "overview.md").write_text("# Overview\n", "utf-8")
+    (run / "overview.md").write_text("# Overview\n\n" + pm_findings, "utf-8")
     (run / "technical-overview.md").write_text(
-        "# Technical\n\n" + coverage_render.render(run), "utf-8")
+        "# Technical\n\n" + coverage_render.render(run) + technical_findings, "utf-8")
     assert overview_audit.audit(
         run, require_module_map=True, require_reports=True)["status"] == "passed"
     (run / "technical-overview.md").write_text(
         "# Technical\n\n" + coverage_render.render(run).replace(
-            "`callgraph` | `complete`", "`callgraph` | `unavailable`"), "utf-8")
+            "`callgraph` | `complete`", "`callgraph` | `unavailable`")
+        + technical_findings, "utf-8")
     result = overview_audit.audit(run, require_module_map=True, require_reports=True)
     assert any(row["check"] == "machine-capability-coverage"
+               and row["status"] == "fail" for row in result["checks"])
+
+    (run / "technical-overview.md").write_text(
+        "# Technical\n\n" + coverage_render.render(run) * 2 + technical_findings,
+        "utf-8")
+    result = overview_audit.audit(run, require_module_map=True, require_reports=True)
+    assert any(row["check"] == "machine-capability-coverage"
+               and row["status"] == "fail" for row in result["checks"])
+
+    (run / "technical-overview.md").write_text(
+        "# Technical\n\n" + coverage_render.render(run) + technical_findings,
+        "utf-8")
+    (run / "project-map.md").write_text(
+        "# Map\n\n" + module_render.render(run) * 2, "utf-8")
+    result = overview_audit.audit(run, require_module_map=True, require_reports=True)
+    assert any(row["check"] == "machine-module-map"
                and row["status"] == "fail" for row in result["checks"])
 
 
@@ -365,12 +551,14 @@ def test_final_audit_rejects_plain_source_path_in_pm_overview(tmp_path):
     sm.dump(sm.assemble(run), run)
     module_render.write(run)
     synthesis_input.write(run)
+    technical_findings, pm_findings = _complete_findings(run)
     (run / "project-map.md").write_text("# Map\n\n" + module_render.render(run), "utf-8")
     file_label = next(node["label"] for node in json.loads(
         (run / "system-model.json").read_text())["nodes"] if node["kind"] == "file")
-    (run / "overview.md").write_text(f"# Overview\n\nObserved in {file_label}.\n", "utf-8")
+    (run / "overview.md").write_text(
+        f"# Overview\n\nObserved in {file_label}.\n\n" + pm_findings, "utf-8")
     (run / "technical-overview.md").write_text(
-        "# Technical\n\n" + coverage_render.render(run), "utf-8")
+        "# Technical\n\n" + coverage_render.render(run) + technical_findings, "utf-8")
     result = overview_audit.audit(run, require_module_map=True, require_reports=True)
     assert any(row["check"] == "pm-abstraction-boundary"
                and row["status"] == "fail" for row in result["checks"])
@@ -389,10 +577,11 @@ def test_final_audit_rejects_html_entity_obfuscation(tmp_path):
     sm.dump(sm.assemble(run), run)
     module_render.write(run)
     synthesis_input.write(run)
+    technical_findings, pm_findings = _complete_findings(run)
     (run / "project-map.md").write_text("# Map\n\n" + module_render.render(run), "utf-8")
-    (run / "overview.md").write_text("# Overv&#105;ew\n", "utf-8")
+    (run / "overview.md").write_text("# Overv&#105;ew\n\n" + pm_findings, "utf-8")
     (run / "technical-overview.md").write_text(
-        "# Technical\n\n" + coverage_render.render(run), "utf-8")
+        "# Technical\n\n" + coverage_render.render(run) + technical_findings, "utf-8")
     result = overview_audit.audit(run, require_module_map=True, require_reports=True)
     assert any(row["check"] == "pm-text-integrity" and row["status"] == "fail"
                for row in result["checks"])
@@ -409,10 +598,12 @@ def test_final_audit_rejects_encoded_links_and_malformed_mermaid(tmp_path, bad_t
     sm.dump(sm.assemble(run), run)
     module_render.write(run)
     synthesis_input.write(run)
+    technical_findings, pm_findings = _complete_findings(run)
     (run / "project-map.md").write_text("# Map\n\n" + module_render.render(run), "utf-8")
-    (run / "overview.md").write_text("# Overview\n\n" + bad_text + "\n", "utf-8")
+    (run / "overview.md").write_text(
+        "# Overview\n\n" + bad_text + "\n\n" + pm_findings, "utf-8")
     (run / "technical-overview.md").write_text(
-        "# Technical\n\n" + coverage_render.render(run), "utf-8")
+        "# Technical\n\n" + coverage_render.render(run) + technical_findings, "utf-8")
     result = overview_audit.audit(run, require_module_map=True, require_reports=True)
     assert result["status"] == "failed"
     assert any(row["check"] in {"pm-text-integrity", "mermaid-text-integrity"}

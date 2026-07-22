@@ -345,6 +345,17 @@ Re-key every finding's `affected_modules` to the finalized IDs (alias table
 maps old candidate IDs). A finding whose module dissolved attaches to the
 nearest enclosing module and says so in limitations.
 
+Write the result to `findings.json` using the exact atomic shape in
+`lenses/_shared.md`. Every `fact` is one claim and its `refs` support that fact only;
+never combine a verified statement with an uncited neighboring assertion. For metrics,
+copy the canonical value/scope from `workspace-metrics.json` and cite its stable
+`metric_ref`; do not recompute percentages. Then run:
+
+`project-analysis-wrapper finalize-findings --run <run-dir>`
+
+Do not write either report until this succeeds. It produces the protected
+`findings-summary.md` and `findings-pm-summary.md` blocks.
+
 ## Step 6 — write `technical-overview.md` then `overview.md`
 
 ### 6a. `technical-overview.md` (template: templates/technical-overview.md)
@@ -352,8 +363,11 @@ nearest enclosing module and says so in limitations.
 The full-detail companion. Carries: the complete provenance block (run-level +
 per-repo) from the discovery report; the standing scope disclaimer (and the
 inspection-only block when any target was dirty/non-git); complete analysis
-scope; EVERY finding in the shared shape ordered by priority (ties broken by
-confidence then breadth), systemic findings once with per-repo evidence rows;
+scope; the exact contents of `findings-summary.md` (including its machine markers),
+without paraphrasing, moving, or supplementing inside that protected block; systemic
+findings once with per-repo atomic evidence rows. Other narrative sections may summarize
+only these validated findings or independently cited facts; the protected block does not
+claim to certify every sentence elsewhere in the report;
 the per-module health table with metric columns (absence = `no concern
 observed` scoped to signals that ran, never "healthy"); the full
 integration-candidate disposition table (counts sum to total); the lens
@@ -443,19 +457,19 @@ exact order (they MUST match the template headings and the SKILL.md step-6 list)
    mapping (§ six questions). Never "healthy". DESCRIBES conditions only — no
    recommendation column, no "drill here next" marking, and row order implies no
    analysis priority beyond the cell values.
-14. **Findings by observed impact** — 5–7 MAX, system-level impact only, ordered
-   by OBSERVED ENGINEERING IMPACT (not product priority); each with claim /
-   affected modules / observed impact / evidence (link to the technical-overview
-   finding) / confidence / limitations. NO direction, NO priority label.
+14. **Findings by observed impact** — copy `findings-pm-summary.md` exactly,
+   including its machine markers. It is the bounded 5–7 finding projection linked
+   to the validated technical findings. Never add, merge, or paraphrase claims here.
 15. **Operational state** — observable evidence per aspect (tests · CI ·
    deployable units · DB migrations · rollback · health checks · logging ·
    metrics/tracing/alerts · failure recovery · dependency-vuln scanning);
    `unknown` where insufficient. NEVER infer reliable/unreliable from absence.
-16. **Coverage & unknowns** — TWO categories: (a) code COULD answer but this run
-   didn't — analysis-coverage gaps stated FACTUALLY (the gap + the signal that
-   would hold the answer, never an action request), (b) code CANNOT answer
-   (production traffic, usage, SLAs, ownership, criticality, incidents, roadmap,
-   prod-enablement). Never converted into recommendations.
+16. **Coverage & unknowns** — THREE categories: (a) evidence was available but
+   intentionally summarized or bounded in this report; (b) code could answer but the
+   producer was missing, failed, unsupported, or bounded before observing the answer;
+   (c) code cannot answer (production traffic, usage, SLAs, ownership, criticality,
+   incidents, roadmap, prod-enablement). State the cause and scope factually; never
+   convert an unknown into a recommendation.
 
 ## After writing
 

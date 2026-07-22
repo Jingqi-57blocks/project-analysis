@@ -85,19 +85,9 @@ not proof of enforcement.
 |---|---|---|---|---|
 | {{role}} | {{static / external-user-type / contextual}} | {{where declared}} | {{frontend-menu / route-guard / backend-middleware / policy-engine / inline-check — cited}} | {{observed / status unresolved}} |
 
-## Top problems
-
-{{ordered by priority, then confidence, then breadth of affected modules; systemic
-findings (one root cause across repos) appear ONCE with per-repo evidence rows beneath.
-Each rendered from the shared finding shape:}}
-
-### {{n}}. {{claim}} — `{{priority}}`
-- **Lens:** {{lens}} · **Confidence:** {{confidence}} · **Evidence basis:** {{the distinct bases used}}
-- **Affected modules:** {{module_ids}}
-- **Evidence:** {{citations_with_one_line_each}}
-- **Impact:** {{why_this_matters}}
-- **Limitations:** {{what_this_finding_cannot_see}}
-- **Suggested direction:** {{direction_not_prescription}}
+{{COPY findings-summary.md HERE EXACTLY, including BEGIN/END markers. Do not add,
+merge, paraphrase, or reorder any finding inside the protected block. Other narrative
+sections may summarize only validated findings or independently cited facts.}}
 
 ## Module health table
 

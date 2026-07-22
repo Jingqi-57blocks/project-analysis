@@ -197,16 +197,8 @@ closing row, but NEVER collapse a module that has a finding into such a row -->
 
 ## 14. Findings by observed impact
 
-At most 5–7, system-level impact only, ordered by **observed engineering impact — NOT
-product priority**. Each carries claim / affected modules / observed impact / evidence /
-confidence / limitations. NO direction, NO remediation, NO priority label (those live in
-technical-overview.md). Systemic findings appear ONCE, never N rows for one root cause.
-
-### {{n}}. {{claim}}
-- **Affected modules:** {{module_ids}}
-- **Observed impact:** {{what it costs when someone changes/operates this}}
-- **Evidence:** [`technical-overview.md#finding-{{n}}`](technical-overview.md) · **Confidence:** {{...}}
-- **Limitations:** {{what this finding cannot see}}
+{{COPY findings-pm-summary.md HERE EXACTLY, including BEGIN/END markers. Do not add,
+merge, paraphrase, or reorder any finding inside the protected block.}}
 
 ## 15. Operational state
 
@@ -219,11 +211,15 @@ NEVER infer reliable/unreliable from absence; absence is `unknown`, not a verdic
 
 ## 16. Coverage & unknowns
 
-**(a) Code could answer, this run did not** — analysis-coverage gaps, stated factually:
-{{each gap and the signal/knob that WOULD hold the answer — a statement of what is
-missing, never a request or recommendation to run it}}
+**(a) Evidence available but summarized here** — bounded report-level compression:
+{{what was intentionally summarized, where its complete deterministic artifact lives,
+and whether the summary changes any conclusion}}
 
-**(b) Code cannot answer** — outside repository evidence: production traffic, real usage,
+**(b) Code could answer, but this run could not** — producer coverage gaps:
+{{each missing/failed/unsupported/bounded producer and the exact affected scope; never
+describe a build-time limitation as a discretionary choice by this run}}
+
+**(c) Code cannot answer** — outside repository evidence: production traffic, real usage,
 SLAs, ownership, criticality, incident history, roadmap, whether a configured integration
 is enabled in production. {{list the ones this project raises, for a human owner. These
 are never turned into recommendations.}}

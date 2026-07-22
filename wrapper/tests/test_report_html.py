@@ -11,6 +11,7 @@ import pytest
 
 from analysis_wrapper.report_html import content_map
 from analysis_wrapper.report_html.generate import generate
+from analysis_wrapper.report_html.run_inputs import _html_markdown
 
 DEEP_MARKER = "UNIQUEDEEPMARKERZZ"
 TABLE_MARKER = "cellvaluexyz"
@@ -18,6 +19,18 @@ DIAGNOSIS_MARKER = "EXECUTIVEDIAGNOSISMARKER"
 CHANGEABILITY_MARKER = "CHANGEABILITYMARKER"
 FINDING_MARKER = "TOPFINDINGMARKER"
 UNKNOWN_MARKER = "KEYUNKNOWNMARKER"
+
+
+def test_html_projection_hides_findings_audit_markers_only():
+    source = ("before\n<!-- BEGIN MACHINE VERIFIED FINDINGS -->\ninside\n"
+              "<!-- END MACHINE VERIFIED FINDINGS -->\n"
+              "<!-- BEGIN MACHINE CAPABILITY COVERAGE -->\ncoverage\n"
+              "<!-- END MACHINE CAPABILITY COVERAGE -->\n"
+              "<!-- BEGIN MACHINE MODULE MAP -->\nmodules\n"
+              "<!-- END MACHINE MODULE MAP -->\nafter\n")
+    projected = _html_markdown(source)
+    assert "MACHINE" not in projected
+    assert "before\ninside\ncoverage\nmodules\nafter" in projected
 
 OVERVIEW_MD = f"""# Demo — Overview
 

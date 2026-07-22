@@ -206,8 +206,9 @@ anchored):
    it reuses only validated canonical checkpoints.
 3. **Run the grouped lenses** against the identical bounded
    `synthesis-input.json` plus the signal views named there. Return findings in the
-   shared shape against candidate IDs. Model effort may change diagnostic depth, not
-   deterministic capability coverage or the candidate universe.
+   atomic shared shape against candidate IDs: every evidence row is one falsifiable
+   fact with its own exact refs and basis. Model effort may change diagnostic depth,
+   not deterministic capability coverage or the candidate universe.
 4. **Finalize the structured module map, then `project-map.md`.** First write
    `module-map.json` using the contract in `synthesis.md`: module rows carry stable IDs,
    classification, aliases, and confidence; use compact structural `candidate_rules`
@@ -221,12 +222,17 @@ anchored):
    (`observed | inferred | unresolved | user-confirmed`), external systems and
    referenced-but-not-analyzed endpoints, and the disposition of EVERY integration
    candidate (`included | unresolved | excluded`, evidence each, none silently dropped).
-5. **Assign findings** to finalized module IDs (`synthesis.md` step 5).
+5. **Assign and finalize findings.** Re-key findings to finalized module IDs, write
+   `findings.json`, then run
+   `project-analysis-wrapper finalize-findings --run <run-dir>`. The wrapper rejects
+   unknown modules, invalid source/signal/metric refs, duplicate IDs, and unsupported
+   high-confidence findings, then writes `findings-summary.md` and
+   `findings-pm-summary.md`. These are deterministic report blocks, not editable prose.
 6. **Write `technical-overview.md` then `overview.md`** (templates:
    `templates/technical-overview.md`, `templates/overview.md`; rules: `synthesis.md`
    step 6). `technical-overview.md` is the full-detail companion: full provenance,
-   complete analysis scope, every finding in the shared shape (keeping `priority` and
-   `suggested_direction`), per-module health metrics, the integration-candidate
+   complete analysis scope, the exact `findings-summary.md` block (keeping `priority`
+   and `suggested_direction`), per-module health metrics, the integration-candidate
    disposition table, the endpoint-level interface/consumer inventory and the
    access-model / data-ownership backing, and lens coverage (per-lens aggregate +
    per-signal detail). `overview.md` is the PRIMARY, human-facing document —
@@ -240,14 +246,15 @@ anchored):
    (8) data ownership & lifecycle, (9) background execution, (10) external systems,
    (11) overall changeability diagnosis, (12) representative change-impact paths,
    (13) module changeability table, (14) findings by observed impact, (15) operational
-   state, (16) coverage & unknowns. Its main text carries no source paths, raw metrics,
+   state, (16) coverage & unknowns. Section 14 copies the exact
+   `findings-pm-summary.md` projection. Its main text carries no source paths, raw metrics,
    or tool jargon — claims link to technical-overview.md. Synthesis reorganizes cited
    material — it never creates new uncited claims.
 7. **Audit before completion.** After lens outputs are checked, mark `findings`; after
    `finalize-module-map` passes, mark `map`. Then write the reports and run
    `project-analysis-wrapper audit-overview --run <run-dir>`. It validates structured
    producer/consumer consistency, complete module accounting, full revision citations,
-   the exact machine-rendered capability block, and artifact containment without
+   the exact machine-rendered capability and findings blocks, and artifact containment without
    matching business prose. Only after it passes mark `overview` done. Then offer
    acceptance (sets the
    `current` pointer on the user's yes). Skip the offer

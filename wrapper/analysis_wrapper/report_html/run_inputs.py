@@ -10,6 +10,7 @@ identity/derived fields are read, so no absolute machine path can reach the UI.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,6 +20,15 @@ CANONICAL_DOCS: tuple[tuple[str, str, str], ...] = (
     ("technical-overview", "technical-overview.md", "Technical Overview"),
     ("project-map", "project-map.md", "Project Map"),
 )
+
+_MACHINE_COMMENT = re.compile(
+    r"(?m)^<!-- (?:BEGIN|END) MACHINE [A-Z][A-Z ]* -->\s*\n?"
+)
+
+
+def _html_markdown(text: str) -> str:
+    """Remove known audit-only marker lines from the HTML projection."""
+    return _MACHINE_COMMENT.sub("", text)
 
 
 @dataclass(frozen=True)
@@ -186,7 +196,7 @@ def load(run_dir: str | Path) -> RunInputs:
                     doc_id=doc_id,
                     filename=filename,
                     title=title,
-                    text=path.read_text(encoding="utf-8"),
+                    text=_html_markdown(path.read_text(encoding="utf-8")),
                 )
             )
 

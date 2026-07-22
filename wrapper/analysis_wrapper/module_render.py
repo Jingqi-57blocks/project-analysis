@@ -48,6 +48,8 @@ def write(run_dir: str | Path) -> Path:
 
 
 def extract(text: str) -> str:
+    if text.count(BEGIN) != 1 or text.count(END) != 1:
+        return ""
     start = text.find(BEGIN)
     end = text.find(END, start + len(BEGIN)) if start >= 0 else -1
     if start < 0 or end < 0:
