@@ -1,6 +1,6 @@
 [project]
 name = "analysis-wrapper"
-version = "0.3.0"
+version = "0.4.0"
 description = "Project Analysis tool-execution wrapper (stdlib core; pydriller only in the git_history lane)"
 requires-python = ">=3.11"
 dependencies = []

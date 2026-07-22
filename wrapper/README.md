@@ -57,6 +57,14 @@ an interrupted run cannot silently combine files from two revisions; the digest 
 uploaded and is not used to reuse another run.
 This record is not a cache key: there is no cross-run reuse, replay, CAS, or receipt graph.
 
+Discovery also writes `identity-map.json`, the canonical mapping from stable internal
+project/repository IDs to real display names, unambiguous repository references, and
+portable artifact keys. Ordinary repositories retain their basename; duplicate
+basenames use the shortest unique workspace-relative suffix. New consumers must use this
+mapping instead of adding hash-stripping rules; existing consumers migrate in follow-up
+changes. Completed older runs are resolved in memory from their recorded targets and
+discovery scope and are never rewritten.
+
 The output directory must not already exist and must be outside every target repository.
 Raw stdout/stderr stays under the self-gitignoring `signals/raw/` containment directory.
 Only `*.view.txt`, manifests, and the run summary may be read by an agent. The normalized

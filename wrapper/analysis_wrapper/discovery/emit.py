@@ -17,8 +17,13 @@ part of the enclosing repo).
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
+from .. import identity
+from ..executor import write_new_text
 from ..sanitize import redact
 from ..targetspec import (RepoTarget, TargetSpec, overlapping_repo_pairs,
                           path_contains, stable_repo_id)
@@ -360,11 +365,27 @@ def _produce_has_routes(repo_report: dict) -> bool:
 
 def write_stage1(run_dir: str | Path, spec: TargetSpec, report: dict) -> tuple[Path, Path]:
     """Persist the stage-1 checkpoint artifacts into the run directory."""
+    identity_mapping = identity.build(
+        spec,
+        workspace_root=report.get("workspace_root", ""),
+        project_id=report.get("project_id", ""),
+    )
     out = Path(run_dir).expanduser().resolve()
-    out.mkdir(parents=True, exist_ok=True)
+    if out.exists() or out.is_symlink():
+        raise ValueError(f"stage-1 run directory already exists: {out}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{out.name}.stage1-", dir=out.parent))
     targets_path = out / "targets.json"
     report_path = out / "discovery-report.json"
-    spec.save(targets_path)
-    report_path.write_text(
-        redact(json.dumps(report, indent=2, sort_keys=True)) + "\n", "utf-8")
+    try:
+        write_new_text(staging / "targets.json", spec.to_json())
+        write_new_text(
+            staging / "discovery-report.json",
+            redact(json.dumps(report, indent=2, sort_keys=True)) + "\n",
+        )
+        identity.write_mapping(staging, identity_mapping)
+        os.rename(staging, out)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     return targets_path, report_path
