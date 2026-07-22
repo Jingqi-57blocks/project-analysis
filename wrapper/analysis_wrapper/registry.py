@@ -311,7 +311,9 @@ def jscpd_multi(targets: list[RepoTarget]) -> ToolDef:
         argv_builder=lambda _t: [binary, "--min-tokens", "50", "--mode", "strict",
                                  "--reporters", "console", "--no-colors", "--ignore",
                                  ",".join(ignores), *roots],
-        output_validator=parsers.validate_jscpd, view_builder=parsers.jscpd_view,
+        output_validator=parsers.validate_jscpd,
+        view_builder=lambda _target, stdout, stderr: parsers.jscpd_multi_view(
+            targets, stdout, stderr),
         view_lines=220, applied_exclusions=ignores, cwd_mode="output", timeout_s=600,
         remove_env=NODE_ENV_REMOVALS,
     )
