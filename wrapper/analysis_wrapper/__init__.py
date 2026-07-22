@@ -7,6 +7,8 @@ One component, separate concerns:
   manifest   — revision-anchored per-signal manifests
   tooldefs   — data-driven tool definitions (plain data, not a plugin system)
   executor   — safe subprocess execution, classification, immutability check
+  profiles   — explicit bundled profile/provider contracts (not dynamic plugins)
+  run_provenance — simple per-run version/options/tool record (not a cache key)
 
 Boundary rule: this package invokes allowlisted tools, applies safe arguments,
 redacts, bounds output, records manifests, and validates STRUCTURED stage
@@ -14,4 +16,4 @@ contracts. It never interprets business prose, scores diagnostic quality, or
 decides whether a diagnosis is correct.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

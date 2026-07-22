@@ -125,6 +125,7 @@ def test_sweep_records_unauthorized_network_lanes_as_skipped(monkeypatch, tmp_pa
 
 
 def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path, target):
+    from analysis_wrapper import run_provenance
     run = tmp_path / "skill" / "output" / "sample" / "overview" / "run-1"
     run.mkdir(parents=True)
     TargetSpec([target], produced_by="cli-test").save(run / "targets.json")
@@ -149,6 +150,9 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
     state = lifecycle.RunState.create("run-1", "sample", TargetSpec([target]))
     state.mark("discovery")
     state.save(run)
+    run_provenance.write(run, run_provenance.create_document(
+        TargetSpec([target]), analyzer_root=tmp_path,
+        language="en", analyzed_at=state.analyzed_at))
 
     def sweep(_args, _spec, out):
         view = Path(out) / f"fixture-{target.repo_id}.view.txt"

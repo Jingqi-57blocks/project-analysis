@@ -145,12 +145,13 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
   only on explicit user acceptance). `latest_completed` is for inspection only — it is
   NEVER an implicit drill-down source. When an overview completes cleanly, offer
   acceptance in one word.
-- A drill-down may reuse an overview run only when **every** repo's HEAD, clean state,
-  and tool versions match the recorded provenance AND the analysis identity is unchanged
-  (analyzer/wrapper version, tool definitions, prompt/template version, run language,
-  confirmed-facts revision — compared as recorded fields, not hashes). Any mismatch →
-  run a new overview. Drill-downs write to `output/<project-id>/drilldown/<run-id>/`
-  with a `source_overview_run` link.
+- There is no cross-run cache, replay, content-addressed store, incremental planner, or
+  receipt graph. An interrupted overview may resume only its own canonical checkpoints,
+  and only while target state, analyzer version/state, and bound preparation options are
+  unchanged. Any mismatch requires a new overview. A later drill-down may reference an
+  accepted overview as immutable source evidence; it does not refresh or rewrite it.
+  NON-GIT targets use one local source-state digest solely to detect same-run changes;
+  it is not a cache identity and never enables reuse across runs.
 - **Dirty worktrees:** the overview proceeds as **inspection-only** (disclosed in the
   header, `repo@WORKTREE:` citations, no acceptance offer, no drill-down reuse, and
   never acceptable later either). Advise committing or stashing for an acceptable run.
@@ -167,8 +168,11 @@ overview). Drive it with the wrapper CLI (all paths absolute, skill-dir
 anchored):
 
 - `new-run --workspace <target> --skill-root <skill-dir> [--language ...]
-  [--run-id <label>] [--exclude ...]` — mints the run directory, runs discovery into it
+  [--model <actual-id>] [--effort <actual-level>] [--run-id <label>]
+  [--exclude ...]` — mints the run directory, runs discovery into it
   (stage 1 done), reports `inspection_only` and the next stage.
+  Hosts that cannot expose model or effort omit those flags; provenance records the
+  value as `unknown`, never as a guessed default.
 - `status --run <run-dir>` — prints the resume point and staleness (exit 5 +
   a per-repo `old -> new` list when the workspace moved). **Fresh + incomplete
   → resume from the printed next stage instead of starting over; stale → mint
@@ -194,7 +198,8 @@ anchored):
    never silently resolved). Write the run provenance block: per repo — path, HEAD,
    branch, credential-redacted remote URL, HEAD timestamp, `git describe`, dirty detail,
    submodule pins, history completeness (shallow flag, oldest commit, commit count);
-   run-level — analyzer version, model id, language, analyzed-at.
+   run-level — analyzer package/Git version and state, model id or `unknown`, effort or
+   `unknown`, language, analyzed-at, bound preparation options, and observed tool versions.
 2. **Prepare deterministic evidence through ONE wrapper-owned path.** Run
    `project-analysis-wrapper prepare-overview --run <run-dir>` (put global flags such as
    `--since` before the subcommand; add `--include-network` only with explicit user

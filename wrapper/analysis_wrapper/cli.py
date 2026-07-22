@@ -113,7 +113,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--out",
                         help="output directory (signals dir for run/sweep; "
                              "run dir for discover)")
-    result.add_argument("--scan-date", default=date.today().isoformat())
+    result.add_argument(
+        "--scan-date", default=None,
+        help="recorded scan date (default: today for a new stage; an interrupted "
+             "overview reuses its already-bound value)",
+    )
     result.add_argument(
         "--since", default=None,
         help="history window start (default: 24 months before today; the value "
@@ -172,6 +176,16 @@ def parser() -> argparse.ArgumentParser:
     new_run.add_argument("--skill-root", required=True,
                          help="skill base directory (owns state/ and output/)")
     new_run.add_argument("--language", default="zh-CN", choices=["en", "zh-CN"])
+    new_run.add_argument(
+        "--model", default="",
+        help="actual generation model when the host exposes it; otherwise the "
+             "run records 'unknown'",
+    )
+    new_run.add_argument(
+        "--effort", default="",
+        help="actual reasoning effort when the host exposes it; otherwise the "
+             "run records 'unknown'",
+    )
     new_run.add_argument(
         "--run-id", default="", metavar="LABEL",
         help="optional readable run label; the wrapper appends the 6-character "
@@ -276,8 +290,11 @@ def _state_dir_for(run_dir: Path) -> Path:
 
 
 def _new_run(args: argparse.Namespace) -> int:
-    from . import lifecycle
-    from .discovery import emit
+    from . import lifecycle, run_provenance
+    from .discovery import emit, self_exclusion
+    model = run_provenance.metadata_value(args.model, "model")
+    effort = run_provenance.metadata_value(args.effort, "effort")
+    analyzer_root = self_exclusion.resolve_analyzer_root(args.analyzer_root or None)
     exclude = [x.strip() for x in args.exclude.split(",") if x.strip()]
     spec, report = emit.discover(
         args.workspace, exclude_names=exclude,
@@ -290,10 +307,27 @@ def _new_run(args: argparse.Namespace) -> int:
         exists=lambda rid: (overview_root / rid).exists())
     run_dir = overview_root / run_id
     emit.write_stage1(run_dir, spec, report)
+    analyzer = run_provenance.analyzer_observation(analyzer_root)
     state = lifecycle.RunState.create(
         run_id, report["project_id"], spec, language=args.language,
-        analysis_identity={"wrapper": "project-analysis-wrapper"})
+        analysis_identity={
+            "wrapper": "project-analysis-wrapper",
+            "analyzer": analyzer,
+            "model": model,
+            "effort": effort,
+        })
     state.mark("discovery")
+    run_provenance.write(
+        run_dir,
+        run_provenance.create_document(
+            spec,
+            analyzer_root=analyzer_root,
+            language=args.language,
+            model=args.model,
+            effort=args.effort,
+            analyzed_at=state.analyzed_at,
+        ),
+    )
     state.save(run_dir)
     print(f"run: {run_dir}")
     print(f"inspection_only: {state.inspection_only}")
@@ -302,7 +336,7 @@ def _new_run(args: argparse.Namespace) -> int:
 
 
 def _new_drilldown(args: argparse.Namespace) -> int:
-    from . import lifecycle
+    from . import lifecycle, run_provenance
     root = Path(args.skill_root).expanduser().resolve()
     projects = sorted(p for p in (root / "output").iterdir() if p.is_dir()) \
         if (root / "output").is_dir() else []
@@ -347,7 +381,11 @@ def _new_drilldown(args: argparse.Namespace) -> int:
         print(f"drill-down refused: source run {source_id} is incomplete "
               f"(next stage: {source.next_stage()})", file=sys.stderr)
         return 2
+    source_provenance = run_provenance.load(source_dir)
+    source_spec = TargetSpec.load(source_dir / "targets.json")
     stale = source.staleness()
+    stale.extend(run_provenance.target_source_staleness(
+        source_provenance, source_spec))
     if stale:
         print("drill-down refused: source overview run is STALE — run a new "
               "overview. Moved repos:", file=sys.stderr)
@@ -366,6 +404,20 @@ def _new_drilldown(args: argparse.Namespace) -> int:
         run_id, source, args.module, language=args.language or None)
     state.mark("resolve")
     state.save(run_dir)
+    source_spec.save(run_dir / "targets.json")
+    generation = source_provenance.get("generation", {})
+    analyzer = source_provenance.get("analyzer", {})
+    run_provenance.write(
+        run_dir,
+        run_provenance.create_document(
+            source_spec,
+            analyzer_root=analyzer.get("root") or root,
+            language=state.language,
+            model=generation.get("model", ""),
+            effort=generation.get("effort", ""),
+            analyzed_at=state.analyzed_at,
+        ),
+    )
     (run_dir / "source_overview_run").write_text(
         f"{source.run_id}\n{source_dir}\n", "utf-8")
     print(f"run: {run_dir}")
@@ -434,6 +486,22 @@ def _load_object(path: Path) -> dict:
     return value
 
 
+def _assert_fresh_run(run: Path, *, require_provenance: bool = True) -> "object":
+    """Refuse to advance a real run after target/analyzer state changed."""
+    from . import lifecycle, run_provenance
+    state = lifecycle.RunState.load(run)
+    provenance = None
+    if require_provenance:
+        provenance = run_provenance.load(run)
+    stale = state.staleness()
+    if provenance is not None:
+        spec = TargetSpec.load(run / "targets.json")
+        stale.extend(run_provenance.target_source_staleness(provenance, spec))
+    if stale:
+        raise ValueError("run is stale; mint a new run: " + "; ".join(stale))
+    return state
+
+
 def _prepare_overview(args: argparse.Namespace) -> int:
     """Authoritative deterministic overview preparation (57B-47).
 
@@ -441,7 +509,8 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     run exactly once.  Producer paths never depend on model effort.
     """
     from . import (capabilities, coverage_render, lifecycle, module_map,
-                   overview_audit, synthesis_input, workspace_metrics)
+                   overview_audit, run_provenance, synthesis_input,
+                   workspace_metrics)
     from .callgraph import emit as cg_emit
     from .depmap import emit as dm_emit
     from .system_model.assemble import assemble, dump
@@ -449,10 +518,24 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     run = Path(args.run).expanduser().resolve()
     spec = TargetSpec.load(run / "targets.json")
     use_existing_run_directory(run, spec.repos)
-    state = lifecycle.RunState.load(run)
-    stale = state.staleness()
-    if stale:
-        raise ValueError("run is stale; mint a new run: " + "; ".join(stale))
+    state = _assert_fresh_run(run)
+    # Bind every option that can change deterministic evidence before deciding
+    # whether an existing canonical checkpoint may be reused.
+    provenance = run_provenance.load(run)
+    bound = provenance.get("preparation")
+    bound = bound if isinstance(bound, dict) else {}
+    args.scan_date = args.scan_date or bound.get("scan_date") or date.today().isoformat()
+    args.since = (args.since or bound.get("history_since")
+                  or (date.today() - timedelta(days=730)).isoformat())
+    allowed_hosts = [host.strip().lower() for host in args.allow_hosts.split(",")
+                     if host.strip()]
+    run_provenance.bind_preparation(run, {
+        "scan_date": args.scan_date,
+        "history_since": args.since,
+        "coupling_sample_cap": args.coupling_sample_cap,
+        "network_authorized": args.include_network,
+        "allowed_hosts": allowed_hosts,
+    })
     if spec.repos and not os.environ.get("WORKSPACE_ROOT"):
         os.environ["WORKSPACE_ROOT"] = os.path.commonpath(
             [str(Path(repo.path).expanduser().resolve()) for repo in spec.repos])
@@ -502,6 +585,8 @@ def _prepare_overview(args: argparse.Namespace) -> int:
         if name in completed:
             print(f"{name}: wrote {len(completed[name].repos)} lane result(s)")
 
+    run_provenance.refresh_tool_versions(run)
+
     model = assemble(run)
     dump(model, run)
     model_doc = model.to_dict()
@@ -531,6 +616,8 @@ def _finalize_module_map(args: argparse.Namespace) -> int:
     from . import module_map, module_render, overview_audit, synthesis_input
     from .system_model.assemble import assemble, dump
     run = Path(args.run).expanduser().resolve()
+    if (run / "run-state.json").is_file():
+        _assert_fresh_run(run)
     module_map.expand_candidate_rules(run)
     module_map.validate(run)
     model = assemble(run)
@@ -547,6 +634,9 @@ def _finalize_module_map(args: argparse.Namespace) -> int:
 
 def _finalize_findings(args: argparse.Namespace) -> int:
     from . import findings
+    run = Path(args.run).expanduser().resolve()
+    if (run / "run-state.json").is_file():
+        _assert_fresh_run(run)
     technical, pm = findings.write(args.run)
     count = len(findings.validate(args.run).get("findings", []))
     print(f"findings: {count} validated atomic finding(s)")
@@ -558,6 +648,8 @@ def _finalize_findings(args: argparse.Namespace) -> int:
 def _audit_overview(args: argparse.Namespace) -> int:
     from . import overview_audit
     run = Path(args.run).expanduser().resolve()
+    if (run / "run-state.json").is_file():
+        _assert_fresh_run(run)
     out = overview_audit.write(run, require_module_map=True, require_reports=True)
     result = _load_object(out)
     print(f"audit: {result['status']} ({result['failed_count']} failed checks)")
@@ -610,9 +702,19 @@ def _export(args: argparse.Namespace) -> int:
 
 
 def _lifecycle_cmd(args: argparse.Namespace) -> int:
-    from . import lifecycle
+    from . import lifecycle, run_provenance
     run_dir = Path(args.run).expanduser().resolve()
     state = lifecycle.RunState.load(run_dir)
+    if args.command in ("mark-stage", "rollback", "accept"):
+        # Completed pre-0.3 runs remain readable/exportable.  They cannot be
+        # reopened, advanced, or accepted under a provenance contract they
+        # never recorded.
+        provenance = run_provenance.load(run_dir)
+        stale = state.staleness()
+        spec = TargetSpec.load(run_dir / "targets.json")
+        stale.extend(run_provenance.target_source_staleness(provenance, spec))
+        if stale:
+            raise ValueError("run is stale; mint a new run: " + "; ".join(stale))
     if args.command == "mark-stage":
         state.mark(args.stage)
         state.save(run_dir)
@@ -628,6 +730,11 @@ def _lifecycle_cmd(args: argparse.Namespace) -> int:
         return 0
     if args.command == "status":
         stale = state.staleness()
+        provenance_path = run_provenance.path_for(run_dir)
+        if provenance_path.is_file():
+            provenance = run_provenance.load(run_dir)
+            spec = TargetSpec.load(run_dir / "targets.json")
+            stale.extend(run_provenance.target_source_staleness(provenance, spec))
         print(f"run: {state.run_id} (inspection_only: {state.inspection_only})")
         print(f"next stage: {state.next_stage() or '(complete)'}")
         for line in stale:
@@ -690,8 +797,10 @@ def main(argv: list[str] | None = None) -> int:
             marker = ("callgraph-coverage.json" if args.command == "callgraph"
                       else "imports/depmap-coverage.json")
             out = use_existing_run_directory(args.out, spec.repos, stage_marker=marker)
+            args.scan_date = args.scan_date or date.today().isoformat()
             return (_callgraph if args.command == "callgraph" else _depmap)(
                 args, spec, out)
+        args.scan_date = args.scan_date or date.today().isoformat()
         out = prepare_output_directory(args.out, spec.repos)
         results = _run_one(args, spec, out) if args.command == "run" else _sweep(args, spec, out)
         _record_summary(out, results)

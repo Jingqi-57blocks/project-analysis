@@ -5,6 +5,12 @@ The wrapper executes the allowlisted Phase-0 toolchain from a discovery-produced
 manifests, and produces sanitized bounded views. It does not interpret findings or
 validate reports.
 
+Technology extensibility uses a small bundled profile/provider contract. Definitions
+are explicitly imported and deterministically ordered; there is no entry-point loader,
+filesystem plugin discovery, target-owned extension, or executable rule configuration.
+Providers that need an external tool receive only the existing executor-backed
+`ToolAccess` boundary.
+
 Create the project-local virtual environment first. The host Python is used only
 to create the environment; all packages are installed into `wrapper/.venv`.
 
@@ -32,16 +38,24 @@ safe and updates the same environment. `wrapper/.venv` is gitignored. Do not run
 `pip install` with the host Python. Bootstrap never invokes `brew`, `npm`, `pnpm`,
 `nvm`, `go install`, or another system/language package manager.
 
-Network-capable definitions (`staticcheck`, `go list`, `osv-scanner`, and npm/yarn
-outdated) are skipped unless `--include-network` is explicitly supplied, including
-for the single-tool `run` command. Go tools may contact `GOPROXY` on a cold module
-cache; the wrapper pins those requests to `proxy.golang.org` and
-`sum.golang.org`, disables workspace/toolchain auto-dispatch, and never falls
-back directly to dependency hosts. OSV sends dependency coordinates to
+Network-capable definitions (`osv-scanner` and npm/yarn outdated) are skipped unless
+`--include-network` is explicitly supplied, including for the single-tool `run`
+command. The normal Go analysis lane pins `GOPROXY=off`, `GOSUMDB=off`,
+`-mod=readonly`, and the local toolchain; a cold module cache fails loudly and must be
+warmed separately under operator control. OSV sends dependency coordinates to
 `api.osv.dev`; outdated checks send
 package names and versions only to the fixed public npm/yarn registry. Target-owned
 registry configuration and remote dependency URLs are refused rather than followed.
 The orchestrator must obtain approval before this flag is used on private code.
+
+`new-run` writes `run-provenance.json`. Pass `--model` and `--effort` only when the
+host exposes their actual values; omitted values are recorded as `unknown`. The first
+`prepare-overview` binds scan date, history window, coupling cap, network authorization,
+and approved hosts. A changed target, analyzer, or bound option requires a fresh run.
+For a plain NON-GIT source folder, the wrapper records one local source-tree digest so
+an interrupted run cannot silently combine files from two revisions; the digest is not
+uploaded and is not used to reuse another run.
+This record is not a cache key: there is no cross-run reuse, replay, CAS, or receipt graph.
 
 The output directory must not already exist and must be outside every target repository.
 Raw stdout/stderr stays under the self-gitignoring `signals/raw/` containment directory.

@@ -125,8 +125,14 @@ class RunState:
             stages={s: "pending" for s in DRILLDOWN_STAGES},
             stage_order=list(DRILLDOWN_STAGES),
             provenance=list(source.provenance),
-            analysis_identity={"module": module,
-                               "source_overview_run": source.run_id},
+            analysis_identity={
+                **{
+                    key: value for key, value in source.analysis_identity.items()
+                    if key in {"wrapper", "analyzer", "model", "effort"}
+                },
+                "module": module,
+                "source_overview_run": source.run_id,
+            },
         )
 
     @classmethod
@@ -187,6 +193,13 @@ class RunState:
     def staleness(self) -> list[str]:
         """Names exactly which repos moved and which are dirty (empty = fresh)."""
         problems: list[str] = []
+        analyzer = self.analysis_identity.get("analyzer") \
+            if isinstance(self.analysis_identity, dict) else None
+        if isinstance(analyzer, dict):
+            # Imported lazily to keep legacy RunState loading lightweight and
+            # avoid making old completed runs depend on the new artifact.
+            from .run_provenance import analyzer_staleness
+            problems.extend(analyzer_staleness(analyzer))
         for row in self.provenance:
             path = row["path"]
             head_now = gitinfo.head(path)
