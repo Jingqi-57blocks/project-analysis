@@ -64,7 +64,15 @@ def _api_block(*, capped_routes: bool, table_available: bool,
             "unresolved": [{"kind": "gorm-access", "evidence": "internal/x.go:3"}],
             "registry_coverage": {},
             "notes": [_CAP_NOTE] if tables_capped else [],
-            "sql_coverage": {"available": sql_complete, "complete": sql_complete}},
+            "sql_coverage": {"available": sql_complete, "complete": sql_complete},
+            "detector_coverage": {
+                "complete": True,
+                "detected_families": ["gorm", "sql"],
+                "supported_families": ["gorm", "sql"],
+                "unsupported_families": [],
+                "extracted_families": (["gorm", "sql"] if table_available and sql_complete
+                                       else ["gorm"] if table_available else []),
+                "evidence": {}, "errors": []}},
         "access_model": {
             "available": True, "role_catalog": [{"name": "Admin"}],
             "role_catalog_names": ["Admin"],
@@ -107,6 +115,10 @@ def _web_block() -> dict:
         "table_evidence": {"available": True, "distinct_table_count": 0,
                            "tables": {}, "unresolved": [], "registry_coverage": {},
                            "sql_coverage": {"available": True, "complete": True},
+                           "detector_coverage": {
+                               "complete": True, "detected_families": [],
+                               "supported_families": [], "unsupported_families": [],
+                               "extracted_families": [], "evidence": {}, "errors": []},
                            "notes": []},
         "access_model": {"available": True, "role_catalog": [],
                          "role_catalog_names": [],

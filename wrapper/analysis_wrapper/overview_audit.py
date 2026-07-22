@@ -174,7 +174,9 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         cap_state = capability_by_id.get(capability_id, {}).get("status", "failed")
         part_state = coverage.get(partition_id, {}).get("status", "failed")
         valid = True
-        if cap_state == "not-applicable":
+        if capability_id == "data-model":
+            valid = cap_state == part_state
+        elif cap_state == "not-applicable":
             valid = part_state == "not-applicable"
         elif cap_state == "failed":
             valid = part_state == "failed"

@@ -45,6 +45,24 @@ _GO_METHOD_CONST = re.compile(r'return\s+constant\.(\w+)')
 _GO_TABLE_LIT = re.compile(r'\.Table\(\s*"([^"]+)"')
 _GO_TABLE_CONST = re.compile(r'\.Table\(\s*constant\.(\w+)')
 
+SUPPORTED_FAMILIES = ("gorm", "sequelize", "sql")
+_PACKAGE_FAMILIES = {
+    "sequelize": "sequelize",
+    "gorm.io/gorm": "gorm",
+    # These are intentionally detection-only until their extractors are wired.
+    "@prisma/client": "prisma",
+    "better-sqlite3": "sqlite-driver",
+    "drizzle-orm": "drizzle",
+    "knex": "knex",
+    "mongodb": "mongodb-native",
+    "mongoose": "mongoose",
+    "mysql": "mysql-driver",
+    "mysql2": "mysql-driver",
+    "pg": "postgres-driver",
+    "sqlite3": "sqlite-driver",
+    "typeorm": "typeorm",
+}
+
 
 @dataclass
 class TableEvidence:
@@ -53,6 +71,7 @@ class TableEvidence:
     unresolved: list = field(default_factory=list)      # bindings/accesses w/o a resolvable table
     registry_coverage: dict = field(default_factory=dict)
     sql_coverage: dict = field(default_factory=dict)
+    detector_coverage: dict = field(default_factory=dict)
     notes: list = field(default_factory=list)
     # ast-grep version/path/drift for this scan()-derived signal (57B-37). The
     # SQL sub-lane (SQLGlot) records its own coverage under ``sql_coverage``.
@@ -69,9 +88,87 @@ class TableEvidence:
             "unresolved": self.unresolved,
             "registry_coverage": self.registry_coverage,
             "sql_coverage": self.sql_coverage,
+            "detector_coverage": self.detector_coverage,
             "notes": self.notes,
             **self.astgrep,
         }
+
+
+def _detect_families(root: Path, tier2: set[str]) -> dict:
+    """Detect datastore families independently from extraction success.
+
+    The detector deliberately uses only manifests and file types.  Completing a
+    filesystem walk does not mean every datastore syntax is understood; unknown
+    families are therefore explicit instead of being mistaken for absence.
+    """
+    detected: set[str] = set()
+    evidence: dict[str, list[str]] = defaultdict(list)
+    errors: list[str] = []
+
+    def add(family: str, where: str) -> None:
+        detected.add(family)
+        if len(evidence[family]) < 8 and where not in evidence[family]:
+            evidence[family].append(where)
+
+    manifest_paths: list[Path] = []
+    stack = [root]
+    while stack:
+        base = stack.pop()
+        try:
+            entries = sorted(base.iterdir())
+        except OSError as exc:
+            errors.append(f"{base.relative_to(root) or '.'}: {exc}")
+            continue
+        for entry in entries:
+            if entry.is_dir():
+                rel0 = entry.relative_to(root).parts[0]
+                if entry.name not in _SKIP_DIRS and rel0 not in tier2 \
+                        and not entry.name.startswith("."):
+                    stack.append(entry)
+            elif entry.name in {"package.json", "go.mod"}:
+                manifest_paths.append(entry)
+
+    for path in sorted(manifest_paths):
+        name = path.name
+        rel = path.relative_to(root).as_posix()
+        try:
+            text = path.read_text("utf-8", errors="replace")
+        except OSError as exc:
+            errors.append(f"{rel}: {exc}")
+            continue
+        if name == "package.json":
+            try:
+                import json
+                payload = json.loads(text)
+                deps = set()
+                for key in ("dependencies", "devDependencies", "peerDependencies"):
+                    value = payload.get(key, {})
+                    if isinstance(value, dict):
+                        deps.update(str(item) for item in value)
+                for package, family in _PACKAGE_FAMILIES.items():
+                    if package in deps:
+                        add(family, rel)
+            except (ValueError, TypeError) as exc:
+                errors.append(f"{rel}: invalid JSON ({exc})")
+        else:
+            for package, family in _PACKAGE_FAMILIES.items():
+                if package in text:
+                    add(family, rel)
+
+    try:
+        for path in _iter_sql(root, tier2):
+            add("sql", path.relative_to(root).as_posix())
+    except OSError as exc:
+        errors.append(f"source scan: {exc}")
+
+    return {
+        "complete": not errors,
+        "detected_families": sorted(detected),
+        "supported_families": sorted(set(SUPPORTED_FAMILIES) & detected),
+        "unsupported_families": sorted(detected - set(SUPPORTED_FAMILIES)),
+        "evidence": {name: sorted(rows) for name, rows in sorted(evidence.items())},
+        "errors": errors,
+    }
 
 
 def _excluded(rel: str, tier2: set[str]) -> bool:
@@ -267,6 +364,7 @@ def generate(repo_path: str | Path, repo_id: str, *,
     ddl_kept = {d for d in tier2 if _DDL_EXEMPT.search(d)}
     scan_tier2 = tier2 - ddl_kept
     root = Path(repo_path).expanduser().resolve()
+    detector = _detect_families(root, scan_tier2)
     provenance = astgrep.probe().provenance()
     if not astgrep.available():
         sql_cov = _sql_coverage(root, defaultdict(lambda: defaultdict(list)),
@@ -276,8 +374,11 @@ def generate(repo_path: str | Path, repo_id: str, *,
         if sql_cov.get("evidence_truncated"):
             fc_notes.append("COVERAGE CAP: per-(table, access-type) evidence capped "
                             "at 8 sites — further sites were NOT recorded (sampled).")
+        extracted = ["sql"] if sql_cov.get("parsed_files", 0) else []
+        detector["extracted_families"] = extracted
         return TableEvidence(available=False, notes=fc_notes,
-                             sql_coverage=sql_cov, astgrep=provenance)
+                             sql_coverage=sql_cov, detector_coverage=detector,
+                             astgrep=provenance)
     # Sort matches into a stable order BEFORE classification so the per-bucket
     # 8-site cap keeps a deterministic sample (ast-grep scan order is not stable;
     # an unsorted cap would silently retain a different subset each run).
@@ -286,6 +387,15 @@ def generate(repo_path: str | Path, repo_id: str, *,
     tables, unresolved, registry, referenced, astgrep_truncated = \
         _classify_astgrep(matches, scan_tier2)
     sql_coverage = _sql_coverage(root, tables, scan_tier2, sql_dialect)
+    extracted_families = set()
+    if any(match.rule_id.startswith("sequelize-") for match in matches):
+        extracted_families.add("sequelize")
+    if any(match.rule_id.startswith("go-") or "gorm" in match.rule_id
+           for match in matches):
+        extracted_families.add("gorm")
+    if sql_coverage.get("parsed_files", 0):
+        extracted_families.add("sql")
+    detector["extracted_families"] = sorted(extracted_families)
     registry_coverage = {
         "typed_constants": len(registry),
         "referenced": len(referenced),
@@ -317,4 +427,5 @@ def generate(repo_path: str | Path, repo_id: str, *,
         tables={name: {a: ev for a, ev in buckets.items()}
                 for name, buckets in tables.items()},
         unresolved=unresolved, registry_coverage=registry_coverage,
-        sql_coverage=sql_coverage, notes=notes, astgrep=provenance)
+        sql_coverage=sql_coverage, detector_coverage=detector,
+        notes=notes, astgrep=provenance)

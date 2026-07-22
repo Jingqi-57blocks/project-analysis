@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from .callgraph import emit as callgraph_emit
+from .datastore_coverage import classify as classify_data_model
 from .depmap import emit as depmap_emit
 from .executor import replace_artifact_text
 from .sanitize import sanitize_text
@@ -177,22 +178,15 @@ def build(run_dir: str | Path) -> dict:
                 "canonical UI-to-route linkage artifact unavailable"
                 if ui_status == "unavailable" else ""),
     ))
-    table_count = sum(len(block.get("table_evidence", {}).get("tables", {}))
-                      for block in repos)
-    table_producers_complete = bool(repos) and all(
-        block.get("table_evidence", {}).get("available") for block in repos)
-    table_status = ("complete" if table_count else
-                    "not-applicable" if table_producers_complete else "unavailable")
+    data_model = classify_data_model(repos)
+    table_status = data_model.status
     records.append(_record(
         "data-model", status=table_status,
         applicable=table_status != "not-applicable", expected=[], run=run,
-        details=[{"repo_id": block.get("repo_id", ""),
-                  "status": ("complete" if block.get("table_evidence", {}).get("available")
-                             else "unavailable"),
-                  "data_store_count": len(block.get("table_evidence", {}).get("tables", {}))}
-                 for block in repos],
-        reason="complete extraction observed no data-store declarations"
-               if table_status == "not-applicable" else "",
+        details=list(data_model.details),
+        reason=("complete detector scan observed no datastore-family signals"
+                if table_status == "not-applicable" else
+                "; ".join(data_model.notes)),
     ))
 
     aggregate_rows = [r for r in records if r["status"] != "not-applicable"]
