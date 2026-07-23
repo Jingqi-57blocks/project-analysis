@@ -1,17 +1,22 @@
 """Minimal contracts shared by bundled profiles and capability providers.
 
 The contracts intentionally carry data and trusted, already-imported provider
-objects only.  Detection semantics and canonical evidence shapes are introduced
-by later architecture stages; this module does not implement a rule language.
+objects only; this module does not implement a rule language. Detection
+semantics live in :mod:`analysis_wrapper.profiles.detection`; the canonical
+evidence shapes a :class:`CapabilityResult` carries (``Coverage``/``Fact``)
+live in :mod:`analysis_wrapper.evidence` (57B-79), imported here rather than
+duplicated so profiles and providers share one vocabulary.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+from ..evidence.coverage import Coverage
+from ..evidence.facts import Fact
 
 if TYPE_CHECKING:
     from ..executor import SignalResult
@@ -36,13 +41,6 @@ def _validated_id(value: str, label: str) -> str:
             f"{label} must use 1-128 letters, digits, dot, underscore, or hyphen"
         )
     return value
-
-
-def _json_safe(value: Any, label: str) -> None:
-    try:
-        json.dumps(value, sort_keys=True)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{label} must contain JSON-safe data: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -104,12 +102,24 @@ class ArtifactRef:
 
 @dataclass(frozen=True)
 class CapabilityResult:
+    """One provider's evidence for one repository target.
+
+    ``coverage`` and ``facts`` carry the canonical evidence types from
+    :mod:`analysis_wrapper.evidence` (see 57B-79) rather than raw dicts, so a
+    result's applicability/status and its individual facts are validated and
+    JSON-safe by construction. ``facet_provenance`` records which detected
+    technology facet(s) (:class:`~analysis_wrapper.targetspec.TechnologyFacet`
+    profile IDs) produced or affect this result — informational lineage, not
+    part of the result's own identity.
+    """
+
     capability_id: str
     provider_id: str
     repo_id: str
-    facts: tuple[dict[str, Any], ...] = field(default_factory=tuple)
-    coverage: dict[str, Any] = field(default_factory=dict)
+    coverage: Coverage
+    facts: tuple[Fact, ...] = field(default_factory=tuple)
     artifact_refs: tuple[ArtifactRef, ...] = field(default_factory=tuple)
+    facet_provenance: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _validated_id(self.capability_id, "capability_id")
@@ -117,14 +127,15 @@ class CapabilityResult:
         _validated_id(self.repo_id, "repo_id")
         object.__setattr__(self, "facts", tuple(self.facts))
         object.__setattr__(self, "artifact_refs", tuple(self.artifact_refs))
-        if not all(isinstance(item, dict) for item in self.facts):
-            raise ValueError("capability facts must be JSON object values")
-        if not isinstance(self.coverage, dict):
-            raise ValueError("capability coverage must be a JSON object")
+        object.__setattr__(self, "facet_provenance", tuple(self.facet_provenance))
+        if not isinstance(self.coverage, Coverage):
+            raise ValueError("capability coverage must be a Coverage value")
+        if not all(isinstance(item, Fact) for item in self.facts):
+            raise ValueError("capability facts must be Fact values")
         if not all(isinstance(item, ArtifactRef) for item in self.artifact_refs):
             raise ValueError("artifact_refs must contain ArtifactRef values")
-        _json_safe(self.facts, "capability facts")
-        _json_safe(self.coverage, "capability coverage")
+        for profile_id in self.facet_provenance:
+            _validated_id(profile_id, "facet_provenance entry")
 
 
 @runtime_checkable
