@@ -547,7 +547,7 @@ def _prepare_overview(args: argparse.Namespace) -> int:
                   or (date.today() - timedelta(days=730)).isoformat())
     allowed_hosts = [host.strip().lower() for host in args.allow_hosts.split(",")
                      if host.strip()]
-    run_provenance.bind_preparation(run, {
+    provenance = run_provenance.bind_preparation(run, {
         "scan_date": args.scan_date,
         "history_since": args.since,
         "coupling_sample_cap": args.coupling_sample_cap,
@@ -603,6 +603,14 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     for name in ("callgraph", "dependency-map"):
         if name in completed:
             print(f"{name}: wrote {len(completed[name].repos)} lane result(s)")
+
+    from . import identity
+    from .profiles.execution import run_provider_stage
+    provider_summary = run_provider_stage(
+        run, spec, identity.load(run), scan_date=args.scan_date,
+        network_authorized=args.include_network, provenance=provenance)
+    print(f"providers: {provider_summary['executions']} execution(s), "
+          f"{provider_summary['failed']} failed")
 
     run_provenance.refresh_tool_versions(run)
 
