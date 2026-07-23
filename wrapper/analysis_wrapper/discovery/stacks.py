@@ -14,6 +14,15 @@ from ..profiles.bundled import bundled_registry
 from ..profiles.detection import detect as detect_facets
 from ..profiles.detection import gomod_requires
 
+# This legacy display block's evidence surface is FROZEN to these facet
+# kinds. New facet kinds (``datastore`` in 57B-80; more to come in later
+# migrations, e.g. deployment/protocol) are additive in the bundled
+# ``technology_facets`` list ONLY — they must never alter this legacy
+# stacks/evidence block, which deterministic parity compares byte-for-byte.
+STACK_REPORT_FACET_KINDS = frozenset({
+    "language", "ecosystem", "framework", "repository-trait",
+})
+
 
 @dataclass
 class StackReport:
@@ -36,7 +45,8 @@ def detect(repo_path: str | Path) -> StackReport:
     ]
     evidence = sorted({
         f"{facet.profile_id}: {item}"
-        for facet in detected.facets for item in facet.evidence
+        for facet in detected.facets if facet.kind in STACK_REPORT_FACET_KINDS
+        for item in facet.evidence
     })
     evidence.extend(detected.notes)
     return StackReport(
