@@ -58,23 +58,40 @@ def _literal_value(value: str) -> str | None:
 def _quoted_var(text: str, value: str) -> bool:
     return bool(value and re.search(r"['\"`]" + re.escape(value) + r"['\"`]", text))
 
+# Extraction knowledge stays here: which families this module can actually
+# turn into tables/access sites, independent of which families the bundled
+# datastore.* profiles merely DETECT (that catalog also carries seven
+# detection-only families this module has no extractor for yet).
 SUPPORTED_FAMILIES = ("gorm", "mongodb-native", "mongoose", "sequelize", "sql")
-_PACKAGE_FAMILIES = {
-    "sequelize": "sequelize",
-    "gorm.io/gorm": "gorm",
-    # These are intentionally detection-only until their extractors are wired.
-    "@prisma/client": "prisma",
-    "better-sqlite3": "sqlite-driver",
-    "drizzle-orm": "drizzle",
-    "knex": "knex",
-    "mongodb": "mongodb-native",
-    "mongoose": "mongoose",
-    "mysql": "mysql-driver",
-    "mysql2": "mysql-driver",
-    "pg": "postgres-driver",
-    "sqlite3": "sqlite-driver",
-    "typeorm": "typeorm",
-}
+
+
+def _package_families() -> dict[str, str]:
+    """Package/module-path -> datastore family, derived from the bundled
+    ``datastore.*`` profiles' OWN fingerprints (57B-80 PR3) rather than a
+    second, hand-maintained literal: profiles own the fingerprint DATA
+    (profile_id ``datastore.<family>`` -> family; each of that profile's
+    ``package-dependency``/``go-require`` fingerprint values -> that same
+    family), this module owns only which families it can EXTRACT
+    (``SUPPORTED_FAMILIES``) and how. The ``datastore.sql`` profile's
+    ``source-extension`` fingerprint is intentionally excluded here — ``sql``
+    has no package to key on; its detection is the raw-file scan in
+    ``_iter_sql`` below.
+
+    Function-local import: a module-level one would risk the known
+    profiles<->discovery circular-import trap (mirrors
+    ``DatastoreEvidenceProvider.run``'s own function-local import of this
+    module, in reverse).
+    """
+    from ..profiles.bundled import BUNDLED_PROFILES
+    families: dict[str, str] = {}
+    for profile in BUNDLED_PROFILES:
+        if profile.kind != "datastore":
+            continue
+        family = profile.profile_id.split(".", 1)[1]
+        for fingerprint in profile.fingerprints:
+            if fingerprint.kind in ("package-dependency", "go-require"):
+                families[fingerprint.value] = family
+    return families
 
 
 @dataclass
@@ -120,6 +137,7 @@ def _detect_families(root: Path, tier2: set[str]) -> dict:
     detected: set[str] = set()
     evidence: dict[str, list[str]] = defaultdict(list)
     errors: list[str] = []
+    package_families = _package_families()
 
     def add(family: str, where: str) -> None:
         detected.add(family)
@@ -161,13 +179,13 @@ def _detect_families(root: Path, tier2: set[str]) -> dict:
                     value = payload.get(key, {})
                     if isinstance(value, dict):
                         deps.update(str(item) for item in value)
-                for package, family in _PACKAGE_FAMILIES.items():
+                for package, family in package_families.items():
                     if package in deps:
                         add(family, rel)
             except (ValueError, TypeError) as exc:
                 errors.append(f"{rel}: invalid JSON ({exc})")
         else:
-            for package, family in _PACKAGE_FAMILIES.items():
+            for package, family in package_families.items():
                 if package in text:
                     add(family, rel)
 

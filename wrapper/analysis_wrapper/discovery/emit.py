@@ -32,7 +32,7 @@ from ..targetspec import (RepoTarget, TargetSpec, overlapping_repo_pairs,
                           path_contains, stable_repo_id)
 from . import (access_model, candidates, deploy_units, generated, integrations,
                inventory, liveness, modules, pm, provenance, self_exclusion,
-               stacks, tables)
+               stacks)
 
 
 def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
@@ -130,7 +130,6 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
         path, repo_id, dependencies=deps, go_requires=requires,
         tier2_exclusions=tier2.exclusions)
     integ = integrations.generate(path, repo_id, tier2_exclusions=tier2.exclusions)
-    table_ev = tables.generate(path, repo_id, tier2_exclusions=tier2.exclusions)
     access = access_model.generate(path, repo_id, tier2_exclusions=tier2.exclusions)
     signals = modules.extract(path, tier2_exclusions=tier2.exclusions)
 
@@ -160,7 +159,6 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
         "module_signals": signals.to_dict(),
         "candidate_notes": cand.notes,
         "integration_evidence": integ.to_dict(),
-        "table_evidence": table_ev.to_dict(),
         "access_model": access.to_dict(),
         "deployable_units": deploy_units.generate(path, tier2.exclusions).to_dict(),
     }

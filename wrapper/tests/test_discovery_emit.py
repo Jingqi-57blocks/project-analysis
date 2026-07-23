@@ -99,10 +99,14 @@ def test_datastore_facet_is_additive_only_and_never_leaks_into_legacy_stacks_blo
 def test_scan_derived_signals_record_astgrep_version(tmp_path):
     # Every ast-grep scan()-derived signal in the discovery report carries the
     # runtime version/path/drift, using the executor path's field names (57B-37).
+    # table_evidence moved off the discovery report in 57B-80 PR3 (it's now
+    # the datastore-evidence provider's own artifact); its OWN astgrep
+    # provenance is pinned by the exact to_dict() equality check in
+    # test_datastore_evidence_provider.py instead.
     ws = _workspace(tmp_path)
     _, report = emit.discover(ws)
     for repo in report["repos"]:
-        for key in ("integration_evidence", "table_evidence", "access_model"):
+        for key in ("integration_evidence", "access_model"):
             sig = repo[key]
             assert sig["tool"] == "ast-grep"
             assert {"tool_version", "tool_path", "version_drift"} <= set(sig)
@@ -254,6 +258,14 @@ def test_canonical_routes_and_datastores_bypass_summary_cap(tmp_path):
     run = tmp_path / "run"
     spec, report = emit.discover(ws)
     emit.write_stage1(run, spec, report)
+    # 57B-80 PR3: data-store nodes now come from the datastore-evidence
+    # capability provider's own artifacts, not straight from discovery-report
+    # — run the provider stage (exactly what prepare-overview does) before
+    # assembling, so system_model has something to read.
+    from analysis_wrapper import identity
+    from analysis_wrapper.profiles.execution import run_provider_stage
+    run_provider_stage(run, spec, identity.load(run), scan_date="2026-07-23",
+                       network_authorized=False, provenance={})
     model = system_model.assemble(run).to_dict()
     candidates = module_map.build_candidates(run, model)
 
