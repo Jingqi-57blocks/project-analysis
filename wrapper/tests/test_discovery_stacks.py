@@ -76,6 +76,18 @@ def test_vendored_manifests_ignored(tmp_path):
     assert "vue" not in report.frameworks
 
 
+def test_datastore_dependency_does_not_appear_in_frameworks_or_stacks_evidence(tmp_path):
+    """57B-80 PR1: datastore.* facets are additive in technology_facets
+    ONLY — this legacy stacks block (frameworks display list, kind ==
+    "framework" only, AND its evidence roll-up) is frozen to the pre-PR
+    facet kinds and must not leak a datastore dependency like sequelize."""
+    _write(tmp_path / "package.json", json.dumps({"dependencies": {"sequelize": "6"}}))
+    _write(tmp_path / "index.js", "1;")
+    report = detect(tmp_path)
+    assert "sequelize" not in report.frameworks
+    assert not any("datastore" in e for e in report.evidence)
+
+
 def test_deterministic_output(tmp_path):
     _write(tmp_path / "package.json", json.dumps({"dependencies": {"react": "18", "express": "4"}}))
     _write(tmp_path / "index.js", "1;")

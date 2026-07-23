@@ -109,9 +109,17 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
             registry.profile(facet.profile_id).display_name
             for facet in detected.facets if facet.kind == "framework"
         ),
+        # This legacy display block's evidence surface is FROZEN to
+        # stacks.STACK_REPORT_FACET_KINDS (language/ecosystem/framework/
+        # repository-trait). New facet kinds (datastore in 57B-80; more in
+        # later migrations) are additive in technology_facets ONLY — they
+        # must never alter this legacy stacks block, which deterministic
+        # parity compares byte-for-byte.
         evidence=sorted({
             f"{facet.profile_id}: {item}"
-            for facet in detected.facets for item in facet.evidence
+            for facet in detected.facets
+            if facet.kind in stacks.STACK_REPORT_FACET_KINDS
+            for item in facet.evidence
         }),
     )
     pm_report = pm.identify(path)

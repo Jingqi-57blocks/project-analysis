@@ -195,9 +195,15 @@ def detect(repo_path: str | Path) -> DetectionReport:
         directory: set(gomod_requires(directory / "go.mod"))
         for directory in project_dirs if (directory / "go.mod").is_file()
     }
+    # Scoped to kind == "language": a non-language profile (e.g. a datastore
+    # profile fingerprinting on ".sql") may carry its own source-extension
+    # fingerprint for its own facet evidence, but must not exempt those files
+    # from the unclassified_file_inventory — that inventory only tracks what
+    # no LANGUAGE profile claims.
     claimed_extensions = {
         fingerprint.value.lower()
         for profile in registry.profiles
+        if profile.kind == "language"
         for fingerprint in profile.fingerprints
         if fingerprint.kind == "source-extension"
     }
@@ -258,7 +264,18 @@ def detect(repo_path: str | Path) -> DetectionReport:
                     continue
                 evidence.update(_relative(root, path) for path in hits)
                 scopes.add(_scope(root, directory, source_extensions))
-                language_hits_by_scope.setdefault(directory, set()).add(profile.profile_id)
+                # Scoped to kind == "language" (consistent with the
+                # manifest-file/config-file registration above): a
+                # non-language profile's source hits (e.g. datastore.sql)
+                # must still produce that profile's own facet below, but must
+                # not register into language_hits_by_scope — doing so would
+                # suppress the language.javascript/language.typescript
+                # manifest-default fallback in a dir holding package.json + a
+                # non-language source file but no JS/TS sources, silently
+                # dropping a language facet.
+                if profile.kind == "language":
+                    language_hits_by_scope.setdefault(directory, set()).add(
+                        profile.profile_id)
         if evidence:
             facets.append(TechnologyFacet(
                 profile_id=profile.profile_id, kind=profile.kind,

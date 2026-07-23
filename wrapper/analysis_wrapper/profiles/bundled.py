@@ -52,6 +52,38 @@ _GO_FRAMEWORKS = (
     ("gorm", "gorm.io/gorm"),
 )
 
+# Datastore/ORM catalog (57B-80 PR1). (a) The package-derived families below
+# mirror the extraction plane's family map in ``discovery/tables.py``
+# (``_PACKAGE_FAMILIES``); ``sql`` is the source-extension family from that
+# module's ``SUPPORTED_FAMILIES`` instead (it has no package to key on). PR3
+# of 57B-80 will derive ``_PACKAGE_FAMILIES``/``SUPPORTED_FAMILIES`` FROM
+# these profiles instead of maintaining both by hand. The five SUPPORTED
+# families carry ("data-model",) because an extractor already runs for them
+# in ``discovery/tables.py``; the rest are detection-only until an extractor
+# is wired, matching that module's own "intentionally detection-only"
+# comment. (b) ``framework.gorm`` above is capability-less (kept out of
+# route-inventory) and coexists DELIBERATELY with ``datastore.gorm`` below:
+# same ``gorm.io/gorm`` package, two independent capability lenses (route
+# plane vs. datastore plane).
+_DATASTORE_SUPPORTED = (
+    ("sequelize", "package-dependency", "sequelize"),
+    ("gorm", "go-require", "gorm.io/gorm"),
+    ("mongodb-native", "package-dependency", "mongodb"),
+    ("mongoose", "package-dependency", "mongoose"),
+    ("sql", "source-extension", ".sql"),
+)
+_DATASTORE_DETECTION_ONLY = (
+    ("prisma", (("package-dependency", "@prisma/client"),)),
+    ("typeorm", (("package-dependency", "typeorm"),)),
+    ("knex", (("package-dependency", "knex"),)),
+    ("drizzle", (("package-dependency", "drizzle-orm"),)),
+    ("sqlite-driver", (("package-dependency", "better-sqlite3"),
+                        ("package-dependency", "sqlite3"))),
+    ("mysql-driver", (("package-dependency", "mysql"),
+                       ("package-dependency", "mysql2"))),
+    ("postgres-driver", (("package-dependency", "pg"),)),
+)
+
 
 BUNDLED_PROFILES: tuple[Profile, ...] = (
     _profile(
@@ -100,6 +132,17 @@ BUNDLED_PROFILES: tuple[Profile, ...] = (
             (() if profile_id == "gorm" else ("route-inventory",)),
         )
         for profile_id, dependency in _GO_FRAMEWORKS
+    ),
+    *tuple(
+        _profile(
+            f"datastore.{profile_id}", "datastore", profile_id,
+            ((fingerprint_kind, fingerprint_value),), ("data-model",),
+        )
+        for profile_id, fingerprint_kind, fingerprint_value in _DATASTORE_SUPPORTED
+    ),
+    *tuple(
+        _profile(f"datastore.{profile_id}", "datastore", profile_id, fingerprints)
+        for profile_id, fingerprints in _DATASTORE_DETECTION_ONLY
     ),
 )
 BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
