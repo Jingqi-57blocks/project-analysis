@@ -109,6 +109,39 @@ def test_synthetic_provider_runs_through_the_contract(target, tmp_path):
     assert result.artifact_refs[0].path == "evidence/synthetic.json"
 
 
+def test_run_context_identities_is_optional_and_validated(target, tmp_path):
+    """57B-81: RunContext gains an additive ``identities`` field so a
+    provider can resolve its target's readable reference/artifact key
+    without reaching outside RunContext + RepoTarget. Omitting it keeps
+    every pre-existing RunContext constructor working unchanged."""
+    context = RunContext(
+        targets=TargetSpec([target]), output_dir=tmp_path,
+        scan_date="2026-07-22", network_authorized=False,
+        provenance={"schema_version": 1}, tool_access=object(),
+    )
+    assert context.identities is None
+
+    identities = identity.build(
+        TargetSpec([target]), workspace_root=tmp_path,
+        project_id=stable_repo_id(str(tmp_path)))
+    context_with_identities = RunContext(
+        targets=TargetSpec([target]), output_dir=tmp_path,
+        scan_date="2026-07-22", network_authorized=False,
+        provenance={"schema_version": 1}, tool_access=object(),
+        identities=identities,
+    )
+    assert context_with_identities.identities is identities
+    assert context_with_identities.identities.reference_for(target.repo_id) == "widget-api"
+
+    with pytest.raises(ValueError, match="IdentityMap"):
+        RunContext(
+            targets=TargetSpec([target]), output_dir=tmp_path,
+            scan_date="2026-07-22", network_authorized=False,
+            provenance={"schema_version": 1}, tool_access=object(),
+            identities="not-an-identity-map",
+        )
+
+
 def test_result_data_and_artifact_paths_fail_closed(target):
     with pytest.raises(ValueError, match="JSON-safe"):
         Fact(fact_id="fact:0000000000000001", kind="observation",

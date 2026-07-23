@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from ..evidence.coverage import Coverage
 from ..evidence.facts import Fact
+from ..identity import IdentityMap
 
 if TYPE_CHECKING:
     from ..executor import SignalResult
@@ -153,12 +154,30 @@ class ToolAccess(Protocol):
 
 @dataclass(frozen=True)
 class RunContext:
+    """Everything one provider run needs for one (provider, target) pair.
+
+    ``identities`` gives a provider its only path to the run's IdentityMap:
+    a provider receives just this context plus its ``RepoTarget`` and cannot
+    reach the map any other way. Use ``context.identities.reference_for(
+    target.repo_id)`` for a target's human-readable ``repository_ref`` (e.g.
+    in a ``SourceRef``) and ``context.identities.artifact_key_for(...)`` for
+    an artifact filename — never derive either from ``target.path``'s
+    basename, which collides across duplicate-basename workspaces (57B-86).
+    Optional and defaulted to ``None`` so existing identity-less unit
+    contexts keep constructing unchanged.
+    """
+
     targets: "TargetSpec"
     output_dir: Path
     scan_date: str
     network_authorized: bool
     provenance: dict[str, Any]
     tool_access: ToolAccess
+    identities: "IdentityMap | None" = None
+
+    def __post_init__(self) -> None:
+        if self.identities is not None and not isinstance(self.identities, IdentityMap):
+            raise ValueError("RunContext identities must be an IdentityMap or None")
 
 
 @runtime_checkable

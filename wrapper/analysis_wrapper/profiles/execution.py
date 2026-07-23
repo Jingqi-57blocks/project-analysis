@@ -188,7 +188,7 @@ def run_provider_stage(
     context = RunContext(
         targets=spec, output_dir=run, scan_date=scan_date,
         network_authorized=network_authorized, provenance=provenance,
-        tool_access=access,
+        tool_access=access, identities=identities,
     )
     results, rows = run_providers(bundled_registry(), context, identities)
     write_execution_record(
