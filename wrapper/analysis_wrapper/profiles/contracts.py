@@ -182,6 +182,26 @@ class RunContext:
 
 @runtime_checkable
 class CapabilityProvider(Protocol):
+    """A provider MAY additionally declare ``universal: bool = True`` as a
+    plain attribute (NOT part of this Protocol — adding it here would force
+    every already-conforming provider, including every test double across the
+    suite, to declare it just to keep passing ``isinstance`` checks). The
+    execution loop reads it permissively via
+    ``getattr(provider, "universal", False)``, so a provider that omits the
+    attribute keeps its existing purely facet-gated selection unchanged.
+
+    Set ``universal = True`` when a provider's OWN full-tree scan is itself
+    the honest absence proof behind a ``not-applicable`` verdict for its
+    capability (57B-80 PR2's ``datastore-evidence`` provider; future
+    repository-wide providers such as 57B-82's git/deploy ones) — i.e. the
+    provider must run on every repository regardless of which facets were
+    detected there, not only the ones already carrying one of its linked
+    profiles. ``profile_ids`` still governs which detected facets are
+    disclosed as ``matched_profiles``/``facet_provenance`` on a given run;
+    universal selection only widens WHEN the provider runs, never what it
+    reports having matched.
+    """
+
     provider_id: str
     capability_id: str
     profile_ids: tuple[str, ...]

@@ -1,4 +1,4 @@
-"""57B-80 PR1: the datastore/ORM profile catalog (data-only, no provider yet).
+"""57B-80: the datastore/ORM profile catalog.
 
 Two concerns:
 
@@ -12,8 +12,14 @@ Two concerns:
    (``datastore.sql``) must not perturb the language plane: this file pins
    the two ``detection.py`` scoping fixes (``claimed_extensions`` and
    ``language_hits_by_scope`` restricted to ``kind == "language"``) and
-   confirms datastore facets stay invisible to lane-provider selection,
-   ``profiles.selection`` predicates, and the frameworks display list.
+   confirms datastore facets stay invisible to the (callgraph/depmap)
+   lane providers, ``profiles.selection`` predicates, and the frameworks
+   display list. PR1 pinned that NO provider yet matched any datastore.*
+   profile; 57B-80 PR2 adds ``datastore-evidence`` (see
+   ``test_exactly_one_bundled_provider_matches_the_datastore_catalog``
+   below, and its own dedicated coverage in
+   ``test_datastore_evidence_provider.py``), so that invariant is now
+   deliberately the opposite one.
 """
 
 from __future__ import annotations
@@ -149,18 +155,33 @@ def test_datastore_only_facets_do_not_perturb_selection_predicates(tmp_path):
     assert selection.family(target) == "other"
 
 
-def test_no_bundled_provider_matches_a_datastore_only_target():
-    """Mirrors profiles.execution.run_providers's matched-profile computation
-    (see execution.py:112-116) without executing anything: no existing lane
-    provider is linked to any datastore.* profile."""
+def test_exactly_one_bundled_provider_matches_the_datastore_catalog():
+    """PR1 pinned "no provider exists yet" for every datastore.* profile;
+    57B-80 PR2 deliberately ends that by adding ``datastore-evidence``, so
+    this test now pins the OPPOSITE, equally explicit invariant: exactly one
+    bundled provider is linked to datastore.* profiles (the five SUPPORTED
+    ones, per ``discovery/tables.py``'s own extractor set — the seven
+    detection-only ones carry no capability at all, so no provider could
+    validly link to them; see ``ProfileRegistry``'s own capability-linkage
+    check), and no OTHER bundled provider (still just the four lane
+    providers) unexpectedly matches any of them."""
     registry = bundled_registry()
     datastore_ids = {
         profile.profile_id for profile in registry.profiles if profile.kind == "datastore"
     }
     assert datastore_ids  # sanity: the catalog under test is non-empty
-    for provider in registry.providers:
-        matched = set(provider.profile_ids) & datastore_ids
-        assert not matched, f"{provider.provider_id!r} unexpectedly matches {matched}"
+    matches_by_provider = {
+        provider.provider_id: set(provider.profile_ids) & datastore_ids
+        for provider in registry.providers
+    }
+    matching_providers = {
+        provider_id: matched for provider_id, matched in matches_by_provider.items() if matched
+    }
+    assert set(matching_providers) == {"datastore-evidence"}
+    assert matching_providers["datastore-evidence"] == {
+        "datastore.sequelize", "datastore.gorm", "datastore.mongodb-native",
+        "datastore.mongoose", "datastore.sql",
+    }
 
 
 def test_no_datastore_profile_has_kind_framework():

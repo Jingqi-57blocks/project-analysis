@@ -363,11 +363,13 @@ def test_legitimate_empty_result_is_completed_not_failed(tmp_path):
     assert facts_view == {"total_count": 0, "included_count": 0, "truncated": False, "items": []}
 
 
-def test_run_provider_stage_is_a_behavior_neutral_no_op_with_no_matching_facets(tmp_path):
-    """A repo with NO detected facets matches none of the bundled providers
-    (57B-81 PR2 populated ``BUNDLED_PROVIDERS`` with four real ones, each
-    linked to a specific language facet) — the stage stays a byte-identical,
-    zero-execution no-op regardless."""
+def test_run_provider_stage_only_runs_universal_providers_with_no_matching_facets(tmp_path):
+    """A repo with NO detected facets matches none of the four FACET-GATED
+    bundled providers (57B-81 PR2's callgraph/dependency-map ones, each
+    linked to a specific language facet) — but 57B-80 PR2's
+    ``datastore-evidence`` provider is ``universal`` and runs regardless, so
+    this is no longer a zero-execution no-op. The stage stays deterministic
+    and byte-identical across repeated calls either way."""
     workspace = tmp_path / "workspace"
     repo = _target(workspace / "svc")
     identities = _identities(workspace, [repo])
@@ -389,8 +391,11 @@ def test_run_provider_stage_is_a_behavior_neutral_no_op_with_no_matching_facets(
     execution_bytes_two = (run_dir / FILENAME).read_bytes()
     catalog_bytes_two = (run_dir / catalog.FILENAME).read_bytes()
 
-    assert summary_one == {"executions": 0, "failed": 0} == summary_two
-    assert json.loads(execution_bytes_one)["executions"] == []
+    assert summary_one == {"executions": 1, "failed": 0} == summary_two
+    executions = json.loads(execution_bytes_one)["executions"]
+    assert [row["provider_id"] for row in executions] == ["datastore-evidence"]
+    assert executions[0]["matched_profiles"] == []
+    assert executions[0]["universal"] is True
     assert execution_bytes_one == execution_bytes_two
     assert catalog_bytes_one == catalog_bytes_two
     assert bundled_registry().providers

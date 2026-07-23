@@ -630,29 +630,35 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     elif (run / "imports").exists():
         raise ValueError("imports/ exists without canonical coverage; refuse partial reuse")
 
-    # The callgraph and dependency-map capabilities are now bundled providers
-    # (57B-81 PR2), and BUNDLED_PROVIDERS is unfiltered here (all four run
-    # together in one pass): when BOTH coverage docs already exist, this
-    # whole block is skipped and no lane runs again. When only ONE is
-    # missing, the provider pass still re-runs ALL FOUR providers — the
-    # already-satisfied capability's lanes are re-invoked and rewrite
-    # byte-identical fragments (harmless, but not free) — and only the
-    # missing capability's assembler below produces a new final artifact;
-    # the other capability's already-assembled output is left untouched.
-    if need_callgraph or need_depmap:
-        from . import identity
-        from .profiles.execution import run_provider_stage
-        provider_summary = run_provider_stage(
-            run, spec, identity.load(run), scan_date=args.scan_date,
-            network_authorized=args.include_network, provenance=provenance)
-        print(f"providers: {provider_summary['executions']} execution(s), "
-              f"{provider_summary['failed']} failed")
-        if need_callgraph:
-            report = cg_emit.assemble(run, args.scan_date)
-            print(f"callgraph: wrote {len(report.repos)} lane result(s)")
-        if need_depmap:
-            report = dm_emit.assemble(run, args.scan_date)
-            print(f"dependency-map: wrote {len(report.repos)} lane result(s)")
+    # The provider stage now ALWAYS runs on every full prepare-overview pass
+    # (57B-80 PR2), regardless of need_callgraph/need_depmap: BUNDLED_PROVIDERS
+    # also carries universal providers (datastore-evidence today; future
+    # repository-wide providers, e.g. 57B-82's git/deploy ones) whose own
+    # full-tree scan is the honest absence proof behind their capability's
+    # not-applicable verdict, so they need to run every pass — not only when
+    # callgraph/depmap happen to be stale. This is safe unconditionally: an
+    # empty/no-op selection already yields a stable, byte-identical
+    # provider-execution.json/evidence-catalog.json (run_providers's own
+    # documented guarantee), and when BOTH callgraph/depmap coverage docs
+    # already exist, the four lane providers still re-run and rewrite
+    # byte-identical fragments (harmless, but not free) — exactly the same
+    # "re-run, nothing new to assemble" tradeoff already accepted below when
+    # only ONE of the two was previously stale. Only the missing capability's
+    # assembler call actually produces a new final artifact; an
+    # already-assembled capability's output is left untouched.
+    from . import identity
+    from .profiles.execution import run_provider_stage
+    provider_summary = run_provider_stage(
+        run, spec, identity.load(run), scan_date=args.scan_date,
+        network_authorized=args.include_network, provenance=provenance)
+    print(f"providers: {provider_summary['executions']} execution(s), "
+          f"{provider_summary['failed']} failed")
+    if need_callgraph:
+        report = cg_emit.assemble(run, args.scan_date)
+        print(f"callgraph: wrote {len(report.repos)} lane result(s)")
+    if need_depmap:
+        report = dm_emit.assemble(run, args.scan_date)
+        print(f"dependency-map: wrote {len(report.repos)} lane result(s)")
 
     run_provenance.refresh_tool_versions(run)
 
