@@ -101,17 +101,10 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
 
 def _family_groups(repos: list) -> dict[str, list]:
     """Group repos by language family for same-language cross-repo runs."""
+    from .profiles import selection  # lazy: see registry.py's note on this cycle
     groups: dict[str, list] = {}
     for target in repos:
-        stacks = {x.lower() for x in target.stacks}
-        if stacks & {"js", "ts", "tsx", "javascript", "typescript"} or \
-                (Path(target.path) / "package.json").is_file():
-            family = "node"
-        elif "go" in stacks or (Path(target.path) / "go.mod").is_file():
-            family = "go"
-        else:
-            family = "other"
-        groups.setdefault(family, []).append(target)
+        groups.setdefault(selection.family(target), []).append(target)
     return groups
 
 

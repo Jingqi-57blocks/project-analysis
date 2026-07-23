@@ -107,15 +107,36 @@ def test_cli_since_defaults_to_computed_window():
 
 
 def test_family_groups_split_node_and_go(tmp_path):
+    # 57B-81 PR3: family grouping is facet-driven now (no manifest probing),
+    # so membership comes from TechnologyFacet, not a bare go.mod/package.json.
+    def repo(name, profile_id):
+        d = tmp_path / name
+        d.mkdir()
+        return RepoTarget(
+            repo_id=stable_repo_id(str(d)), path=str(d),
+            facets=[TechnologyFacet(profile_id, "language", ["."], ["fixture-evidence"])],
+        )
+    groups = cli._family_groups([
+        repo("a", "language.javascript"), repo("b", "language.javascript"),
+        repo("c", "language.go"),
+    ])
+    assert len(groups["node"]) == 2 and len(groups["go"]) == 1
+
+
+def test_family_groups_bare_manifest_without_facet_selects_nothing(tmp_path):
+    # The legacy manifest-probe fallback (bare go.mod/package.json, no facet)
+    # is retired: discovery always produces facets for real targets, so a
+    # target with neither now groups as "other", not "node"/"go".
     def repo(name, marker):
         d = tmp_path / name
         d.mkdir()
         (d / marker).write_text("{}" if marker == "package.json" else "module x\n")
         return RepoTarget(repo_id=stable_repo_id(str(d)), path=str(d))
     groups = cli._family_groups(
-        [repo("a", "package.json"), repo("b", "package.json"), repo("c", "go.mod")]
+        [repo("a", "package.json"), repo("b", "go.mod")]
     )
-    assert len(groups["node"]) == 2 and len(groups["go"]) == 1
+    assert "node" not in groups and "go" not in groups
+    assert len(groups["other"]) == 2
 
 
 # --- P3-14: safety refusal is a distinct CLI outcome -----------------------------

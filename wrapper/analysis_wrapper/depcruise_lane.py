@@ -24,14 +24,13 @@ from .resolvers import ts_aliases
 from .targetspec import RepoTarget
 from .tooldefs import PrepareResult, ToolDef
 
-_TS_STACKS = {"ts", "tsx", "typescript"}
-
 
 def _is_ts_target(target: RepoTarget) -> bool:
-    if {s.lower() for s in target.stacks} & _TS_STACKS:
-        return True
-    root = Path(target.path)
-    return any((root / n).is_file() for n in ("tsconfig.json", "tsconfig.app.json"))
+    # Lazy import: `profiles/__init__.py` eagerly pulls in `registry.tool_for`,
+    # and `registry.py` imports THIS module at module level — a top-level
+    # import here would hit that cycle mid-initialization (see registry.py).
+    from .profiles import selection
+    return selection.is_ts_target(target)
 
 
 def _ts_support_guard(target: RepoTarget) -> str:
