@@ -80,11 +80,15 @@ def test_coverage_outcome_variants_conform(tmp_path, behavior):
 
 def test_bundled_registry_conforms_structurally():
     """The bundled registry itself is a valid, deterministic, closed catalog
-    even before any provider has migrated onto it (BUNDLED_PROVIDERS == ())."""
+    (57B-81 PR2 populated BUNDLED_PROVIDERS with the four migrated
+    callgraph/dependency-map providers; this asserts the registry stays a
+    sorted, immutable, self-consistent catalog with them present)."""
     registry = bundled_registry()
     assert list(registry.profiles) == sorted(
         registry.profiles, key=lambda item: item.profile_id)
-    assert registry.providers == ()
+    assert list(registry.providers) == sorted(
+        registry.providers, key=lambda item: item.provider_id)
+    assert registry.providers
     for profile in registry.profiles:
         for capability_id in profile.capability_ids:
             assert isinstance(capability_id, str) and capability_id
@@ -118,7 +122,7 @@ def test_duplicate_basename_repos_resolve_distinct_references_end_to_end(tmp_pat
     spec = TargetSpec([app_api, service_api])
     context = make_context(spec, tmp_path, tool_access=_NoopToolAccess(), identities=identities)
 
-    results, rows = run_providers(registry, context, identities)
+    results, rows = run_providers(registry, context)
 
     assert len(results) == 2
     by_repo_id = {result.repo_id: result for result in results}

@@ -72,7 +72,10 @@ def test_registry_is_explicit_deterministic_and_has_no_mutation_api():
     assert [item.provider_id for item in registry.providers] == [
         "synthetic-provider", "z-provider"]
     assert not hasattr(registry, "register")
-    assert bundled_registry().profiles and bundled_registry().providers == ()
+    # 57B-81 PR2: the bundled registry now carries the four migrated
+    # callgraph/dependency-map providers; this just re-asserts the bundled
+    # registry itself is a valid, non-empty, still-immutable catalog.
+    assert bundled_registry().profiles and bundled_registry().providers
 
 
 def test_registry_rejects_duplicates_unknowns_and_untrusted_shapes():
