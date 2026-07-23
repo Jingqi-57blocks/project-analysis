@@ -275,6 +275,14 @@ def parser() -> argparse.ArgumentParser:
         "accept", help="set the project's `current` pointer (explicit user "
                        "acceptance only)")
     accept.add_argument("--run", required=True)
+    compare_runs = sub.add_parser(
+        "compare-runs",
+        help="(dev-only) compare two completed run directories for semantic parity")
+    compare_runs.add_argument("base", help="base (known-good) completed run directory")
+    compare_runs.add_argument("candidate", help="candidate completed run directory")
+    compare_runs.add_argument(
+        "--report", default="",
+        help="optional path to write the full JSON parity report")
     return result
 
 
@@ -773,6 +781,61 @@ def _lifecycle_cmd(args: argparse.Namespace) -> int:
     raise AssertionError(args.command)
 
 
+def _compare_runs(args: argparse.Namespace) -> int:
+    from . import parity
+    report = parity.compare(args.base, args.candidate)
+    if args.report:
+        Path(args.report).expanduser().resolve().write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", "utf-8")
+    print(f"base:      {args.base}")
+    print(f"candidate: {args.candidate}")
+    for side in ("base", "candidate"):
+        block = report["baseline"][side]["identity"]
+        if block is not None:
+            analyzer = block["analyzer"]
+            print(f"  {side} analyzer: version={analyzer.get('version')} "
+                  f"head={analyzer.get('git_head', '')[:12]} "
+                  f"dirty={analyzer.get('dirty_detail')}")
+    for warning in report["warnings"]:
+        print(f"WARNING: {warning}")
+    if report["tool_drift"]:
+        print("tool drift (informational; not counted):")
+        for row in report["tool_drift"]:
+            print(f"  {row['tool']}: base={row['base_version']} "
+                  f"candidate={row['candidate_version']}")
+    reasons = report["provider_execution_reasons"]
+    if reasons["added"] or reasons["removed"]:
+        print("provider execution reasons (informational; not counted — "
+              "free text, environment-volatile):")
+        for item in reasons["added"]:
+            print(f"  + {item}")
+        for item in reasons["removed"]:
+            print(f"  - {item}")
+    for name, section in sorted(report["sections"].items()):
+        count = len(section["added"]) + len(section["removed"]) + len(section["changed"])
+        presence = ("" if section["base_present"] == section["candidate_present"] else
+                    f" [base_present={section['base_present']} "
+                    f"candidate_present={section['candidate_present']}]")
+        print(f"{name}: {count} difference(s){presence}")
+        for row in section["added"]:
+            print(f"  + {row['key']}: {row['value']}")
+        for row in section["removed"]:
+            print(f"  - {row['key']}: {row['value']}")
+        for row in section["changed"]:
+            tag = "reclassified" if row["reclassified"] else "conflicting"
+            print(f"  ~ {row['key']} ({tag}): {row['base']} -> {row['candidate']}")
+    for name, rows in sorted(report["prose"].items()):
+        if not rows["added"] and not rows["removed"]:
+            continue
+        print(f"prose/{name}:")
+        for item in rows["added"]:
+            print(f"  + {item}")
+        for item in rows["removed"]:
+            print(f"  - {item}")
+    print(f"total differences: {report['summary']['total_differences']}")
+    return 3 if parity.has_semantic_differences(report) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -798,6 +861,8 @@ def main(argv: list[str] | None = None) -> int:
             return _audit_overview(args)
         if args.command == "export":
             return _export(args)
+        if args.command == "compare-runs":
+            return _compare_runs(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)
