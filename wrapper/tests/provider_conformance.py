@@ -221,8 +221,18 @@ class ConformanceProvider:
 # ---------------------------------------------------------------------------
 
 
-def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path) -> None:
-    """Run every conformance step for one (profile, provider) pair."""
+def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path,
+                             extra_profiles: tuple[Profile, ...] = ()) -> None:
+    """Run every conformance step for one (profile, provider) pair.
+
+    ``extra_profiles`` is for a MULTI-profile provider (one whose
+    ``profile_ids`` names more than one profile, e.g. a provider linked to
+    both a ``language.javascript`` and a ``language.typescript`` profile):
+    the registry construction below must carry every profile the provider
+    references (``ProfileRegistry`` rejects a provider that names an unknown
+    profile), even though this battery only asserts DETECTION for the
+    primary ``profile`` argument.
+    """
     marker = profile.fingerprints[0].value
     repo = make_repo(tmp_path / "target", marker=marker, profile_id=profile.profile_id)
     workspace = tmp_path / "target"
@@ -245,22 +255,22 @@ def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path) -> N
             "a facet built the way discovery would must carry the profile's own id")
 
     identities = make_identities(workspace, [repo])
-    registry = ProfileRegistry((profile,), (provider,))
+    registry = ProfileRegistry((profile, *extra_profiles), (provider,))
     spec = TargetSpec([repo])
 
     # 2. Applicability: the provider is selected exactly once, and every
     # matching facet's profile id is disclosed.
     context = make_context(spec, tmp_path, tool_access=_StatusStub(status=Status.COMPLETE),
                            identities=identities)
-    results, rows = run_providers(registry, context, identities)
+    results, rows = run_providers(registry, context)
     matches = [row for row in rows if row["provider_id"] == provider.provider_id]
     assert len(matches) == 1, "an applicable provider must be selected exactly once"
     row = matches[0]
     assert profile.profile_id in row["matched_profiles"]
 
     # 3. Deterministic registration.
-    assert ProfileRegistry((profile,), (provider,)).profiles == registry.profiles
-    assert ProfileRegistry((profile,), (provider,)).providers == registry.providers
+    assert ProfileRegistry((profile, *extra_profiles), (provider,)).profiles == registry.profiles
+    assert ProfileRegistry((profile, *extra_profiles), (provider,)).providers == registry.providers
     with pytest.raises(ValueError, match="duplicate profile_id"):
         ProfileRegistry((profile, profile), (provider,))
     with pytest.raises(ValueError, match="explicit Profile"):
@@ -268,7 +278,7 @@ def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path) -> N
 
     # 4. Deterministic execution: identical inputs -> identical record rows,
     # and byte-identical written artifacts.
-    results_2, rows_2 = run_providers(registry, context, identities)
+    results_2, rows_2 = run_providers(registry, context)
     assert rows_2 == rows, "identical inputs must select and record identically"
     run_a, run_b = tmp_path / "run-a", tmp_path / "run-b"
     run_a.mkdir()
@@ -331,7 +341,7 @@ def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path) -> N
         net_context = make_context(
             spec, tmp_path, tool_access=recorder, network_authorized=authorized,
             identities=identities)
-        _, net_rows = run_providers(registry, net_context, identities)
+        _, net_rows = run_providers(registry, net_context)
         net_run = tmp_path / f"net-{authorized}"
         net_run.mkdir()
         write_execution_record(

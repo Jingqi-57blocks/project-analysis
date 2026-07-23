@@ -7,6 +7,8 @@ issues, so a detected profile may intentionally have no provider yet.
 from __future__ import annotations
 
 from .contracts import CapabilityProvider, Fingerprint, Profile
+from .providers import (CallgraphGoProvider, CallgraphJsProvider,
+                        DepmapGoProvider, DepmapJsProvider)
 from .registry import ProfileRegistry
 
 
@@ -100,7 +102,10 @@ BUNDLED_PROFILES: tuple[Profile, ...] = (
         for profile_id, dependency in _GO_FRAMEWORKS
     ),
 )
-BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = ()
+BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
+    CallgraphGoProvider(), CallgraphJsProvider(),
+    DepmapGoProvider(), DepmapJsProvider(),
+)
 
 
 def bundled_registry() -> ProfileRegistry:

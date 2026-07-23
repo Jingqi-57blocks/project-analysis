@@ -11,9 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .callgraph import emit as callgraph_emit
 from .datastore_coverage import classify as classify_data_model
-from .depmap import emit as depmap_emit
 from .executor import replace_artifact_text
 from . import identity
 from .sanitize import sanitize_text
@@ -98,8 +96,8 @@ def build(run_dir: str | Path) -> dict:
     signal_rows = list(signal_summary.get("signals", []))
     call_rows = list(callgraph.get("repos", []))
     dep_rows = list(depmap.get("repos", []))
-    call_applicable = any(callgraph_emit.select_lanes(repo) for repo in spec.repos)
-    dep_applicable = any(depmap_emit.select_lanes(repo) for repo in spec.repos)
+    call_applicable = any(repo.profiles_for_capability("callgraph") for repo in spec.repos)
+    dep_applicable = any(repo.profiles_for_capability("dependency-map") for repo in spec.repos)
 
     records = [
         _record(

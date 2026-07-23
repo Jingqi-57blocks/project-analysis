@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import json
 import os
 import sys
@@ -453,10 +452,51 @@ def _new_drilldown(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_capability_providers(spec: TargetSpec, out: Path, scan_date: str, *,
+                              capability_id: str, allow_network: bool) -> None:
+    """Run every bundled provider for ONE capability against ``spec``,
+    writing only that capability's own canonical artifacts (fragments / map
+    files — the caller's assembler turns those into the final coverage doc).
+
+    Deliberately does NOT write ``provider-execution.json`` or
+    ``evidence-catalog.json``: both are REPLACE-style writers over the
+    run's FULL provider set, so a capability-scoped call here would either
+    silently narrow an existing full record down to just this capability, or
+    (chaining ``callgraph`` then ``dependency-map`` into one run dir — a
+    supported sequence, per the stage markers) leave them reflecting only
+    whichever capability ran LAST — contradicting the other capability's
+    artifacts still sitting on disk, with no later step to catch it
+    (``prepare-overview`` skips its own provider pass once both coverage
+    docs already exist). Those two run-level disclosure artifacts are owned
+    solely by ``prepare-overview``'s single full, unfiltered provider pass.
+    """
+    from . import identity
+    from .profiles.bundled import BUNDLED_PROFILES, BUNDLED_PROVIDERS
+    from .profiles.contracts import RunContext
+    from .profiles.execution import run_providers
+    from .profiles.registry import ProfileRegistry
+    from .profiles.tool_access import ExecutorToolAccess
+
+    identities = identity.load(out)
+    registry = ProfileRegistry(
+        BUNDLED_PROFILES,
+        tuple(p for p in BUNDLED_PROVIDERS if p.capability_id == capability_id))
+    access = ExecutorToolAccess(spec, identities, out, scan_date,
+                                network_authorized=allow_network)
+    context = RunContext(
+        targets=spec, output_dir=out, scan_date=scan_date,
+        network_authorized=allow_network, provenance={},
+        tool_access=access, identities=identities,
+    )
+    run_providers(registry, context)
+
+
 def _callgraph(args: argparse.Namespace, spec: TargetSpec, out: Path) -> int:
     from .callgraph import emit as cg_emit
-    report = cg_emit.run_callgraph(
-        spec, out, args.scan_date, allow_network=args.include_network)
+    _run_capability_providers(
+        spec, out, args.scan_date, capability_id="callgraph",
+        allow_network=args.include_network)
+    report = cg_emit.assemble(out, args.scan_date)
     for cov in sorted(report.repos, key=lambda c: (c.repository_ref, c.lang)):
         suffix = f": {cov.reason}" if cov.reason else ""
         print(f"{cov.repository_ref} [{cov.lang}] {cov.status} "
@@ -470,8 +510,10 @@ def _callgraph(args: argparse.Namespace, spec: TargetSpec, out: Path) -> int:
 
 def _depmap(args: argparse.Namespace, spec: TargetSpec, out: Path) -> int:
     from .depmap import emit as dm_emit
-    report = dm_emit.run_depmap(
-        spec, out, args.scan_date, allow_network=args.include_network)
+    _run_capability_providers(
+        spec, out, args.scan_date, capability_id="dependency-map",
+        allow_network=args.include_network)
+    report = dm_emit.assemble(out, args.scan_date)
     for cov in sorted(report.repos, key=lambda c: (c.repository_ref, c.lane)):
         suffix = f": {cov.reason}" if cov.reason else ""
         print(f"{cov.repository_ref} [{cov.lane}] {cov.status} "
@@ -595,30 +637,29 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     elif (run / "imports").exists():
         raise ValueError("imports/ exists without canonical coverage; refuse partial reuse")
 
-    # These producers read the same immutable targets but own disjoint output
-    # trees, so running them together is safe and avoids a second cold traversal.
-    jobs = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    # The callgraph and dependency-map capabilities are now bundled providers
+    # (57B-81 PR2), and BUNDLED_PROVIDERS is unfiltered here (all four run
+    # together in one pass): when BOTH coverage docs already exist, this
+    # whole block is skipped and no lane runs again. When only ONE is
+    # missing, the provider pass still re-runs ALL FOUR providers — the
+    # already-satisfied capability's lanes are re-invoked and rewrite
+    # byte-identical fragments (harmless, but not free) — and only the
+    # missing capability's assembler below produces a new final artifact;
+    # the other capability's already-assembled output is left untouched.
+    if need_callgraph or need_depmap:
+        from . import identity
+        from .profiles.execution import run_provider_stage
+        provider_summary = run_provider_stage(
+            run, spec, identity.load(run), scan_date=args.scan_date,
+            network_authorized=args.include_network, provenance=provenance)
+        print(f"providers: {provider_summary['executions']} execution(s), "
+              f"{provider_summary['failed']} failed")
         if need_callgraph:
-            jobs["callgraph"] = pool.submit(
-                cg_emit.run_callgraph, spec, run, args.scan_date,
-                allow_network=args.include_network)
+            report = cg_emit.assemble(run, args.scan_date)
+            print(f"callgraph: wrote {len(report.repos)} lane result(s)")
         if need_depmap:
-            jobs["dependency-map"] = pool.submit(
-                dm_emit.run_depmap, spec, run, args.scan_date,
-                allow_network=args.include_network)
-        completed = {name: future.result() for name, future in jobs.items()}
-    for name in ("callgraph", "dependency-map"):
-        if name in completed:
-            print(f"{name}: wrote {len(completed[name].repos)} lane result(s)")
-
-    from . import identity
-    from .profiles.execution import run_provider_stage
-    provider_summary = run_provider_stage(
-        run, spec, identity.load(run), scan_date=args.scan_date,
-        network_authorized=args.include_network, provenance=provenance)
-    print(f"providers: {provider_summary['executions']} execution(s), "
-          f"{provider_summary['failed']} failed")
+            report = dm_emit.assemble(run, args.scan_date)
+            print(f"dependency-map: wrote {len(report.repos)} lane result(s)")
 
     run_provenance.refresh_tool_versions(run)
 

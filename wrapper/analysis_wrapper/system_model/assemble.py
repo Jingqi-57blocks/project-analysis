@@ -16,7 +16,6 @@ from pathlib import Path
 
 from .. import __version__
 from .. import identity
-from ..depmap import emit as depmap_emit
 from ..executor import replace_artifact_text
 from .. import module_map
 from ..sanitize import sanitize_text
@@ -46,7 +45,7 @@ def _merge_imports(spec: TargetSpec, identities: identity.IdentityMap,
     disclosure."""
     mapped = sorted(set(js.get("repos", [])) | set(go.get("repos", [])))
     expected = sorted(identities.reference_for(r.repo_id)
-                      for r in spec.repos if depmap_emit.select_lanes(r))
+                      for r in spec.repos if r.profiles_for_capability("dependency-map"))
     return {
         "present": bool(js.get("present") or go.get("present")),
         "js": js, "go": go,

@@ -122,9 +122,8 @@ def _files(builder: ModelBuilder) -> Partition:
 
 def _calls(builder: ModelBuilder, cg: dict, spec,
            identities: IdentityMap) -> Partition:
-    from ..callgraph import emit as callgraph_emit
     eligible = [identities.reference_for(r.repo_id)
-                for r in spec.repos if callgraph_emit.select_lanes(r)]
+                for r in spec.repos if r.profiles_for_capability("callgraph")]
     if not eligible:
         return Partition(
             status="not-applicable", producers=["callgraph"],

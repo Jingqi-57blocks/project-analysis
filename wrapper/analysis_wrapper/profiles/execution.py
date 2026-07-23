@@ -74,7 +74,6 @@ class RecordingToolAccess:
 def run_providers(
     registry: ProfileRegistry,
     context: RunContext,
-    identities: IdentityMap,
 ) -> tuple[list[CapabilityResult], list[dict[str, Any]]]:
     """Execute every applicable (provider, repository) pair exactly once.
 
@@ -93,7 +92,18 @@ def run_providers(
     Returns the successful results in execution order, and the record rows
     sorted by ``(provider_id, repository_ref)`` — a different, and more
     reader-stable, order than execution itself.
+
+    ``context.identities`` is this loop's ONLY source of identity (57B-81
+    PR2 review cleanup): a caller that wants a different IdentityMap builds a
+    new ``RunContext`` rather than passing a second, potentially-diverging
+    one alongside it.
     """
+    if context.identities is None:
+        raise ValueError(
+            "run_providers requires RunContext.identities to be resolved — "
+            "build the context with an IdentityMap before running providers"
+        )
+    identities = context.identities
     results: list[CapabilityResult] = []
     rows: list[dict[str, Any]] = []
     targets = sorted(context.targets.repos, key=lambda repo: repo.repo_id)
@@ -190,7 +200,7 @@ def run_provider_stage(
         network_authorized=network_authorized, provenance=provenance,
         tool_access=access, identities=identities,
     )
-    results, rows = run_providers(bundled_registry(), context, identities)
+    results, rows = run_providers(bundled_registry(), context)
     write_execution_record(
         run, rows=rows, network_authorized=network_authorized, scan_date=scan_date)
     catalog.write(run, results, identities)

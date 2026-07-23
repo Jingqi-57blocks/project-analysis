@@ -99,18 +99,26 @@ def test_cli_refuses_existing_output_without_overwriting(tmp_path, target):
 def test_dependency_map_layers_into_existing_run_dir(monkeypatch, tmp_path, target):
     # Discovery already created the run dir + targets.json; the dependency-map
     # stage must layer into it (not refuse it like run/sweep do), then refuse to
-    # clobber its own prior output on a re-run.
+    # clobber its own prior output on a re-run. The standalone subcommand now
+    # drives the provider loop + assembler (57B-81 PR2); stub both so this test
+    # stays about the CLI's layering/resume contract, not the providers' own
+    # behavior (which has its own dedicated coverage elsewhere).
     run = tmp_path / "run"
     run.mkdir()
     TargetSpec([target], produced_by="cli-test").save(run / "targets.json")
 
-    def stub_run_depmap(spec, out, scan_date, allow_network=False):
+    def stub_run_capability_providers(spec, out, scan_date, *, capability_id, allow_network):
+        pass
+
+    def stub_assemble(out, scan_date):
         imports = Path(out) / "imports"
         imports.mkdir(parents=True, exist_ok=True)
         (imports / "depmap-coverage.json").write_text("{}\n")
         return DepMapReport(scan_date=scan_date, repos=[])
 
-    monkeypatch.setattr(dm_emit, "run_depmap", stub_run_depmap)
+    monkeypatch.setattr("analysis_wrapper.cli._run_capability_providers",
+                        stub_run_capability_providers)
+    monkeypatch.setattr(dm_emit, "assemble", stub_assemble)
     rc = main(["--targets", str(run / "targets.json"), "--out", str(run),
                "dependency-map"])
     assert rc == 0
@@ -195,7 +203,7 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
             reason="", manifest=None, raw_path=None, view_path=view)]
     monkeypatch.setattr("analysis_wrapper.cli._sweep", sweep)
 
-    def callgraph(_spec, out, scan_date, allow_network=False, identities=None):
+    def callgraph_assemble(out, scan_date):
         (Path(out) / "callgraph").mkdir()
         (Path(out) / "callgraph" / f"{repository.artifact_key}.jsonl").write_text("", "utf-8")
         report = CoverageReport(scan_date=scan_date, repos=[RepoCoverage(
@@ -204,7 +212,7 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
         (Path(out) / "callgraph-coverage.json").write_text(report.to_json(), "utf-8")
         return report
 
-    def depmap(_spec, out, scan_date, allow_network=False, identities=None):
+    def depmap_assemble(out, scan_date):
         imports = Path(out) / "imports"
         imports.mkdir()
         map_name = f"{repository.artifact_key}.depcruise.json"
@@ -215,8 +223,19 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
         (imports / "depmap-coverage.json").write_text(report.to_json(), "utf-8")
         return report
 
-    monkeypatch.setattr("analysis_wrapper.callgraph.emit.run_callgraph", callgraph)
-    monkeypatch.setattr("analysis_wrapper.depmap.emit.run_depmap", depmap)
+    def fake_run_provider_stage(run_dir, spec, identities, *, scan_date,
+                                network_authorized, provenance):
+        # The provider loop itself has its own dedicated coverage (57B-78/86)
+        # plus the four real providers' own coverage (57B-81 PR2 fixtures);
+        # here it must not require a real go/node toolchain, so it's stubbed
+        # to the same behavior-neutral no-op the empty bundled registry gave
+        # before 57B-81 — this test is only about canonical paths + resume.
+        return {"executions": 0, "failed": 0}
+
+    monkeypatch.setattr("analysis_wrapper.callgraph.emit.assemble", callgraph_assemble)
+    monkeypatch.setattr("analysis_wrapper.depmap.emit.assemble", depmap_assemble)
+    monkeypatch.setattr("analysis_wrapper.profiles.execution.run_provider_stage",
+                        fake_run_provider_stage)
     argv = ["--scan-date", "2026-07-20", "prepare-overview", "--run", str(run)]
     assert main(argv) == 0
     expected = {"signals/run-summary.json", "callgraph-coverage.json",

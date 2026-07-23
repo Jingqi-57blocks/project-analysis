@@ -1,9 +1,11 @@
 """57B-78: the single-run capability-provider execution loop.
 
 Providers here are synthetic (``profile_ids`` like ``synthetic-a``); no real
-tool or bundled provider is exercised — ``BUNDLED_PROVIDERS`` stays empty
-until 57B-81, so :func:`run_provider_stage` is covered separately as a
-behavior-neutral no-op against that empty registry.
+bundled provider is exercised in most of these tests — the loop mechanics
+(selection, determinism, failure isolation, network-flag plumbing) are
+exactly the same regardless of which providers are registered. The four REAL
+bundled providers (57B-81 PR2) get their own dedicated coverage in
+``tests/test_lane_providers.py`` and the shared conformance battery.
 """
 
 import json
@@ -83,10 +85,11 @@ class _Provider:
         )
 
 
-def _context(repo: RepoTarget, tool_access, **overrides) -> RunContext:
+def _context(repo: RepoTarget, tool_access, identities=None, **overrides) -> RunContext:
     fields = {
         "targets": TargetSpec([repo]), "output_dir": Path("."), "scan_date": "2026-07-23",
         "network_authorized": False, "provenance": {}, "tool_access": tool_access,
+        "identities": identities,
     }
     fields.update(overrides)
     return RunContext(**fields)
@@ -105,10 +108,11 @@ def test_selection_order_is_deterministic_and_stable_across_runs(tmp_path):
     context = RunContext(
         targets=TargetSpec([alpha, beta]), output_dir=tmp_path, scan_date="2026-07-23",
         network_authorized=False, provenance={}, tool_access=_NoopToolAccess(),
+        identities=identities,
     )
 
-    results_one, rows_one = run_providers(registry, context, identities)
-    results_two, rows_two = run_providers(registry, context, identities)
+    results_one, rows_one = run_providers(registry, context)
+    results_two, rows_two = run_providers(registry, context)
 
     assert [row["provider_id"] for row in rows_one] == ["prov-one", "prov-two"]
     assert rows_one == [
@@ -141,9 +145,9 @@ def test_duplicate_facets_execute_provider_once_with_disclosed_matches(tmp_path)
         (_profile("synthetic-a", "cap"), _profile("synthetic-b", "cap")),
         (_Provider("prov", "cap", ("synthetic-a", "synthetic-b")),),
     )
-    context = _context(repo, _NoopToolAccess(), targets=TargetSpec([repo]))
+    context = _context(repo, _NoopToolAccess(), identities=identities, targets=TargetSpec([repo]))
 
-    results, rows = run_providers(registry, context, identities)
+    results, rows = run_providers(registry, context)
 
     assert len(rows) == 1
     assert rows[0]["matched_profiles"] == ["synthetic-a", "synthetic-b"]
@@ -166,9 +170,9 @@ def test_multiple_providers_with_conflicting_facts_reach_catalog_unmerged(tmp_pa
         (_Provider("prov-a", "shared-cap", ("synthetic-a",), facts=(fact_one,)),
          _Provider("prov-b", "shared-cap", ("synthetic-a",), facts=(fact_two,))),
     )
-    context = _context(repo, _NoopToolAccess(), targets=TargetSpec([repo]))
+    context = _context(repo, _NoopToolAccess(), identities=identities, targets=TargetSpec([repo]))
 
-    results, rows = run_providers(registry, context, identities)
+    results, rows = run_providers(registry, context)
 
     assert len(results) == 2
     assert {row["provider_id"] for row in rows} == {"prov-a", "prov-b"}
@@ -205,9 +209,9 @@ def test_provider_failure_is_recorded_not_raised_and_others_still_run(tmp_path):
         (_profile("synthetic-a", "cap"),),
         (_RaisingProvider(), _Provider("prov-ok", "cap", ("synthetic-a",))),
     )
-    context = _context(repo, _NoopToolAccess(), targets=TargetSpec([repo]))
+    context = _context(repo, _NoopToolAccess(), identities=identities, targets=TargetSpec([repo]))
 
-    results, rows = run_providers(registry, context, identities)
+    results, rows = run_providers(registry, context)
 
     failed_row = next(row for row in rows if row["provider_id"] == "prov-fail")
     ok_row = next(row for row in rows if row["provider_id"] == "prov-ok")
@@ -246,9 +250,9 @@ def test_missing_tool_is_disclosed_honestly_in_the_tool_log_and_coverage(tmp_pat
     repo = _target(workspace / "svc", TechnologyFacet("synthetic-a", "language", ["."], ["m"]))
     identities = _identities(workspace, [repo])
     registry = ProfileRegistry((_profile("synthetic-a", "cap"),), (_ToolAwareProvider(),))
-    context = _context(repo, _StubSkipToolAccess(), targets=TargetSpec([repo]))
+    context = _context(repo, _StubSkipToolAccess(), identities=identities, targets=TargetSpec([repo]))
 
-    results, rows = run_providers(registry, context, identities)
+    results, rows = run_providers(registry, context)
 
     assert rows[0]["outcome"] == "completed"
     assert rows[0]["tools"] == [
@@ -295,9 +299,10 @@ def test_network_flag_reaches_run_tool_and_is_recorded(
     context = RunContext(
         targets=spec, output_dir=tmp_path, scan_date="2026-07-23",
         network_authorized=network_authorized, provenance={}, tool_access=access,
+        identities=identities,
     )
 
-    results, rows = run_providers(registry, context, identities)
+    results, rows = run_providers(registry, context)
 
     assert seen["kwargs"]["allow_network"] is network_authorized
     run_dir = tmp_path / "run"
@@ -346,9 +351,9 @@ def test_legitimate_empty_result_is_completed_not_failed(tmp_path):
     repo = _target(workspace / "svc", TechnologyFacet("synthetic-a", "language", ["."], ["m"]))
     identities = _identities(workspace, [repo])
     registry = ProfileRegistry((_profile("synthetic-a", "cap"),), (_EmptyProvider(),))
-    context = _context(repo, _NoopToolAccess(), targets=TargetSpec([repo]))
+    context = _context(repo, _NoopToolAccess(), identities=identities, targets=TargetSpec([repo]))
 
-    results, rows = run_providers(registry, context, identities)
+    results, rows = run_providers(registry, context)
 
     assert rows[0]["outcome"] == "completed"
     run_dir = tmp_path / "run"
@@ -358,7 +363,11 @@ def test_legitimate_empty_result_is_completed_not_failed(tmp_path):
     assert facts_view == {"total_count": 0, "included_count": 0, "truncated": False, "items": []}
 
 
-def test_run_provider_stage_is_a_behavior_neutral_no_op_with_the_bundled_registry(tmp_path):
+def test_run_provider_stage_is_a_behavior_neutral_no_op_with_no_matching_facets(tmp_path):
+    """A repo with NO detected facets matches none of the bundled providers
+    (57B-81 PR2 populated ``BUNDLED_PROVIDERS`` with four real ones, each
+    linked to a specific language facet) — the stage stays a byte-identical,
+    zero-execution no-op regardless."""
     workspace = tmp_path / "workspace"
     repo = _target(workspace / "svc")
     identities = _identities(workspace, [repo])
@@ -384,7 +393,7 @@ def test_run_provider_stage_is_a_behavior_neutral_no_op_with_the_bundled_registr
     assert json.loads(execution_bytes_one)["executions"] == []
     assert execution_bytes_one == execution_bytes_two
     assert catalog_bytes_one == catalog_bytes_two
-    assert bundled_registry().providers == ()
+    assert bundled_registry().providers
 
 
 def test_execution_module_has_no_technology_literals():
@@ -402,9 +411,9 @@ def test_provider_execution_record_never_leaks_raw_repo_id(tmp_path):
     registry = ProfileRegistry(
         (_profile("synthetic-a", "cap"),), (_Provider("prov", "cap", ("synthetic-a",)),),
     )
-    context = _context(repo, _NoopToolAccess(), targets=TargetSpec([repo]))
+    context = _context(repo, _NoopToolAccess(), identities=identities, targets=TargetSpec([repo]))
 
-    _, rows = run_providers(registry, context, identities)
+    _, rows = run_providers(registry, context)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     write_execution_record(run_dir, rows=rows, network_authorized=False, scan_date="2026-07-23")
