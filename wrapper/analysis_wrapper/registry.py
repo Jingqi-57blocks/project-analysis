@@ -28,6 +28,13 @@ from .exclusions import (
 from .targetspec import RepoTarget
 from .tooldefs import COREPACK_GUARD_ENV, ToolDef, yarn_exec_vector_guard
 
+# NOTE: `profiles.selection` is imported lazily inside each function below,
+# never at module level. `profiles/__init__.py` eagerly imports
+# `profiles.tool_access`, which imports `registry.tool_for` — a module-level
+# import here would run into that mid-initialization (this module is still
+# being defined when `.depcruise_lane` above pulls it in). Same reason
+# `cli._run_capability_providers` keeps its `profiles.*` imports local.
+
 
 PACKAGE_ENV_PREFIXES = ["NPM_CONFIG_", "npm_config_", "YARN_", "COREPACK_"]
 # Remove only the vars our SAFE_GO_ENV pins (they are re-set explicitly).
@@ -233,24 +240,10 @@ def _package_network_notes(target: RepoTarget, *, manager: str) -> str:
 
 
 def _language_args(target: RepoTarget) -> list[str]:
-    aliases = {
-        "go": "go", "js": "javascript", "javascript": "javascript",
-        "ts": "typescript", "typescript": "typescript", "tsx": "tsx",
-    }
-    langs = sorted({aliases[x.lower()] for x in target.stacks if x.lower() in aliases})
-    # TypeScript implies TSX: a React repo whose discovery emitted only "ts"
-    # must not silently lose .tsx complexity coverage (review P3-13).
-    if "typescript" in langs and "tsx" not in langs:
-        langs = sorted({*langs, "tsx"})
-    if not langs:
-        if (Path(target.path) / "go.mod").is_file():
-            langs = ["go"]
-        elif any((Path(target.path) / x).is_file() for x in ("tsconfig.json", "tsconfig.app.json")):
-            langs = ["typescript", "tsx"]
-        else:
-            langs = ["javascript"]
+    """Thin wrapper: lizard ``-l`` argv over the facet-driven language list."""
+    from .profiles import selection
     args: list[str] = []
-    for lang in langs:
+    for lang in selection.lizard_languages(target):
         args += ["-l", lang]
     return args
 
@@ -374,6 +367,10 @@ def osv(target: RepoTarget) -> ToolDef:
 
 def outdated(target: RepoTarget) -> ToolDef:
     vector = yarn_exec_vector_guard(target)
+    # Intentionally STAYS pm-keyed, not a facet/selection predicate: which
+    # package-manager binary to invoke is a PM-identity question, and PM
+    # identity is TargetSpec-native via discovery/pm.py (target.pm.name),
+    # not something profiles/selection.py's technology facets model.
     use_yarn = target.pm.name == "yarn" and not vector
     if use_yarn:
         binary = _binary("yarn")
@@ -466,14 +463,11 @@ def git_history(target: RepoTarget, since: str | None = None,
 
 
 def local_tools(target: RepoTarget) -> list[ToolDef]:
+    from .profiles import selection
     tools = [scc(target), lizard(target), jscpd(target)]
-    stacks = {x.lower() for x in target.stacks}
-    is_go = "go" in stacks or (Path(target.path) / "go.mod").is_file()
-    is_node = bool(stacks & {"js", "ts", "tsx", "javascript", "typescript"}) or \
-        (Path(target.path) / "package.json").is_file()
-    if is_node:
+    if selection.is_node_target(target):
         tools.append(dependency_cruiser(target))
-    if is_go:
+    if selection.is_go_target(target):
         tools.extend([staticcheck(target), go_list(target)])
     if target.git.is_git:
         tools.append(git_history(target))
@@ -481,10 +475,11 @@ def local_tools(target: RepoTarget) -> list[ToolDef]:
 
 
 def network_tools(target: RepoTarget) -> list[ToolDef]:
+    from .profiles import selection
     tools: list[ToolDef] = []
-    if target.pm.lockfile or (Path(target.path) / "go.mod").is_file():
+    if target.pm.lockfile or selection.is_go_target(target):
         tools.append(osv(target))
-    if (Path(target.path) / "package.json").is_file():
+    if selection.is_node_target(target):
         tools.append(outdated(target))
     return tools
 
