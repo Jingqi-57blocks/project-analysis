@@ -89,6 +89,16 @@ def run_providers(
     ``matched_profiles`` instead of the duplicates being silently collapsed
     into an unexplained single run.
 
+    A provider that declares itself ``universal`` (an OPTIONAL plain
+    attribute read permissively via ``getattr`` — see
+    :class:`~.contracts.CapabilityProvider`'s own docstring; never a required
+    Protocol member, so no existing provider is forced to carry it) applies to
+    EVERY target regardless of ``matched_profiles`` — including empty, which
+    is disclosed as-is rather than being treated as "did not apply". This
+    row-shape addition (an extra ``"universal"`` key, present ONLY on a
+    universal provider's own rows) is the sole disclosure difference; a
+    non-universal provider's row is byte-identical to before this existed.
+
     Returns the successful results in execution order, and the record rows
     sorted by ``(provider_id, repository_ref)`` — a different, and more
     reader-stable, order than execution itself.
@@ -114,7 +124,8 @@ def run_providers(
                 facet.profile_id for facet in target.facets
                 if facet.profile_id in provider.profile_ids
             })
-            if not matched:
+            universal = bool(getattr(provider, "universal", False))
+            if not matched and not universal:
                 continue
             recorder = RecordingToolAccess(inner=context.tool_access)
             run_context = dataclasses.replace(context, tool_access=recorder)
@@ -124,6 +135,8 @@ def run_providers(
                 "repository_ref": repository_ref,
                 "matched_profiles": matched,
             }
+            if universal:
+                row["universal"] = True
             try:
                 result = run_provider(provider, run_context, target)
             except Exception as exc:  # fail-soft: never sink the whole run

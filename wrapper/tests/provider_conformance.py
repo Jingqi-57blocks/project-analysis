@@ -104,10 +104,34 @@ def make_profile(profile_id: str = "conformance-profile",
 
 
 def make_repo(tmp_path: Path, *, marker: str = "conformance.marker",
-             name: str = "repo", profile_id: str = "conformance-profile") -> RepoTarget:
+             name: str = "repo", profile_id: str = "conformance-profile",
+             fingerprint_kind: str = "manifest-file") -> RepoTarget:
+    """Build a synthetic repo whose real content satisfies ``fingerprint_kind``.
+
+    The default (``manifest-file`` — also covers ``config-file``/
+    ``manifest-default``/``fallback``) is a bare touch of ``marker``, exactly
+    the pre-57B-80-PR2 behavior every existing caller relies on. A provider
+    whose REAL bundled fingerprint is ``package-dependency`` or ``go-require``
+    needs actual manifest content naming ``marker`` as a dependency/require —
+    a file merely NAMED after the marker (the dependency/module name, not a
+    path) satisfies nothing in ``profiles.detection.detect()``. Likewise
+    ``source-extension`` needs a file whose SUFFIX is the marker, not a file
+    literally named e.g. ``.sql`` (which pathlib reports as having no
+    extension at all — the same trap ``test_lane_providers.py`` already
+    documents for a bare ``.js``).
+    """
     path = Path(tmp_path) / name
     path.mkdir(parents=True, exist_ok=True)
-    (path / marker).touch()
+    if fingerprint_kind == "package-dependency":
+        (path / "package.json").write_text(
+            json.dumps({"dependencies": {marker: "0.0.0"}}), "utf-8")
+    elif fingerprint_kind == "go-require":
+        (path / "go.mod").write_text(
+            f"module conformance.example\n\nrequire {marker} v0.0.0\n", "utf-8")
+    elif fingerprint_kind == "source-extension":
+        (path / f"conformance{marker}").touch()
+    else:
+        (path / marker).touch()
     return RepoTarget(
         repo_id=stable_repo_id(str(path)), path=str(path),
         facets=[TechnologyFacet(profile_id, "language", ["."], [marker])],
@@ -155,12 +179,18 @@ class ConformanceProvider:
       any key of ``_COVERAGE_OUTCOMES`` — returns a CapabilityResult whose
                    Coverage carries exactly that applicability/status, so the
                    loop's outcome vocabulary is exercised one axis at a time.
+
+    ``universal`` defaults to ``False`` (every pre-57B-80-PR2 call site keeps
+    constructing this unchanged); set it ``True`` to exercise the battery's
+    universal-selection step (57B-80 PR2) with a synthetic, technology-neutral
+    provider rather than a real one.
     """
 
     provider_id: str
     capability_id: str
     profile_ids: tuple[str, ...]
     behavior: str = "facts"
+    universal: bool = False
 
     def run(self, context: RunContext, target: RepoTarget) -> CapabilityResult:
         if self.behavior == "raise":
@@ -234,7 +264,9 @@ def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path,
     primary ``profile`` argument.
     """
     marker = profile.fingerprints[0].value
-    repo = make_repo(tmp_path / "target", marker=marker, profile_id=profile.profile_id)
+    fingerprint_kind = profile.fingerprints[0].kind
+    repo = make_repo(tmp_path / "target", marker=marker, profile_id=profile.profile_id,
+                     fingerprint_kind=fingerprint_kind)
     workspace = tmp_path / "target"
     is_bundled = profile.profile_id in {
         item.profile_id for item in bundled_registry().profiles}
@@ -364,3 +396,45 @@ def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path,
         assert not hasattr(access, "argv")
         assert not hasattr(access, "tooldef")
         assert not hasattr(access, "subprocess")
+
+    # 9. Universal selection (57B-80 PR2): a provider that declares itself
+    # ``universal`` (an OPTIONAL attribute read via ``getattr`` — see
+    # ``CapabilityProvider``'s own docstring) must still run on a target
+    # carrying NONE of its linked profiles — the honest full-tree absence
+    # proof a purely facet-gated provider could never offer. Every other step
+    # above always gives its repo a facet matching the primary profile, so
+    # this is the one place a genuinely zero-match target is deliberately
+    # constructed. A non-universal provider is untouched by this step
+    # (``getattr(..., False)`` short-circuits it) — nothing here narrows any
+    # existing check.
+    if getattr(provider, "universal", False):
+        bare_path = tmp_path / "bare"
+        bare_path.mkdir(exist_ok=True)
+        bare = RepoTarget(repo_id=stable_repo_id(str(bare_path)), path=str(bare_path))
+        bare_identities = make_identities(tmp_path, [bare])
+        bare_spec = TargetSpec([bare])
+        bare_context = make_context(
+            bare_spec, tmp_path, tool_access=_StatusStub(status=Status.COMPLETE),
+            identities=bare_identities)
+
+        bare_results, bare_rows = run_providers(registry, bare_context)
+        bare_matches = [row for row in bare_rows if row["provider_id"] == provider.provider_id]
+        assert len(bare_matches) == 1, (
+            "a universal provider must still be selected on a target matching "
+            "none of its linked profiles")
+        bare_row = bare_matches[0]
+        assert bare_row["matched_profiles"] == []
+        assert bare_row.get("universal") is True
+
+        # Deterministic, same as step 4's non-universal check.
+        _, bare_rows_2 = run_providers(registry, bare_context)
+        assert bare_rows_2 == bare_rows
+
+        if bare_row["outcome"] == "completed":
+            bare_result = next(
+                item for item in bare_results if item.provider_id == provider.provider_id)
+            # CapabilityResult must accept an EMPTY facet_provenance — the
+            # honest outcome of a universal provider matching no facet at
+            # all, exercised here against real contract validation rather
+            # than merely assumed.
+            assert bare_result.facet_provenance == ()

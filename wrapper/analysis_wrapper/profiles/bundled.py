@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from .contracts import CapabilityProvider, Fingerprint, Profile
 from .providers import (CallgraphGoProvider, CallgraphJsProvider,
-                        DepmapGoProvider, DepmapJsProvider)
+                        DatastoreEvidenceProvider, DepmapGoProvider,
+                        DepmapJsProvider)
 from .registry import ProfileRegistry
 
 
@@ -147,6 +148,7 @@ BUNDLED_PROFILES: tuple[Profile, ...] = (
 )
 BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
     CallgraphGoProvider(), CallgraphJsProvider(),
+    DatastoreEvidenceProvider(),
     DepmapGoProvider(), DepmapJsProvider(),
 )
 

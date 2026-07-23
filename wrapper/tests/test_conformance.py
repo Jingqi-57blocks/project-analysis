@@ -78,6 +78,20 @@ def test_coverage_outcome_variants_conform(tmp_path, behavior):
     run_provider_conformance(profile, provider, tmp_path=tmp_path)
 
 
+def test_universal_provider_conforms_and_is_selected_with_zero_matched_facets(tmp_path):
+    """57B-80 PR2's universal-selection mechanism, proven generic: a purely
+    synthetic profile/provider pair (no real technology, no real bundled
+    profile) still passes the full battery, including its dedicated
+    universal-selection step (battery step 9) — the underlying selection
+    code has no branch tied to any concrete capability, exactly like
+    ``execution.py``'s own no-technology-literals invariant."""
+    profile = make_profile()
+    provider = ConformanceProvider(
+        provider_id="conformance-provider-universal", capability_id=profile.capability_ids[0],
+        profile_ids=(profile.profile_id,), behavior="facts", universal=True)
+    run_provider_conformance(profile, provider, tmp_path=tmp_path)
+
+
 def test_bundled_registry_conforms_structurally():
     """The bundled registry itself is a valid, deterministic, closed catalog
     (57B-81 PR2 populated BUNDLED_PROVIDERS with the four migrated
