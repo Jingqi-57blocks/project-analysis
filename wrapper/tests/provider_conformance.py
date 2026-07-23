@@ -122,12 +122,13 @@ def make_identities(workspace: Path, repos: list[RepoTarget]) -> IdentityMap:
 
 def make_context(spec: TargetSpec, output_dir: Path, *, tool_access: ToolAccess,
                  network_authorized: bool = False, scan_date: str = "2026-07-23",
-                 provenance: dict | None = None) -> RunContext:
+                 provenance: dict | None = None,
+                 identities: IdentityMap | None = None) -> RunContext:
     return RunContext(
         targets=spec, output_dir=Path(output_dir), scan_date=scan_date,
         network_authorized=network_authorized,
         provenance=provenance if provenance is not None else {"schema_version": 1},
-        tool_access=tool_access,
+        tool_access=tool_access, identities=identities,
     )
 
 
@@ -190,13 +191,17 @@ class ConformanceProvider:
                 repo_id=target.repo_id, coverage=make_coverage(),
             )
         if self.behavior == "facts":
-            # A provider's run() only ever receives `target` (a RepoTarget),
-            # never the run's IdentityMap — so it cannot resolve repo_id to
-            # its human reference itself. Using the path basename (not
-            # target.repo_id, which embeds a canonical-path hash) keeps this
-            # reference provider from leaking the raw internal repo_id into
-            # any Fact it emits (battery step 5).
-            reference = Path(target.path).name
+            # 57B-81: RunContext now carries the run's IdentityMap, so a
+            # provider resolves its own target's human-readable reference
+            # through context.identities rather than guessing one from a
+            # path. The basename fallback below is kept ONLY for identity-
+            # less unit contexts (identities=None) that predate this wiring
+            # and would otherwise leak the raw internal repo_id (battery
+            # step 5) or collide across duplicate-basename repos.
+            if context.identities is not None:
+                reference = context.identities.reference_for(target.repo_id)
+            else:
+                reference = Path(target.path).name
             fact = Fact(
                 fact_id=make_fact_id(self.capability_id, target.repo_id,
                                      "observation", (reference,)),
@@ -245,7 +250,8 @@ def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path) -> N
 
     # 2. Applicability: the provider is selected exactly once, and every
     # matching facet's profile id is disclosed.
-    context = make_context(spec, tmp_path, tool_access=_StatusStub(status=Status.COMPLETE))
+    context = make_context(spec, tmp_path, tool_access=_StatusStub(status=Status.COMPLETE),
+                           identities=identities)
     results, rows = run_providers(registry, context, identities)
     matches = [row for row in rows if row["provider_id"] == provider.provider_id]
     assert len(matches) == 1, "an applicable provider must be selected exactly once"
@@ -295,6 +301,11 @@ def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path) -> N
         }
         if behavior == "facts":
             assert result.facts and result.facts[0].source_refs
+            # A reference provider must resolve its SourceRef.repository_ref
+            # through the run's IdentityMap (57B-81), not guess one from a
+            # path — the value must match exactly, not merely be non-empty.
+            assert result.facts[0].source_refs[0].repository_ref == (
+                identities.reference_for(repo.repo_id))
         if behavior == "empty":
             document = catalog.build(results, identities, run_a)
             items = document["capabilities"][provider.capability_id]["items"]
@@ -318,7 +329,8 @@ def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path) -> N
     for authorized in (False, True):
         recorder = RecordingToolAccess(inner=_StatusStub(status=Status.COMPLETE))
         net_context = make_context(
-            spec, tmp_path, tool_access=recorder, network_authorized=authorized)
+            spec, tmp_path, tool_access=recorder, network_authorized=authorized,
+            identities=identities)
         _, net_rows = run_providers(registry, net_context, identities)
         net_run = tmp_path / f"net-{authorized}"
         net_run.mkdir()
