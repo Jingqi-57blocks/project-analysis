@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from analysis_wrapper import identity
+from analysis_wrapper.evidence import Coverage, Fact
 from analysis_wrapper.profiles import (
     ArtifactRef,
     CapabilityResult,
@@ -18,6 +19,13 @@ from analysis_wrapper.profiles.bundled import bundled_registry
 from analysis_wrapper.targetspec import TargetSpec, stable_repo_id
 
 
+def _coverage(**overrides):
+    fields = {"applicability": "applicable", "status": "complete",
+              "reason_code": "ok", "detail": ""}
+    fields.update(overrides)
+    return Coverage(**fields)
+
+
 @dataclass(frozen=True)
 class SyntheticProvider:
     provider_id: str = "synthetic-provider"
@@ -29,8 +37,9 @@ class SyntheticProvider:
             capability_id=self.capability_id,
             provider_id=self.provider_id,
             repo_id=target.repo_id,
-            facts=({"observed": True},),
-            coverage={"status": "complete"},
+            coverage=_coverage(),
+            facts=(Fact(fact_id="fact:0000000000000001", kind="observation",
+                        data={"observed": True}),),
             artifact_refs=(ArtifactRef("evidence/synthetic.json", "evidence"),),
         )
 
@@ -96,17 +105,33 @@ def test_synthetic_provider_runs_through_the_contract(target, tmp_path):
         provenance={"schema_version": 1}, tool_access=object(),
     )
     result = run_provider(registry.provider("synthetic-provider"), context, target)
-    assert result.facts == ({"observed": True},)
+    assert result.facts[0].data == {"observed": True}
     assert result.artifact_refs[0].path == "evidence/synthetic.json"
 
 
 def test_result_data_and_artifact_paths_fail_closed(target):
     with pytest.raises(ValueError, match="JSON-safe"):
-        CapabilityResult("c", "p", target.repo_id, facts=({"bad": object()},))
+        Fact(fact_id="fact:0000000000000001", kind="observation",
+             data={"bad": object()})
     with pytest.raises(ValueError, match="relative"):
         ArtifactRef("../outside.json")
     with pytest.raises(ValueError, match="relative"):
         ArtifactRef(str(Path(target.path) / "absolute.json"))
+
+
+def test_capability_result_requires_canonical_coverage_and_fact_types(target):
+    with pytest.raises(ValueError, match="Coverage value"):
+        CapabilityResult("c", "p", target.repo_id, coverage={"status": "complete"})
+    with pytest.raises(ValueError, match="Fact values"):
+        CapabilityResult("c", "p", target.repo_id, coverage=_coverage(),
+                         facts=({"observed": True},))
+    with pytest.raises(ValueError, match="facet_provenance"):
+        CapabilityResult("c", "p", target.repo_id, coverage=_coverage(),
+                         facet_provenance=("not a valid id!",))
+    result = CapabilityResult(
+        "c", "p", target.repo_id, coverage=_coverage(),
+        facet_provenance=("language.javascript",))
+    assert result.facet_provenance == ("language.javascript",)
 
 
 def test_executor_tool_access_resolves_reviewed_id_then_delegates(monkeypatch, target, tmp_path):
