@@ -560,6 +560,42 @@ def load_discovery_report(run_dir: str | Path,
     return value
 
 
+def load_table_evidence_by_repo(run_dir: str | Path,
+                                mapping: "IdentityMap | None" = None) -> dict[str, dict]:
+    """Load the datastore-evidence provider's per-repo artifacts (57B-80 PR3),
+    keyed by human-readable ``repository_ref`` — the same shape the retired
+    stage-1 discovery producer's ``table_evidence`` block used to carry
+    inline, so every downstream projection keeps consuming it identically.
+
+    Mirrors how ``system_model.from_callgraph``/``from_imports`` consume
+    their own ``<run>/<stage>/<artifact_key>.*`` artifacts: reads directly
+    from ``run_dir`` rather than requiring a prior in-process pass, so a
+    resumed or standalone call (the provider stage hasn't necessarily run in
+    THIS pass) still finds whatever a previous pass already wrote. A missing
+    ``datastore/`` directory, or a repo with no artifact in it, is silently
+    omitted — never a crash on absence — matching the empty-dict default
+    every consumer already applies at its own ``table_evidence`` lookup.
+    """
+    run = Path(run_dir).expanduser().resolve()
+    identities = mapping or load(run)
+    datastore_dir = run / "datastore"
+    result: dict[str, dict] = {}
+    if not datastore_dir.is_dir():
+        return result
+    for path in sorted(datastore_dir.glob("*.json")):
+        try:
+            reference = identities.repository_by_artifact_key(path.stem).reference
+        except KeyError:
+            continue
+        try:
+            value = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(value, dict):
+            result[reference] = value
+    return result
+
+
 def load(run_dir: str | Path) -> IdentityMap:
     run = Path(run_dir).expanduser().resolve()
     path = run / FILENAME

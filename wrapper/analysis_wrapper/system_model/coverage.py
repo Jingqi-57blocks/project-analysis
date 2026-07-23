@@ -76,18 +76,29 @@ def _worst(states: list[str]) -> str:
 
 def build(spec, report: dict, builder: ModelBuilder, cg: dict,
           disc: dict, imports: dict, modules: dict, *, identities: IdentityMap,
-          scan_date: str = "") -> dict:
+          scan_date: str = "",
+          table_evidence_by_repo: dict[str, dict] | None = None) -> dict:
     """Assemble every coverage partition. ``cg`` is the from_callgraph summary,
     ``disc`` the from_discovery summary, ``imports`` the from_imports summary,
     ``scan_date`` the model's resolved scan date (empty when it could not be
-    recorded — disclosed here rather than left as a silent blank field)."""
+    recorded — disclosed here rather than left as a silent blank field).
+    ``table_evidence_by_repo`` (57B-80 PR3) is the datastore-evidence
+    provider's own per-repo artifacts (see
+    ``identity.load_table_evidence_by_repo``) — ``_tables`` below is
+    unchanged; only where its input comes from moved off the discovery
+    report."""
+    table_evidence_by_repo = table_evidence_by_repo or {}
     blocks = {b["repository_ref"]: b for b in report.get("repos", [])}
+    blocks_with_tables = {
+        ref: {**block, "table_evidence": table_evidence_by_repo.get(ref, {})}
+        for ref, block in blocks.items()
+    }
     parts = {
         "repositories": _repositories(builder, spec).to_dict(),
         "files": _files(builder).to_dict(),
         "symbols_and_calls": _calls(builder, cg, spec, identities).to_dict(),
         "routes": _routes(builder, report, disc).to_dict(),
-        "tables": _tables(builder, blocks).to_dict(),
+        "tables": _tables(builder, blocks_with_tables).to_dict(),
         "access_model": _access(blocks).to_dict(),
         "external_boundaries": _boundaries(builder, blocks).to_dict(),
         "deployable_units": _deploy(builder, blocks).to_dict(),

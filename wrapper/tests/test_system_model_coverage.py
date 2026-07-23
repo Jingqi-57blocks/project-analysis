@@ -60,10 +60,14 @@ def test_tables_use_uncapped_evidence_source(tmp_path):
 
 
 def test_store_reference_is_not_promoted_to_declaration(tmp_path):
+    from analysis_wrapper import identity
+
     run = write_run(tmp_path / "run")
-    path = run / "discovery-report.json"
-    report = json.loads(path.read_text("utf-8"))
-    evidence = report["repos"][0]["table_evidence"]
+    # 57B-80 PR3: table_evidence lives in the datastore-evidence provider's
+    # own per-repo artifact now, not embedded in discovery-report.json.
+    artifact_key = identity.load(run).repository_by_reference("api").artifact_key
+    path = run / "datastore" / f"{artifact_key}.json"
+    evidence = json.loads(path.read_text("utf-8"))
     evidence["tables"] = {"events": {"unresolved": ["internal/events.go:4"]}}
     evidence["store_metadata"] = {"events": {
         "kind": "collection", "families": ["document-driver"],
@@ -72,7 +76,7 @@ def test_store_reference_is_not_promoted_to_declaration(tmp_path):
         "complete": True, "detected_families": ["document-driver"],
         "supported_families": ["document-driver"],
         "unsupported_families": [], "extracted_families": ["document-driver"]}
-    path.write_text(json.dumps(report), "utf-8")
+    path.write_text(json.dumps(evidence), "utf-8")
     model = sm.assemble(run)
     node = next(node for node in model.nodes
                 if node.kind == "data-store" and node.label == "events")

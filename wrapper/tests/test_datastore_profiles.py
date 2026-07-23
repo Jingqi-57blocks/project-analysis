@@ -6,8 +6,10 @@ Two concerns:
    profiles, with the right fingerprints and capability split (five
    supported families carry ``("data-model",)``; the rest are
    detection-only, matching ``discovery/tables.py``'s own
-   ``_PACKAGE_FAMILIES``/``SUPPORTED_FAMILIES`` split that this catalog
-   mirrors).
+   ``SUPPORTED_FAMILIES``). Since 57B-80 PR3, this catalog is the SOLE
+   source of the family map ``discovery/tables.py``'s own
+   ``_package_families()`` derives (see ``test_tables.py``'s pin of that
+   derivation) — no second, hand-maintained literal exists anymore.
 2. Adding a non-language, source-extension-fingerprinting profile
    (``datastore.sql``) must not perturb the language plane: this file pins
    the two ``detection.py`` scoping fixes (``claimed_extensions`` and

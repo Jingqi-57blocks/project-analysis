@@ -193,6 +193,7 @@ def build(run_dir: str | Path) -> dict:
     run = Path(run_dir).expanduser().resolve()
     identities = identity.load(run)
     discovery = identity.load_discovery_report(run, identities)
+    table_evidence_by_repo = identity.load_table_evidence_by_repo(run, identities)
     targets = _load(run / "targets.json")
     capabilities = _load(run / "capabilities.json")
     model = _load(run / "system-model.json")
@@ -220,10 +221,12 @@ def build(run_dir: str | Path) -> dict:
             "access_model": block.get("access_model", {}),
             "deployable_units": block.get("deployable_units", {}),
             "table_coverage": {
-                "available": block.get("table_evidence", {}).get("available", False),
-                "distinct_table_count": block.get("table_evidence", {}).get(
-                    "distinct_table_count", 0),
-                "notes": block.get("table_evidence", {}).get("notes", []),
+                "available": table_evidence_by_repo.get(
+                    repo_identity.reference, {}).get("available", False),
+                "distinct_table_count": table_evidence_by_repo.get(
+                    repo_identity.reference, {}).get("distinct_table_count", 0),
+                "notes": table_evidence_by_repo.get(
+                    repo_identity.reference, {}).get("notes", []),
             },
         })
 

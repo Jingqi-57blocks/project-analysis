@@ -53,19 +53,20 @@ _GO_FRAMEWORKS = (
     ("gorm", "gorm.io/gorm"),
 )
 
-# Datastore/ORM catalog (57B-80 PR1). (a) The package-derived families below
-# mirror the extraction plane's family map in ``discovery/tables.py``
-# (``_PACKAGE_FAMILIES``); ``sql`` is the source-extension family from that
-# module's ``SUPPORTED_FAMILIES`` instead (it has no package to key on). PR3
-# of 57B-80 will derive ``_PACKAGE_FAMILIES``/``SUPPORTED_FAMILIES`` FROM
-# these profiles instead of maintaining both by hand. The five SUPPORTED
-# families carry ("data-model",) because an extractor already runs for them
-# in ``discovery/tables.py``; the rest are detection-only until an extractor
-# is wired, matching that module's own "intentionally detection-only"
-# comment. (b) ``framework.gorm`` above is capability-less (kept out of
-# route-inventory) and coexists DELIBERATELY with ``datastore.gorm`` below:
-# same ``gorm.io/gorm`` package, two independent capability lenses (route
-# plane vs. datastore plane).
+# Datastore/ORM catalog (57B-80 PR1; unified with discovery/tables.py in PR3).
+# (a) The package-derived families below are now the SOLE source of the
+# family map ``discovery/tables.py``'s detector uses (``_package_families()``
+# derives it from these profiles' own fingerprints instead of a second,
+# hand-maintained literal); ``sql`` is the source-extension family from that
+# module's own ``SUPPORTED_FAMILIES`` instead (it has no package to key on).
+# The five SUPPORTED families carry ("data-model",) because an extractor
+# already runs for them in ``discovery/tables.py`` (wrapped, unmodified, by
+# the ``datastore-evidence`` capability provider); the rest are detection-only
+# until an extractor is wired, matching that module's own "intentionally
+# detection-only" comment. (b) ``framework.gorm`` above is capability-less
+# (kept out of route-inventory) and coexists DELIBERATELY with
+# ``datastore.gorm`` below: same ``gorm.io/gorm`` package, two independent
+# capability lenses (route plane vs. datastore plane).
 _DATASTORE_SUPPORTED = (
     ("sequelize", "package-dependency", "sequelize"),
     ("gorm", "go-require", "gorm.io/gorm"),

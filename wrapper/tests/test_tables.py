@@ -12,6 +12,32 @@ _HAS_SQLGLOT = importlib.util.find_spec("sqlglot") is not None
 pytestmark = pytest.mark.skipif(not astgrep.available(), reason="ast-grep not installed")
 
 
+def test_package_families_are_derived_from_the_bundled_datastore_profiles():
+    """57B-80 PR3: the family<->package/module-path map used to DETECT a
+    datastore family from a manifest is now derived from the bundled
+    ``datastore.*`` profiles' own fingerprints rather than a second,
+    hand-maintained literal. This pins the derivation against the ORIGINAL
+    literal dict (all 13 package/module keys + families) so a profile-catalog
+    edit can never silently change what this detector recognizes without a
+    test noticing."""
+    expected = {
+        "sequelize": "sequelize",
+        "gorm.io/gorm": "gorm",
+        "@prisma/client": "prisma",
+        "better-sqlite3": "sqlite-driver",
+        "drizzle-orm": "drizzle",
+        "knex": "knex",
+        "mongodb": "mongodb-native",
+        "mongoose": "mongoose",
+        "mysql": "mysql-driver",
+        "mysql2": "mysql-driver",
+        "pg": "postgres-driver",
+        "sqlite3": "sqlite-driver",
+        "typeorm": "typeorm",
+    }
+    assert tables._package_families() == expected
+
+
 def test_orm_declaration_and_unresolved_binding():
     ev = tables.generate(str(FIXDB), "db-fix")
     assert ev.available

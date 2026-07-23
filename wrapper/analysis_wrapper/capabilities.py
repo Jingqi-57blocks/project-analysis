@@ -191,7 +191,13 @@ def build(run_dir: str | Path) -> dict:
                 "canonical UI-to-route linkage artifact unavailable"
                 if ui_status == "unavailable" else ""),
     ))
-    data_model = classify_data_model(repos)
+    table_evidence_by_repo = identity.load_table_evidence_by_repo(run, identities)
+    repos_with_tables = [
+        {**block, "table_evidence": table_evidence_by_repo.get(
+            block.get("repository_ref", ""), {})}
+        for block in repos
+    ]
+    data_model = classify_data_model(repos_with_tables)
     table_status = data_model.status
     records.append(_record(
         "data-model", status=table_status,

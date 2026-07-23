@@ -63,9 +63,11 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
     heads = {identities.reference_for(r.repo_id): (r.git.head or "")
              for r in spec.repos}
     report = identity.load_discovery_report(run, identities)
+    table_evidence_by_repo = identity.load_table_evidence_by_repo(run, identities)
 
     builder = ModelBuilder()
-    disc = from_discovery.load(builder, spec, report, identities)
+    disc = from_discovery.load(builder, spec, report, identities,
+                              table_evidence_by_repo=table_evidence_by_repo)
     cg = from_callgraph.load(builder, run, identities)
     imports = _merge_imports(
         spec, identities,
@@ -85,7 +87,8 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
     resolved_scan_date = _resolve_scan_date(run, cg, scan_date)
     cov = coverage.build(spec, report, builder, cg, disc, imports, modules,
                          identities=identities,
-                         scan_date=resolved_scan_date)
+                         scan_date=resolved_scan_date,
+                         table_evidence_by_repo=table_evidence_by_repo)
     return SystemModel(
         scan_date=resolved_scan_date,
         project_ref=identities.project.reference,

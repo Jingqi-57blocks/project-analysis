@@ -65,9 +65,45 @@ _BOUNDARY_CAP_NOTE = "COVERAGE CAP: per-host / per-package evidence capped at 5 
 _ROUTE_CAP_NOTE = "COVERAGE CAP: source scan stopped after 6000 files"
 
 
-def _api_block(*, capped_routes: bool, table_available: bool,
-               sql_complete: bool, deploy_capped: bool = False,
-               tables_capped: bool = False, boundaries_capped: bool = False) -> dict:
+def _api_table_evidence(*, table_available: bool, sql_complete: bool,
+                        tables_capped: bool) -> dict:
+    """The datastore-evidence provider's own artifact shape (57B-80 PR3) —
+    written to ``datastore/<artifact_key>.json``, NOT embedded in the
+    discovery-report block anymore (see ``_write_datastore_artifacts``)."""
+    return {
+        "available": table_available, "distinct_table_count": 1,
+        "tables": ({"users": {"declaration": ["internal/model/user.go:10"],
+                              "write": ["internal/repo/user.go:20"]}}
+                   if table_available else {}),
+        "unresolved": ([{"kind": "gorm-access", "evidence": "internal/x.go:3"}]
+                       if not sql_complete else []),
+        "registry_coverage": {},
+        "notes": [_CAP_NOTE] if tables_capped else [],
+        "sql_coverage": {"available": sql_complete, "complete": sql_complete},
+        "detector_coverage": {
+            "complete": True,
+            "detected_families": ["gorm", "sql"],
+            "supported_families": ["gorm", "sql"],
+            "unsupported_families": [],
+            "extracted_families": (["gorm", "sql"] if table_available and sql_complete
+                                   else ["gorm"] if table_available else []),
+            "evidence": {}, "errors": []},
+    }
+
+
+def _web_table_evidence() -> dict:
+    return {"available": True, "distinct_table_count": 0,
+            "tables": {}, "unresolved": [], "registry_coverage": {},
+            "sql_coverage": {"available": True, "complete": True},
+            "detector_coverage": {
+                "complete": True, "detected_families": [],
+                "supported_families": [], "unsupported_families": [],
+                "extracted_families": [], "evidence": {}, "errors": []},
+            "notes": []}
+
+
+def _api_block(*, capped_routes: bool, deploy_capped: bool = False,
+               boundaries_capped: bool = False) -> dict:
     return {
         "repo_id": _API,
         "provenance": {"is_git": True, "head": _HA, "branch": "main",
@@ -80,24 +116,6 @@ def _api_block(*, capped_routes: bool, table_available: bool,
             "tables": [{"name": "users", "evidence": "x:1"}], "api_configs": [],
             "notes": (["route cap hit at 200: further signals not recorded"]
                       if capped_routes else [])},
-        "table_evidence": {
-            "available": table_available, "distinct_table_count": 1,
-            "tables": ({"users": {"declaration": ["internal/model/user.go:10"],
-                                  "write": ["internal/repo/user.go:20"]}}
-                       if table_available else {}),
-            "unresolved": ([{"kind": "gorm-access", "evidence": "internal/x.go:3"}]
-                           if not sql_complete else []),
-            "registry_coverage": {},
-            "notes": [_CAP_NOTE] if tables_capped else [],
-            "sql_coverage": {"available": sql_complete, "complete": sql_complete},
-            "detector_coverage": {
-                "complete": True,
-                "detected_families": ["gorm", "sql"],
-                "supported_families": ["gorm", "sql"],
-                "unsupported_families": [],
-                "extracted_families": (["gorm", "sql"] if table_available and sql_complete
-                                       else ["gorm"] if table_available else []),
-                "evidence": {}, "errors": []}},
         "access_model": {
             "available": True, "role_catalog": [{"name": "Admin"}],
             "role_catalog_names": ["Admin"],
@@ -137,14 +155,6 @@ def _web_block() -> dict:
                    "evidence": []},
         "module_signals": {"folders": ["src"], "routes": [], "tables": [],
                            "api_configs": [], "notes": []},
-        "table_evidence": {"available": True, "distinct_table_count": 0,
-                           "tables": {}, "unresolved": [], "registry_coverage": {},
-                           "sql_coverage": {"available": True, "complete": True},
-                           "detector_coverage": {
-                               "complete": True, "detected_families": [],
-                               "supported_families": [], "unsupported_families": [],
-                               "extracted_families": [], "evidence": {}, "errors": []},
-                           "notes": []},
         "access_model": {"available": True, "role_catalog": [],
                          "role_catalog_names": [],
                          "authz_checks": {"count": 0, "sample": []},
@@ -159,9 +169,9 @@ def _web_block() -> dict:
     }
 
 
-def _report(*, with_routes: bool, capped_routes: bool, table_available: bool,
-            sql_complete: bool, deploy_capped: bool, routes_capped: bool,
-            tables_capped: bool, boundaries_capped: bool) -> dict:
+def _report(*, with_routes: bool, capped_routes: bool,
+            deploy_capped: bool, routes_capped: bool,
+            boundaries_capped: bool) -> dict:
     inventory = None
     linkage = None
     if with_routes:
@@ -189,10 +199,7 @@ def _report(*, with_routes: bool, capped_routes: bool, table_available: bool,
     return {
         "project_id": _PROJECT, "workspace_root": "/ws",
         "repos": [_api_block(capped_routes=capped_routes,
-                             table_available=table_available,
-                             sql_complete=sql_complete,
                              deploy_capped=deploy_capped,
-                             tables_capped=tables_capped,
                              boundaries_capped=boundaries_capped), _web_block()],
         "not_targeted": [], "reduced_coverage_targets": [],
         "integration_candidate_count": 1, "route_inventory": inventory,
@@ -254,6 +261,23 @@ def _write_imports(run: Path) -> None:
         json.dumps(payload, sort_keys=True), "utf-8")
 
 
+def _write_datastore_artifacts(run: Path, identities, *, table_available: bool,
+                               sql_complete: bool, tables_capped: bool) -> None:
+    """Write the datastore-evidence provider's own per-repo artifacts (57B-80
+    PR3) — ``discovery-report.json`` no longer carries ``table_evidence``
+    inline; consumers read it from here instead (see
+    ``identity.load_table_evidence_by_repo``)."""
+    datastore_dir = run / "datastore"
+    datastore_dir.mkdir(parents=True, exist_ok=True)
+    api_key = identities.artifact_key_for(_API)
+    web_key = identities.artifact_key_for(_WEB)
+    (datastore_dir / f"{api_key}.json").write_text(json.dumps(_api_table_evidence(
+        table_available=table_available, sql_complete=sql_complete,
+        tables_capped=tables_capped), indent=2, sort_keys=True), "utf-8")
+    (datastore_dir / f"{web_key}.json").write_text(
+        json.dumps(_web_table_evidence(), indent=2, sort_keys=True), "utf-8")
+
+
 def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
               capped_routes: bool = False, table_available: bool = True,
               sql_complete: bool = True, with_imports: bool = False,
@@ -270,15 +294,14 @@ def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
     identity.write_mapping(run, identities)
     report = _report(with_routes=with_routes,
                      capped_routes=capped_routes,
-                     table_available=table_available,
-                     sql_complete=sql_complete,
                      deploy_capped=deploy_capped,
                      routes_capped=routes_capped,
-                     tables_capped=tables_capped,
                      boundaries_capped=boundaries_capped)
     (run / "discovery-report.json").write_text(
         json.dumps(identity.externalize_discovery_report(report, identities), indent=2),
         "utf-8")
+    _write_datastore_artifacts(run, identities, table_available=table_available,
+                              sql_complete=sql_complete, tables_capped=tables_capped)
     if with_callgraph:
         _write_callgraph(run)
     if with_imports:

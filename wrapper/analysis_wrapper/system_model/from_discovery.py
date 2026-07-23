@@ -4,7 +4,9 @@ CANONICAL COMPLETENESS RULE (57B-31): routes come from the detailed
 ``route_inventory`` rows and tables from the uncapped ``table_evidence`` map —
 NEVER from the capped ``module_signals.routes`` / ``module_signals.tables``
 human-synthesis summaries (those are excluded from the canonical graph; the cap
-they carry is disclosed in coverage instead).
+they carry is disclosed in coverage instead). ``table_evidence`` itself comes
+from the datastore-evidence capability provider's own artifacts (57B-80 PR3),
+not the discovery report — see ``load``'s ``table_evidence_by_repo`` param.
 
 Emits, per repo: one ``repository`` node (with stack/provenance/access-model
 attributes), ``route`` nodes + ``route-linkage`` edges, ``data-store`` nodes +
@@ -30,11 +32,21 @@ ACCESS = "discovery/access"
 
 
 def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
-         identities: IdentityMap) -> dict:
+         identities: IdentityMap, *,
+         table_evidence_by_repo: dict[str, dict] | None = None) -> dict:
     """Populate ``builder`` from ``targets.json`` (spec) + ``discovery-report``.
+
+    ``table_evidence_by_repo`` (57B-80 PR3) is the datastore-evidence
+    provider's own per-repo artifacts, keyed by ``repository_ref`` — the
+    retired stage-1 producer used to carry this inline on each report block
+    (``block["table_evidence"]``); it is now sourced from
+    ``identity.load_table_evidence_by_repo`` instead, so ``_tables`` below
+    stays byte-for-byte unchanged, just fed from elsewhere. Defaults to empty
+    (no data-store nodes) rather than requiring every caller to pass one.
 
     Returns per-partition presence flags used by coverage (e.g. whether the
     detailed route artifact existed)."""
+    table_evidence_by_repo = table_evidence_by_repo or {}
     heads = {identities.reference_for(r.repo_id): (r.git.head or "")
              for r in spec.repos}
     blocks = {b["repository_ref"]: b for b in report.get("repos", [])}
@@ -43,7 +55,7 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
         block = blocks.get(repo_identity.reference, {})
         _repository(builder, target, block, repo_identity)
         _tables(builder, repo_identity.reference, heads,
-                block.get("table_evidence", {}))
+                table_evidence_by_repo.get(repo_identity.reference, {}))
         _integrations(builder, repo_identity.reference, heads,
                       block.get("integration_evidence", {}))
         _deploy(builder, repo_identity.reference, heads,
