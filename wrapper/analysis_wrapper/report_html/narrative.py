@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .. import locale
 from .content_map import Destination
 from .htmlutil import attr, esc, slugify
 from .markdown_render import MarkdownDoc
@@ -28,12 +29,6 @@ class NarrativeBlock:
     destinations: list[tuple[str, str, Destination]]
     # (anchor, title) entries for this page's TOC drawer.
     toc: list[tuple[str, str]] = field(default_factory=list)
-
-
-_MODULE_LABELS = {
-    "en": {"drilldown": "Module drill-down", "map": "System module map"},
-    "zh-CN": {"drilldown": "模块下钻", "map": "系统模块图"},
-}
 
 
 def document_outline(rendered: MarkdownDoc, full_page: str, *, max_level: int = 3) -> str:
@@ -115,7 +110,8 @@ def module_entrance(
     state. The system-level module map (authored narrative in the Project Map) is
     always linked so the entrance is useful even in the stub state.
     """
-    labels = _MODULE_LABELS.get(inputs.language, _MODULE_LABELS["en"])
+    cat = locale.labels(inputs.language)
+    labels = {"drilldown": cat["narrative.drilldown"], "map": cat["narrative.map"]}
     modules = inputs.drilldown_modules
 
     if not modules:

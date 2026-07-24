@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
 
+from .. import locale
 from . import assets, components, content_map, narrative, pages, run_inputs
 from .content_map import Destination, DocEntry
 from .htmlutil import attr, esc
@@ -124,33 +125,17 @@ def _authored_section_items(
 def _run_status_summary(inputs: run_inputs.RunInputs) -> str:
     if not inputs.inspection_only:
         return ""
-    if inputs.language == "zh-CN":
-        message = (
-            "<strong>仅供检查：</strong>分析时至少一个仓库不是干净工作树；"
-            "此运行不能被接受为 current。"
-        )
-    else:
-        message = (
-            "<strong>Inspection-only:</strong> at least one repository was not a "
-            "clean worktree during analysis; this run cannot be accepted as current."
-        )
+    message = locale.labels(inputs.language)["landing.inspection_only_message"]
     return f'<div class="note"><p>{message}</p></div>'
 
 
 def _landing_labels(language: str) -> dict[str, str]:
-    labels = {
-        "en": {
-            "run_status": "Run status",
-            "diagnosis": "Diagnosis",
-            "diagnosis_unavailable": "No narrative document present.",
-        },
-        "zh-CN": {
-            "run_status": "运行状态",
-            "diagnosis": "诊断",
-            "diagnosis_unavailable": "没有可用的叙述性文档。",
-        },
+    cat = locale.labels(language)
+    return {
+        "run_status": cat["landing.run_status"],
+        "diagnosis": cat["landing.diagnosis"],
+        "diagnosis_unavailable": cat["landing.diagnosis_unavailable"],
     }
-    return labels.get(language, labels["en"])
 
 
 def _authored_diagrams_section(doc_entries: list[DocEntry]) -> str | None:

@@ -13,6 +13,7 @@ import collections
 import re
 from dataclasses import dataclass, field
 
+from .. import locale
 from .htmlutil import attr, esc
 from .markdown_render import mermaid_figure
 from .run_inputs import RunInputs
@@ -97,11 +98,12 @@ def _unavailable(key: str, title: str, anchor: str, reason: str) -> StructuredCo
 
 def system_snapshot(inputs: RunInputs) -> StructuredComponent:
     anchor = "system-snapshot"
+    cat = locale.labels(inputs.language)
     sm = inputs.system_model
     if not sm:
         return _unavailable(
-            "snapshot", "System snapshot", anchor,
-            "system-model.json is absent; the compact snapshot is unavailable.",
+            "snapshot", cat["components.snapshot.title"], anchor,
+            cat["components.snapshot.unavailable"],
         )
     stats = sm.get("stats", {})
     by_kind = stats.get("nodes_by_kind", {})
@@ -110,17 +112,20 @@ def system_snapshot(inputs: RunInputs) -> StructuredComponent:
     modules_cov = sm.get("coverage", {}).get("modules", {})
     modules_count = modules_cov.get("counts", {}).get("modules", 0)
     modules_status = modules_cov.get("status", "unknown")
-    modules_note = "synthesis-inferred; not machine-computed" if modules_status == "unavailable" else ""
+    modules_note = cat["components.snapshot.modules_note"] if modules_status == "unavailable" else ""
 
     tiles = _tiles([
-        ("repositories", by_kind.get("repository", len(repos)), ""),
-        ("modules", modules_count if modules_status != "unavailable" else "unavailable", modules_note),
-        ("deployable units", by_kind.get("deployable-unit", 0), ""),
-        ("languages", len(languages), ", ".join(languages)),
-        ("data stores", by_kind.get("data-store", 0), "distinct tables"),
-        ("routes", by_kind.get("route", 0), ""),
-        ("external boundaries", by_kind.get("external-boundary", 0), "incl. dependency candidates"),
-        ("symbols", by_kind.get("symbol", 0), ""),
+        (cat["components.snapshot.tile.repositories"], by_kind.get("repository", len(repos)), ""),
+        (cat["components.snapshot.tile.modules"],
+         modules_count if modules_status != "unavailable" else "unavailable", modules_note),
+        (cat["components.snapshot.tile.deployable_units"], by_kind.get("deployable-unit", 0), ""),
+        (cat["components.snapshot.tile.languages"], len(languages), ", ".join(languages)),
+        (cat["components.snapshot.tile.data_stores"], by_kind.get("data-store", 0),
+         cat["components.snapshot.tile.data_stores_note"]),
+        (cat["components.snapshot.tile.routes"], by_kind.get("route", 0), ""),
+        (cat["components.snapshot.tile.external_boundaries"], by_kind.get("external-boundary", 0),
+         cat["components.snapshot.tile.external_boundaries_note"]),
+        (cat["components.snapshot.tile.symbols"], by_kind.get("symbol", 0), ""),
     ])
 
     # HEAD revision per repository reference; the real commit has its own column.
@@ -140,18 +145,21 @@ def system_snapshot(inputs: RunInputs) -> StructuredComponent:
             esc(a.get("commit_count", "—")),
         ])
     table = _table(
-        ["repository", "commit", "stacks", "frameworks", "package manager", "commits"],
+        [cat["components.header.repository"], cat["components.header.commit"],
+         cat["components.header.stacks"], cat["components.header.frameworks"],
+         cat["components.header.package_manager"], cat["components.header.commits"]],
         rows,
     )
     html = tiles + table
     return StructuredComponent(
-        key="snapshot", title="System snapshot", anchor=anchor, html=html,
+        key="snapshot", title=cat["components.snapshot.title"], anchor=anchor, html=html,
         sources=["system-model.json", "run-state.json"],
     )
 
 
 def provenance_table(inputs: RunInputs) -> StructuredComponent:
     anchor = "provenance"
+    cat = locale.labels(inputs.language)
     rows = []
     for p in inputs.provenance():
         head_short = p.head[:12] if p.head else "—"
@@ -162,17 +170,23 @@ def provenance_table(inputs: RunInputs) -> StructuredComponent:
         ])
     if not rows:
         return _unavailable(
-            "provenance", "Analyzed revisions", anchor,
-            "run-state.json carries no provenance rows.",
+            "provenance", cat["components.provenance.title"], anchor,
+            cat["components.provenance.unavailable"],
         )
-    table = _table(["repository", "HEAD", "working tree dirty"], rows)
+    table = _table(
+        [cat["components.header.repository"], cat["components.header.head"],
+         cat["components.header.working_tree_dirty"]],
+        rows,
+    )
     meta = (
-        f'<p class="muted">Analyzed at <code>{esc(inputs.analyzed_at)}</code> · '
-        f"language <code>{esc(inputs.language)}</code> · run "
+        f'<p class="muted">{esc(cat["components.provenance.analyzed_at"])} '
+        f'<code>{esc(inputs.analyzed_at)}</code> · '
+        f'{esc(cat["components.provenance.language"])} <code>{esc(inputs.language)}</code> · '
+        f'{esc(cat["components.provenance.run"])} '
         f"<code>{esc(inputs.run_id)}</code></p>"
     )
     return StructuredComponent(
-        key="provenance", title="Analyzed revisions", anchor=anchor,
+        key="provenance", title=cat["components.provenance.title"], anchor=anchor,
         html=meta + table, sources=["run-state.json"],
     )
 
@@ -183,11 +197,12 @@ def provenance_table(inputs: RunInputs) -> StructuredComponent:
 
 def coverage_matrix(inputs: RunInputs) -> StructuredComponent:
     anchor = "coverage-lenses"
+    cat = locale.labels(inputs.language)
     sm = inputs.system_model
     if not sm:
         return _unavailable(
-            "coverage", "Lens coverage", anchor,
-            "system-model.json is absent; per-lens coverage is unavailable.",
+            "coverage", cat["components.coverage.title"], anchor,
+            cat["components.coverage.unavailable"],
         )
     coverage = sm.get("coverage", {})
     rows = []
@@ -199,7 +214,7 @@ def coverage_matrix(inputs: RunInputs) -> StructuredComponent:
         unresolved_txt = ", ".join(f"{k}={v}" for k, v in sorted(unresolved.items())) or "—"
         caps = rec.get("caps", [])
         caps_html = (
-            f'<details><summary>{len(caps)} cap(s)</summary><ul>'
+            f'<details><summary>{len(caps)} {cat["components.coverage.cap_label"]}</summary><ul>'
             + "".join(f"<li>{esc(c)}</li>" for c in caps)
             + "</ul></details>"
             if caps else "—"
@@ -211,29 +226,35 @@ def coverage_matrix(inputs: RunInputs) -> StructuredComponent:
             esc(unresolved_txt),
             caps_html,
         ])
-    table = _table(["lens", "status", "counts", "unresolved", "caps"], rows)
+    table = _table(
+        [cat["components.header.lens"], cat["components.header.status"],
+         cat["components.header.counts"], cat["components.header.unresolved"],
+         cat["components.header.caps"]],
+        rows,
+    )
     return StructuredComponent(
-        key="coverage", title="Lens coverage", anchor=anchor, html=table,
+        key="coverage", title=cat["components.coverage.title"], anchor=anchor, html=table,
         sources=["system-model.json"],
     )
 
 
 def relationship_legend(inputs: RunInputs) -> StructuredComponent:
     anchor = "relationship-status"
+    cat = locale.labels(inputs.language)
     sm = inputs.system_model
     if not sm:
         return _unavailable(
-            "legend", "Relationship status", anchor,
-            "system-model.json is absent; edge status counts are unavailable.",
+            "legend", cat["components.legend.title"], anchor,
+            cat["components.legend.unavailable"],
         )
     stats = sm.get("stats", {})
     by_status = stats.get("edges_by_status", {})
     by_type = stats.get("edges_by_type", {})
     legend = {
-        "observed": "recorded directly by a tool (e.g. a resolved call/import edge)",
-        "inferred": "derived by a producer with lower certainty",
-        "unresolved": "a call/import site seen but its target not resolvable",
-        "unavailable": "no producer supplied this relationship class",
+        "observed": cat["components.legend.meaning.observed"],
+        "inferred": cat["components.legend.meaning.inferred"],
+        "unresolved": cat["components.legend.meaning.unresolved"],
+        "unavailable": cat["components.legend.meaning.unavailable"],
     }
     rows = []
     for status_key, meaning in legend.items():
@@ -243,17 +264,27 @@ def relationship_legend(inputs: RunInputs) -> StructuredComponent:
             esc(meaning),
         ])
     edge_types = ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
-    table = _table(["status", "edge count", "meaning"], rows)
-    note = f'<p class="muted">Edge types: {esc(edge_types)}.</p>'
+    table = _table(
+        [cat["components.header.status"], cat["components.header.edge_count"],
+         cat["components.header.meaning"]],
+        rows,
+    )
+    note = (
+        f'<p class="muted">{esc(cat["components.legend.edge_types_prefix"])} '
+        f'{esc(edge_types)}.</p>'
+    )
     return StructuredComponent(
-        key="legend", title="Relationship status", anchor=anchor,
+        key="legend", title=cat["components.legend.title"], anchor=anchor,
         html=table + note, sources=["system-model.json"],
     )
 
 
-def _per_repo_coverage(report: dict | None, title_key: str) -> str:
+def _per_repo_coverage(report: dict | None, title_key: str, cat: dict) -> str:
     if not report:
-        return f'<p class="muted">{esc(title_key)} coverage report absent.</p>'
+        return (
+            f'<p class="muted">{esc(title_key)} '
+            f'{esc(cat["components.per_repo.absent_suffix"])}</p>'
+        )
     rows = []
     for repo in sorted(report.get("repos", []), key=lambda r: r.get(
             "repository_ref", "")):
@@ -269,21 +300,27 @@ def _per_repo_coverage(report: dict | None, title_key: str) -> str:
             esc(repo.get("tool", "—")),
             esc(detail_txt),
         ])
-    return _table(["repository", "status", "tool", "detail"], rows)
+    return _table(
+        [cat["components.header.repository"], cat["components.header.status"],
+         cat["components.header.tool"], cat["components.header.detail"]],
+        rows,
+    )
 
 
 def callgraph_coverage_table(inputs: RunInputs) -> StructuredComponent:
-    html = _per_repo_coverage(inputs.callgraph_coverage, "call-graph")
+    cat = locale.labels(inputs.language)
+    html = _per_repo_coverage(inputs.callgraph_coverage, "call-graph", cat)
     return StructuredComponent(
-        key="callgraph-coverage", title="Call-graph coverage (per repository)",
+        key="callgraph-coverage", title=cat["components.callgraph_coverage.title"],
         anchor="callgraph-coverage", html=html, sources=["callgraph-coverage.json"],
     )
 
 
 def depmap_coverage_table(inputs: RunInputs) -> StructuredComponent:
-    html = _per_repo_coverage(inputs.depmap_coverage, "dependency-map")
+    cat = locale.labels(inputs.language)
+    html = _per_repo_coverage(inputs.depmap_coverage, "dependency-map", cat)
     return StructuredComponent(
-        key="depmap-coverage", title="Dependency-map coverage (per repository)",
+        key="depmap-coverage", title=cat["components.depmap_coverage.title"],
         anchor="depmap-coverage", html=html, sources=["imports/depmap-coverage.json"],
     )
 
@@ -294,11 +331,12 @@ def depmap_coverage_table(inputs: RunInputs) -> StructuredComponent:
 
 def topology_structured(inputs: RunInputs) -> StructuredComponent:
     anchor = "topology-structured"
+    cat = locale.labels(inputs.language)
     sm = inputs.system_model
     if not sm:
         return _unavailable(
-            "topology", "System topology (structured)", anchor,
-            "system-model.json is absent; the structured topology is unavailable.",
+            "topology", cat["components.topology.title"], anchor,
+            cat["components.topology.unavailable"],
         )
     nid2repo = _nid_to_repo(sm)
     repos = [r.get("repository_ref", "") for r in _repos(inputs)]
@@ -334,15 +372,9 @@ def topology_structured(inputs: RunInputs) -> StructuredComponent:
     mermaid_source = "\n".join(lines)
 
     figure = mermaid_figure(mermaid_source, dom_id="topo")
-    note = (
-        '<p class="muted">Built from structured <code>route-linkage</code> and '
-        "<code>data</code> edges (which routes the frontend calls; which repos "
-        "touch persistence). Inter-service business roles and named external "
-        "systems are synthesis-inferred narrative — see the authored topology "
-        "and the Project Map.</p>"
-    )
+    note = f'<p class="muted">{cat["components.topology.note"]}</p>'
     return StructuredComponent(
-        key="topology", title="System topology (structured)", anchor=anchor,
+        key="topology", title=cat["components.topology.title"], anchor=anchor,
         html=figure + note, sources=["system-model.json"],
         mermaid_source=mermaid_source,
     )
@@ -350,11 +382,12 @@ def topology_structured(inputs: RunInputs) -> StructuredComponent:
 
 def external_boundaries_table(inputs: RunInputs) -> StructuredComponent:
     anchor = "external-boundaries"
+    cat = locale.labels(inputs.language)
     sm = inputs.system_model
     if not sm:
         return _unavailable(
-            "externals", "External boundaries", anchor,
-            "system-model.json is absent; external boundaries are unavailable.",
+            "externals", cat["components.externals.title"], anchor,
+            cat["components.externals.unavailable"],
         )
     ext = [n for n in sm.get("nodes", []) if n.get("kind") == "external-boundary"]
     by_kind = collections.defaultdict(list)
@@ -366,28 +399,26 @@ def external_boundaries_table(inputs: RunInputs) -> StructuredComponent:
         preview = ", ".join(labels[:24]) + (" …" if len(labels) > 24 else "")
         rows.append([esc(kind), esc(len(labels)), f'<span class="wrap">{esc(preview)}</span>'])
     table = _searchable_table(
-        "external-boundaries-table", "filter boundary kinds…",
-        ["boundary kind", "count", "labels"], rows,
+        "external-boundaries-table", cat["components.externals.placeholder"],
+        [cat["components.header.boundary_kind"], cat["components.header.count"],
+         cat["components.header.labels"]],
+        rows,
     )
-    note = (
-        '<p class="muted">Resolved hosts/packages (<code>host-fragment</code>, '
-        "<code>integration-package</code>) are named external systems; "
-        "<code>integration-candidate</code> entries are dependency-manifest "
-        "candidates, not confirmed runtime integrations.</p>"
-    )
+    note = f'<p class="muted">{cat["components.externals.note"]}</p>'
     return StructuredComponent(
-        key="externals", title="External boundaries", anchor=anchor,
+        key="externals", title=cat["components.externals.title"], anchor=anchor,
         html=note + table, sources=["system-model.json"],
     )
 
 
 def data_stores_table(inputs: RunInputs) -> StructuredComponent:
     anchor = "data-stores"
+    cat = locale.labels(inputs.language)
     sm = inputs.system_model
     if not sm:
         return _unavailable(
-            "datastores", "Data stores", anchor,
-            "system-model.json is absent; data stores are unavailable.",
+            "datastores", cat["components.datastores.title"], anchor,
+            cat["components.datastores.unavailable"],
         )
     ds = [n for n in sm.get("nodes", []) if n.get("kind") == "data-store"]
     rows = []
@@ -399,10 +430,12 @@ def data_stores_table(inputs: RunInputs) -> StructuredComponent:
             esc(n.get("repository_ref", "—")),
         ])
     table = _searchable_table(
-        "data-stores-table", "filter tables…",
-        ["table", "access types", "repository"], rows,
+        "data-stores-table", cat["components.datastores.placeholder"],
+        [cat["components.header.table"], cat["components.header.access_types"],
+         cat["components.header.repository"]],
+        rows,
     )
     return StructuredComponent(
-        key="datastores", title="Data stores", anchor=anchor,
+        key="datastores", title=cat["components.datastores.title"], anchor=anchor,
         html=table, sources=["system-model.json"],
     )
