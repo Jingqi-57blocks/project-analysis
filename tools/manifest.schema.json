@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project-analysis/tools/manifest.schema.json",
+  "title": "Project Analysis tool manifest",
+  "description": "Machine-readable, target-neutral inventory of the analyzer toolchain. Single source read by the doctor, setup, and compatibility surfaces. Describes tools and their contracts only; it records no analyzed-project data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tools"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional pointer to this schema file (editor/tooling convenience)."
+    },
+    "schema_version": {
+      "type": "string",
+      "description": "Semantic version of this manifest's shape.",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/tool" }
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "ownership", "requirement", "lanes", "install", "reconcile", "runtime_contract"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "Stable identifier used by doctor/setup/compat."
+        },
+        "name": { "type": "string", "description": "Human-readable name." },
+        "ownership": {
+          "enum": ["analyzer-managed", "developer-managed"],
+          "description": "analyzer-managed = installed by `setup` into the data root; developer-managed = a prerequisite the developer provides (never installed by the skill)."
+        },
+        "requirement": {
+          "enum": ["required", "optional"],
+          "description": "required = analysis cannot run without it; optional = its absence yields disclosed reduced coverage."
+        },
+        "lanes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["core", "js", "go", "structural", "complexity", "duplication", "history", "sql", "report", "network"] },
+          "description": "Analysis lanes this tool serves. Used to decide applicability for a target."
+        },
+        "executable": {
+          "type": ["string", "null"],
+          "description": "Command probed on PATH, or null for a library/package with no standalone binary."
+        },
+        "version_probe": {
+          "type": ["string", "null"],
+          "description": "Command that prints the installed version (for doctor/drift), or null."
+        },
+        "validated_version": {
+          "type": ["string", "null"],
+          "description": "The version validated by the project, or null when unpinned."
+        },
+        "accepted_range": {
+          "type": ["string", "null"],
+          "description": "Human-readable accepted version range, or null."
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "True when the version is pinned (lockfile or exact install), false when only validated/recorded."
+        },
+        "install": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["by", "source"],
+          "properties": {
+            "by": { "enum": ["developer", "analyzer-setup"] },
+            "source": { "enum": ["system", "homebrew", "pip", "pypi", "pnpm", "npm", "go-proxy", "none"] },
+            "command": { "type": ["string", "null"], "description": "Reference install command, or null." }
+          }
+        },
+        "network_host": {
+          "type": ["string", "null"],
+          "description": "Host contacted at install-time (analyzer-managed) or at analysis-time (network lane), or null for fully offline tools."
+        },
+        "platforms": {
+          "type": "array",
+          "items": { "enum": ["macos", "linux", "wsl2", "windows"] },
+          "description": "Platforms supported in v1."
+        },
+        "runtime_contract": {
+          "type": "boolean",
+          "description": "True when this tool's version participates in the runtime-contract identity used by the compatibility check (analyzer-owned pinned tools + the core interpreter); false when its version is only recorded per-run."
+        },
+        "reconcile": {
+          "enum": ["rebuild", "reinstall", "probe-only", "not-applicable"],
+          "description": "How setup reconciles this tool on install/upgrade: rebuild (regenerate the artifact), reinstall (replace the package), probe-only (developer-managed; detect and report), not-applicable."
+        },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}
