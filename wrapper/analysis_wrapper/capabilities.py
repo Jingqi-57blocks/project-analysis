@@ -38,6 +38,23 @@ def _read_json(path: Path, default: dict | None = None) -> dict:
     return value
 
 
+def _read_json_or_none(path: Path) -> dict | None:
+    """Like ``_read_json``, but a genuinely absent artifact stays ``None``
+    rather than becoming ``{}`` (57B-84 B2): ``route-inventory.json`` /
+    ``ui-route-linkage.json`` are legitimately and PERMANENTLY absent for a
+    workspace with zero route backends (mirroring the retired
+    ``discover()`` block's own ``route_inventory = None`` case), and the
+    downstream ``route_doc is not None`` / ``linkage_doc is not None``
+    status checks below need to tell that apart from "present but empty"."""
+    try:
+        value = json.loads(path.read_text("utf-8"))
+    except FileNotFoundError:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{path.name} must contain a JSON object")
+    return value
+
+
 def _status(rows: list[dict], *, applicable: bool) -> str:
     if not applicable:
         return "not-applicable"
@@ -92,6 +109,8 @@ def build(run_dir: str | Path) -> dict:
     signal_summary = _read_json(run / "signals" / "run-summary.json")
     callgraph = _read_json(run / "callgraph-coverage.json")
     depmap = _read_json(run / "imports" / "depmap-coverage.json")
+    route_inventory_doc = _read_json_or_none(run / "routes" / "route-inventory.json")
+    ui_route_linkage_doc = _read_json_or_none(run / "routes" / "ui-route-linkage.json")
 
     signal_rows = list(signal_summary.get("signals", []))
     call_rows = list(callgraph.get("repos", []))
@@ -139,7 +158,7 @@ def build(run_dir: str | Path) -> dict:
     # assumptions.  Legitimate zero results become not-applicable only when the
     # corresponding producer completed its source universe.
     repos = report.get("repos", [])
-    route_doc = report.get("route_inventory")
+    route_doc = route_inventory_doc
     route_rows = (route_doc or {}).get("rows", [])
     backend_ids = {str(row.get("repository_ref", "")) for row in route_rows
                    if row.get("repository_ref")}
@@ -167,7 +186,8 @@ def build(run_dir: str | Path) -> dict:
                     "unavailable" if any_registered_routes else "not-applicable")
     records.append(_record(
         "route-inventory", status=route_status,
-        applicable=route_status != "not-applicable", expected=[], run=run,
+        applicable=route_status != "not-applicable",
+        expected=["routes/route-inventory.json"], run=run,
         details=[{"repository_ref": str(row.get("repository_ref", "")),
                   "status": row.get("status", "")}
                  for row in route_rows],
@@ -178,12 +198,12 @@ def build(run_dir: str | Path) -> dict:
                 else ""),
     ))
     ui_applicable = bool(frontend_ids and backend_ids)
-    linkage_doc = report.get("ui_route_linkage")
+    linkage_doc = ui_route_linkage_doc
     ui_status = ("not-applicable" if not ui_applicable else
                  "complete" if linkage_doc is not None else "unavailable")
     records.append(_record(
         "ui-route-linkage", status=ui_status, applicable=ui_applicable,
-        expected=[], run=run,
+        expected=["routes/ui-route-linkage.json"], run=run,
         details=[{"repository_ref": str(row.get("repository_ref", "")),
                   "status": row.get("status", "")}
                  for row in route_rows],

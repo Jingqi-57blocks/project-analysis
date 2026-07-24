@@ -1,6 +1,6 @@
 """Bundled capability providers (57B-81 callgraph/depmap; 57B-80 datastore;
 57B-82 A1 deploy-units; 57B-82 A2 git-history/dependency-risk; 57B-84
-access-model/integration-evidence).
+access-model/integration-evidence/route-inventory/ui-route-linkage).
 
 Each provider below is a thin adapter, not a reimplementation: it resolves
 identity through ``context.identities`` (a provider's ONLY path to a
@@ -25,6 +25,12 @@ the artifact shape its capability owns:
   NO linked profiles at all (``profile_ids = ()``); see
   ``CapabilityProvider``'s docstring for why ``ProfileRegistry`` accepts
   that.
+* the route-inventory and ui-route-linkage providers (57B-84 B2) write ONE
+  per-repo FRAGMENT each (like the callgraph providers above), not a final
+  artifact directly — route liveness needs a cross-repo JOIN (every
+  frontend's calls against every backend's routes) computed once per run,
+  which belongs to :func:`analysis_wrapper.routes.emit.assemble`, not to
+  either provider. Also zero-profile ``universal``, like deploy-units.
 * the git-history and dependency-risk providers are the FIRST to actually
   execute an external SIGNAL TOOL (via ``context.tool_access.execute`` —
   every provider above either calls an in-process analyzer function directly
@@ -119,6 +125,64 @@ def _coverage_from_availability(payload: dict, *, reason_prefix: str) -> Coverag
 def _write_json(path: Path, payload: dict) -> None:
     replace_artifact_text(
         path, sanitize_text(json.dumps(payload, indent=2, sort_keys=True) + "\n"))
+
+
+def _coverage_from_route_fragment(notes: list[str], *, reason_prefix: str) -> Coverage:
+    """Coverage for a route-domain fragment provider (57B-84 B2): every repo
+    is scanned (universal), so this is always ``applicable``. A cap-hit note
+    downgrades THIS repo's own coverage to ``partial`` — mirroring
+    ``_coverage_from_lane``'s complete/partial vocabulary for a
+    fragment-writing provider. Whether this repo counts as a route backend
+    or UI frontend at all is a CONTENT fact (the fragment's own
+    ``applicable`` flag, read by ``routes.emit.assemble``), not a
+    coverage-outcome fact: a backend with a clean, complete scan and a
+    non-backend with a clean, complete (empty) scan are both ``complete`` —
+    exactly ``DatastoreEvidenceProvider``'s own not-applicable-is-a-content-
+    fact philosophy."""
+    status = "partial" if notes else "complete"
+    return Coverage(applicability="applicable", status=status,
+                    reason_code=f"{reason_prefix}-{status}", detail="; ".join(notes))
+
+
+def _has_module_signal_routes(run_dir: Path, identities, repository_ref: str) -> bool:
+    """Legacy ``discover()``'s own ``_produce_has_routes`` gate, read back
+    from THIS run's already-written ``discovery-report.json``
+    (``module_signals.routes``: a stage-1 signal computed once per repo by
+    ``discovery.modules.extract`` — a lighter, DIFFERENT heuristic than
+    ``liveness.route_registrations()``). Read back rather than recomputed,
+    so the two scans can never silently disagree from reimplementation
+    drift; ``discovery/modules.py`` itself: unchanged this slice.
+
+    Re-parses the small discovery-report.json once per (provider, target)
+    call (up to twice per target across both route providers) rather than
+    caching across a frozen-dataclass provider instance — a deliberate,
+    disclosed simplification: the file is small (no filesystem walk), and
+    every other bundled universal provider already accepts a comparable
+    per-target re-scan cost for far more expensive full-tree walks.
+
+    In the real CLI pipeline, ``discovery-report.json`` is ALWAYS present by
+    the time providers run (``discovery.emit.write_stage1`` writes it before
+    ``run_provider_stage`` is ever called). A narrower harness that invokes
+    ``run_providers``/a provider's own ``run()`` directly — the provider
+    conformance battery, ``test_provider_execution.py``'s synthetic-provider
+    loop tests — has no reason to also stand up a full discovery-report.json,
+    so a missing/unreadable one degrades to "signal unknown" (``False``)
+    rather than failing this provider's execution: every OTHER bundled
+    provider is fully self-contained (no dependency on a sibling stage's own
+    output), and this fallback keeps that same guarantee for the one gate
+    input this domain genuinely cannot derive from ``target`` alone. The
+    ``target.profiles_for_capability(...)`` half of each gate still applies
+    even when this signal is unavailable."""
+    from .. import identity as identity_mod
+
+    try:
+        report = identity_mod.load_discovery_report(run_dir, identities)
+    except (OSError, ValueError):
+        return False
+    for block in report.get("repos", []):
+        if block.get("repository_ref") == repository_ref:
+            return bool(block.get("module_signals", {}).get("routes"))
+    return False
 
 
 def _artifact_ref(path: Path, run_dir: Path, kind: str) -> ArtifactRef:
@@ -792,5 +856,159 @@ class DependencyRiskProvider:
             capability_id=self.capability_id, provider_id=self.provider_id,
             repo_id=target.repo_id, coverage=aggregate(coverages),
             artifact_refs=tuple(refs),
+            facet_provenance=_facet_provenance(target, self.profile_ids),
+        )
+
+
+@dataclass(frozen=True)
+class RouteInventoryProvider:
+    """Wraps :func:`analysis_wrapper.discovery.liveness.route_registrations`
+    as a per-repo route FRAGMENT (57B-84 B2).
+
+    Unlike the four single-artifact universal providers above, route
+    liveness needs a cross-repo JOIN (every frontend's UI calls against
+    every backend's routes) computed ONCE per run, not once per repo — so
+    this provider (and ``UiRouteLinkageProvider`` below) write a per-repo
+    FRAGMENT under ``routes/.fragments/``, and
+    :func:`analysis_wrapper.routes.emit.assemble` (called once,
+    post-provider-loop) performs the join and writes the two canonical run
+    artifacts. This mirrors the callgraph/depmap fragment+assemble shape,
+    not the datastore/access/integration/deploy single-artifact one.
+
+    ``universal`` + zero profiles for the same reason as
+    ``AccessEvidenceProvider``: whether a repo is a route "backend" is
+    decided per-repo (an already-observed route signal, or an explicit
+    ``route-inventory`` profile match), not by one detected technology
+    facet — see ``_has_module_signal_routes`` for why that signal is READ
+    BACK rather than rescanned. Legacy ``discover()``'s own backend gate,
+    replicated exactly: ``has_routes or target.profiles_for_capability(
+    "route-inventory")``.
+
+    A non-backend repo still gets a fragment (``applicable: false``, empty
+    rows) — disclosure of "this repo was scanned and is not a backend",
+    not an omission; ``routes.emit.assemble`` filters on ``applicable``.
+    """
+
+    provider_id: str = "route-inventory"
+    capability_id: str = "route-inventory"
+    profile_ids: tuple[str, ...] = ()
+    universal: bool = True
+
+    def run(self, context: RunContext, target: RepoTarget) -> CapabilityResult:
+        # Function-local import: same profiles<->discovery circular-import
+        # trap as DatastoreEvidenceProvider's own import of discovery.tables.
+        from ..discovery import liveness
+
+        identities = _identities(context, self.provider_id)
+        repository_ref = identities.reference_for(target.repo_id)
+        artifact_key = identities.artifact_key_for(target.repo_id)
+        run_dir = Path(context.output_dir)
+
+        has_routes = _has_module_signal_routes(run_dir, identities, repository_ref)
+        applicable = bool(
+            has_routes or target.profiles_for_capability("route-inventory"))
+
+        rows: list[dict] = []
+        notes: list[str] = []
+        if applicable:
+            stats: dict = {"file_cap_hit": False, "oversized": 0}
+            hits = liveness.route_registrations(
+                target.path, target.tier2_exclusions, stats, include_mounts=True)
+            rows = sorted(({
+                "method": hit.method, "path": hit.path,
+                "route_evidence": hit.evidence,
+                "registration_kind": (
+                    "mount" if hit.method.upper() in liveness._MOUNTS else "endpoint"),
+            } for hit in hits), key=lambda row: (
+                row["method"], row["path"], row["route_evidence"]))
+            if stats["file_cap_hit"] or stats["oversized"]:
+                notes.append(
+                    f"{repository_ref}: COVERAGE CAP in fallback route scan "
+                    f"(file_cap={stats['file_cap_hit']}, oversized={stats['oversized']})")
+
+        routes_dir = create_stage_dir(run_dir / "routes")
+        fragments_dir = create_stage_dir(routes_dir / ".fragments")
+        path = fragments_dir / f"{artifact_key}.routes.json"
+        _write_json(path, {
+            "artifact_key": artifact_key, "repository_ref": repository_ref,
+            "applicable": applicable, "rows": rows, "notes": notes,
+        })
+        return CapabilityResult(
+            capability_id=self.capability_id, provider_id=self.provider_id,
+            repo_id=target.repo_id,
+            coverage=_coverage_from_route_fragment(notes, reason_prefix="route-inventory"),
+            artifact_refs=(_artifact_ref(path, run_dir, "route-inventory-fragment"),),
+            facet_provenance=_facet_provenance(target, self.profile_ids),
+        )
+
+
+@dataclass(frozen=True)
+class UiRouteLinkageProvider:
+    """Wraps :func:`analysis_wrapper.discovery.liveness.ui_call_sites` as a
+    per-repo frontend FRAGMENT (57B-84 B2). See ``RouteInventoryProvider``'s
+    docstring for the shared fragment+assemble rationale.
+
+    Frontend gate, replicated exactly from legacy ``discover()``: an
+    explicit ``ui-route-linkage`` profile match, OR (no ``route-inventory``
+    profile match AND a ts/js/tsx stack AND a ``src/`` dir AND this repo has
+    no own registered routes). ``has_routes`` here reads the SAME
+    ``module_signals.routes`` signal ``RouteInventoryProvider`` reads,
+    independently — the two providers may execute in either order within a
+    run, so neither can depend on the other's fragment already existing on
+    disk.
+
+    A non-frontend repo still gets a fragment (``applicable: false``, no
+    calls) for the same disclosure reason as ``RouteInventoryProvider``'s
+    own non-backend fragment.
+    """
+
+    provider_id: str = "ui-route-linkage"
+    capability_id: str = "ui-route-linkage"
+    profile_ids: tuple[str, ...] = ()
+    universal: bool = True
+
+    def run(self, context: RunContext, target: RepoTarget) -> CapabilityResult:
+        # Function-local import: same profiles<->discovery circular-import
+        # trap as DatastoreEvidenceProvider's own import of discovery.tables.
+        from ..discovery import liveness
+
+        identities = _identities(context, self.provider_id)
+        repository_ref = identities.reference_for(target.repo_id)
+        artifact_key = identities.artifact_key_for(target.repo_id)
+        run_dir = Path(context.output_dir)
+
+        has_routes = _has_module_signal_routes(run_dir, identities, repository_ref)
+        stacks_l = {s.lower() for s in target.stacks}
+        applicable = bool(
+            target.profiles_for_capability("ui-route-linkage") or
+            (not target.profiles_for_capability("route-inventory") and
+             stacks_l & {"ts", "tsx", "js"} and
+             (Path(target.path) / "src").is_dir() and not has_routes))
+
+        calls: list[dict] = []
+        notes: list[str] = []
+        if applicable:
+            stats: dict = {"file_cap_hit": False, "oversized": 0}
+            hits = liveness.ui_call_sites(target.path, stats)
+            calls = [{"base": hit.base, "path": hit.path,
+                      "evidence": hit.evidence, "method": hit.method}
+                     for hit in hits]
+            if stats["file_cap_hit"] or stats["oversized"]:
+                notes.append(
+                    "COVERAGE CAP in ui-call-site scan "
+                    f"(file_cap={stats['file_cap_hit']}, oversized={stats['oversized']})")
+
+        routes_dir = create_stage_dir(run_dir / "routes")
+        fragments_dir = create_stage_dir(routes_dir / ".fragments")
+        path = fragments_dir / f"{artifact_key}.uicalls.json"
+        _write_json(path, {
+            "artifact_key": artifact_key, "repository_ref": repository_ref,
+            "applicable": applicable, "calls": calls, "notes": notes,
+        })
+        return CapabilityResult(
+            capability_id=self.capability_id, provider_id=self.provider_id,
+            repo_id=target.repo_id,
+            coverage=_coverage_from_route_fragment(notes, reason_prefix="ui-route-linkage"),
+            artifact_refs=(_artifact_ref(path, run_dir, "ui-route-linkage-fragment"),),
             facet_provenance=_facet_provenance(target, self.profile_ids),
         )

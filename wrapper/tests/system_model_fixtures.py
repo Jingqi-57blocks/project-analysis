@@ -195,38 +195,12 @@ def _web_block() -> dict:
     }
 
 
-def _report(*, with_routes: bool, capped_routes: bool,
-            routes_capped: bool) -> dict:
-    inventory = None
-    linkage = None
-    if with_routes:
-        rows = [
-            {"repo_id": _API, "method": "GET", "path": "/users",
-             "route_evidence": "internal/handlers/users.go:12",
-             "status": "ui-called", "caller_evidence": ["src/api/users.ts:8"]},
-            {"repo_id": _API, "method": "POST", "path": "/users",
-             "route_evidence": "internal/handlers/users.go:20",
-             "status": "no-direct-path-match", "caller_evidence": []},
-            {"repo_id": _API, "method": "GET", "path": "/:id",
-             "route_evidence": "internal/handlers/users.go:30",
-             "status": "match-ambiguous", "caller_evidence": []},
-        ]
-        inventory = {
-            "notes": [_ROUTE_CAP_NOTE] if routes_capped else [],
-            "rows": rows,
-            "tool": "ast-grep", "tool_path": "/x", "tool_version": "ast-grep 0.44.1",
-            "version_drift": ""}
-        linkage = {
-            "frontends": [_WEB], "calls_by_frontend": {_WEB: {}},
-            "notes": [],
-            "rows": [dict(rows[0], frontend_repo_id=_WEB)],
-        }
+def _report(*, capped_routes: bool) -> dict:
     return {
         "project_id": _PROJECT, "workspace_root": "/ws",
         "repos": [_api_block(capped_routes=capped_routes), _web_block()],
         "not_targeted": [], "reduced_coverage_targets": [],
-        "integration_candidate_count": 1, "route_inventory": inventory,
-        "ui_route_linkage": linkage,
+        "integration_candidate_count": 1,
         "role_catalog_by_repo": {},
     }
 
@@ -341,6 +315,55 @@ def _write_integration_artifacts(run: Path, identities, *,
         json.dumps(_web_integration_evidence(), indent=2, sort_keys=True), "utf-8")
 
 
+def _write_route_artifacts(run: Path, identities, *, with_routes: bool,
+                           routes_capped: bool) -> None:
+    """Write ``routes.emit.assemble``'s own run-level docs directly (57B-84
+    B2) — ``discovery-report.json`` no longer carries ``route_inventory``/
+    ``ui_route_linkage`` inline; consumers read ``routes/route-
+    inventory.json``/``routes/ui-route-linkage.json`` instead. Already
+    EXTERNALIZED (``repository_ref``-keyed), matching what the real
+    assembler produces from provider fragments — bypasses running the real
+    providers, the same shortcut ``_write_datastore_artifacts`` etc. above
+    already take."""
+    routes_dir = run / "routes"
+    routes_dir.mkdir(parents=True, exist_ok=True)
+    (routes_dir / "route-coverage.json").write_text(json.dumps(
+        {"present": with_routes, "backends": (1 if with_routes else 0),
+         "frontends": (1 if with_routes else 0)}, indent=2, sort_keys=True), "utf-8")
+    if not with_routes:
+        return
+    api_ref = identities.reference_for(_API)
+    web_ref = identities.reference_for(_WEB)
+    rows = [
+        {"repository_ref": api_ref, "method": "GET", "path": "/users",
+         "route_evidence": "internal/handlers/users.go:12",
+         "registration_kind": "endpoint",
+         "status": "ui-called", "caller_evidence": ["src/api/users.ts:8"]},
+        {"repository_ref": api_ref, "method": "POST", "path": "/users",
+         "route_evidence": "internal/handlers/users.go:20",
+         "registration_kind": "endpoint",
+         "status": "no-direct-path-match", "caller_evidence": []},
+        {"repository_ref": api_ref, "method": "GET", "path": "/:id",
+         "route_evidence": "internal/handlers/users.go:30",
+         "registration_kind": "endpoint",
+         "status": "match-ambiguous", "caller_evidence": []},
+    ]
+    inventory = {
+        "notes": [_ROUTE_CAP_NOTE] if routes_capped else [],
+        "rows": rows,
+        "tool": "ast-grep", "tool_path": "/x", "tool_version": "ast-grep 0.44.1",
+        "version_drift": ""}
+    linkage = {
+        "frontends": [web_ref], "calls_by_frontend_repository": {web_ref: {}},
+        "notes": [],
+        "rows": [dict(rows[0], frontend_repository_ref=web_ref)],
+    }
+    (routes_dir / "route-inventory.json").write_text(
+        json.dumps(inventory, indent=2, sort_keys=True), "utf-8")
+    (routes_dir / "ui-route-linkage.json").write_text(
+        json.dumps(linkage, indent=2, sort_keys=True), "utf-8")
+
+
 def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
               capped_routes: bool = False, table_available: bool = True,
               sql_complete: bool = True, with_imports: bool = False,
@@ -355,9 +378,7 @@ def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
     identities = identity.build(
         spec, workspace_root="/ws", project_id=_PROJECT)
     identity.write_mapping(run, identities)
-    report = _report(with_routes=with_routes,
-                     capped_routes=capped_routes,
-                     routes_capped=routes_capped)
+    report = _report(capped_routes=capped_routes)
     (run / "discovery-report.json").write_text(
         json.dumps(identity.externalize_discovery_report(report, identities), indent=2),
         "utf-8")
@@ -366,6 +387,8 @@ def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
                               sql_complete=sql_complete, tables_capped=tables_capped)
     _write_access_artifacts(run, identities)
     _write_integration_artifacts(run, identities, boundaries_capped=boundaries_capped)
+    _write_route_artifacts(run, identities, with_routes=with_routes,
+                           routes_capped=routes_capped)
     if with_callgraph:
         _write_callgraph(run)
     if with_imports:

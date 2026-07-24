@@ -29,6 +29,17 @@ GENERATOR = f"analysis-system-model/{__version__}"
 FILENAME = "system-model.json"
 
 
+def _read_route_doc(path: Path) -> dict | None:
+    """``routes/route-inventory.json``/``routes/ui-route-linkage.json``
+    (57B-84 B2): ``None`` (not ``{}``) when genuinely absent — same
+    optional-doc shape the retired ``report["route_inventory"]``/
+    ``report["ui_route_linkage"]`` fields carried, which ``from_discovery``/
+    ``coverage`` below still key their own presence checks on."""
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text("utf-8"))
+
+
 def _resolve_scan_date(run: Path, cg: dict, override: str) -> str:
     if override:
         return override
@@ -68,13 +79,17 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
     integration_evidence_by_repo = identity.load_integration_evidence_by_repo(
         run, identities)
     deploy_units_by_repo = identity.load_deploy_units_by_repo(run, identities)
+    route_inventory = _read_route_doc(run / "routes" / "route-inventory.json")
+    ui_route_linkage = _read_route_doc(run / "routes" / "ui-route-linkage.json")
 
     builder = ModelBuilder()
     disc = from_discovery.load(builder, spec, report, identities,
                               table_evidence_by_repo=table_evidence_by_repo,
                               access_model_by_repo=access_model_by_repo,
                               integration_evidence_by_repo=integration_evidence_by_repo,
-                              deploy_units_by_repo=deploy_units_by_repo)
+                              deploy_units_by_repo=deploy_units_by_repo,
+                              route_inventory=route_inventory,
+                              ui_route_linkage=ui_route_linkage)
     cg = from_callgraph.load(builder, run, identities)
     imports = _merge_imports(
         spec, identities,
@@ -98,7 +113,9 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
                          table_evidence_by_repo=table_evidence_by_repo,
                          access_model_by_repo=access_model_by_repo,
                          integration_evidence_by_repo=integration_evidence_by_repo,
-                         deploy_units_by_repo=deploy_units_by_repo)
+                         deploy_units_by_repo=deploy_units_by_repo,
+                         route_inventory=route_inventory,
+                         ui_route_linkage=ui_route_linkage)
     return SystemModel(
         scan_date=resolved_scan_date,
         project_ref=identities.project.reference,

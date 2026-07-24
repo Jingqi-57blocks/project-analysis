@@ -106,8 +106,7 @@ def _signals(*, status="complete"):
     }
 
 
-def _discovery(*, workspace_root="/ws-a", not_targeted=None, facet_state="resolved",
-              route_inventory=None):
+def _discovery(*, workspace_root="/ws-a", not_targeted=None, facet_state="resolved"):
     return {
         "schema_version": "2.0.0", "project_ref": "proj", "workspace_root": workspace_root,
         "repos": [{
@@ -134,8 +133,7 @@ def _discovery(*, workspace_root="/ws-a", not_targeted=None, facet_state="resolv
             "notes": [],
         }],
         "not_targeted": sorted(not_targeted or []), "reduced_coverage_targets": [],
-        "integration_candidate_count": 0, "route_inventory": route_inventory,
-        "ui_route_linkage": None, "role_catalog_by_repository": {},
+        "integration_candidate_count": 0, "role_catalog_by_repository": {},
     }
 
 
@@ -201,8 +199,11 @@ def _write_minimal_run(run: Path, **kwargs) -> Path:
     _write(run, "signals/run-summary.json", _signals())
     _write(run, "discovery-report.json", _discovery(
         workspace_root=workspace_root, not_targeted=kwargs.get("not_targeted"),
-        facet_state=kwargs.get("facet_state", "resolved"),
-        route_inventory=kwargs.get("route_inventory")))
+        facet_state=kwargs.get("facet_state", "resolved")))
+    if kwargs.get("route_inventory") is not None:
+        # 57B-84 B2: route_inventory lives in its own routes.emit.assemble
+        # run-level artifact now, not an embedded discovery-report field.
+        _write(run, "routes/route-inventory.json", kwargs["route_inventory"])
     _write(run, "run-provenance.json", _provenance(
         analyzer_root=kwargs.get("analyzer_root", "/analyzer-a"),
         analyzer_version=kwargs.get("analyzer_version", "0.4.0"),
@@ -720,6 +721,81 @@ def test_route_inventory_tool_identity_difference_has_zero_semantic_differences(
 
     assert not parity.has_semantic_differences(report)
     assert report["tool_drift"]  # the ast-grep version drift is still surfaced
+
+
+def _write_run_with_route_docs(run: Path, *, embedded: bool, rows: list[dict],
+                               linkage_rows: list[dict] | None = None) -> Path:
+    """Build a minimal run whose route facts live either EMBEDDED in
+    discovery-report.json (the pre-57B-84-B2 shape) or in the standalone
+    ``routes/route-inventory.json``/``routes/ui-route-linkage.json``
+    artifacts (57B-84 B2+) — the two eras ``compare()`` must treat as
+    equivalent via ``_resolve_route_docs``'s fallback."""
+    run.mkdir(parents=True, exist_ok=True)
+    _write(run, "capabilities.json", _capabilities())
+    _write(run, "evidence-catalog.json", _evidence_catalog())
+    _write(run, "system-model.json", _system_model())
+    _write(run, "callgraph-coverage.json", _callgraph_coverage())
+    _write(run, "signals/run-summary.json", _signals())
+    inventory = {"notes": [], "rows": rows, "tool": "ast-grep",
+                "tool_path": "/tool", "tool_version": "v1", "version_drift": ""}
+    linkage = {"frontends": [], "calls_by_frontend_repository": {},
+              "notes": [], "rows": linkage_rows or []}
+    discovery = _discovery()
+    if embedded:
+        discovery["route_inventory"] = inventory
+        discovery["ui_route_linkage"] = linkage
+    _write(run, "discovery-report.json", discovery)
+    if not embedded:
+        _write(run, "routes/route-inventory.json", inventory)
+        _write(run, "routes/ui-route-linkage.json", linkage)
+    _write(run, "run-provenance.json", _provenance())
+    _write(run, "identity-map.json", _identity_map())
+    _write(run, "provider-execution.json", _provider_execution())
+    return run
+
+
+def test_mixed_era_route_comparison_treats_embedded_and_standalone_as_equivalent(tmp_path):
+    """57B-84 B2's own acceptance gate: a base run predating the migration
+    (route_inventory/ui_route_linkage embedded in discovery-report.json)
+    compared against a candidate run postdating it (the same facts in the
+    standalone routes/*.json artifacts) must show ZERO route-related
+    differences when the underlying facts are identical — the exact shape
+    57B-87's acceptance gate exercises against the pre-refactor mainline
+    run. Without the fallback, the base run would contribute zero route
+    facts and every candidate row would look like a spurious add."""
+    row = {"repository_ref": "api", "method": "GET", "path": "/items",
+          "route_evidence": "h.go:1", "registration_kind": "endpoint"}
+    base = _write_run_with_route_docs(tmp_path / "base", embedded=True, rows=[row])
+    candidate = _write_run_with_route_docs(
+        tmp_path / "candidate", embedded=False, rows=[row])
+
+    report = parity.compare(base, candidate)
+
+    assert report["sections"]["discovery_evidence"]["added"] == []
+    assert report["sections"]["discovery_evidence"]["removed"] == []
+    assert report["sections"]["discovery_evidence"]["changed"] == []
+    assert not parity.has_semantic_differences(report)
+
+
+def test_mixed_era_route_comparison_surfaces_a_real_mutated_row(tmp_path):
+    """Same mixed-era shape as above, but the candidate's row genuinely
+    differs (a status flip) — the comparator must still catch it, proving
+    the fallback does not also mask REAL differences."""
+    base_row = {"repository_ref": "api", "method": "GET", "path": "/items",
+               "route_evidence": "h.go:1", "registration_kind": "endpoint"}
+    candidate_row = {**base_row, "route_evidence": "h.go:2"}
+    base = _write_run_with_route_docs(tmp_path / "base", embedded=True, rows=[base_row])
+    candidate = _write_run_with_route_docs(
+        tmp_path / "candidate", embedded=False, rows=[candidate_row])
+
+    report = parity.compare(base, candidate)
+
+    evidence = report["sections"]["discovery_evidence"]
+    assert [row["value"] for row in evidence["added"]] == [
+        json.dumps(candidate_row, sort_keys=True)]
+    assert [row["value"] for row in evidence["removed"]] == [
+        json.dumps(base_row, sort_keys=True)]
+    assert parity.has_semantic_differences(report)
 
 
 def test_provider_execution_reason_change_is_prose_only_and_path_scrubbed(tmp_path):

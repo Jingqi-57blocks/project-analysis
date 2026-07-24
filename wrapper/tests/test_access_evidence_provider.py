@@ -53,7 +53,7 @@ def _populate_from_fixaccess(repo: Path) -> None:
     shutil.copytree(FIXACCESS, repo, dirs_exist_ok=True)
 
 
-def test_access_evidence_provider_conforms(tmp_path):
+def test_access_evidence_provider_conforms_via_zero_profile_battery_shape(tmp_path):
     run_provider_conformance(
         None, AccessEvidenceProvider(), tmp_path=tmp_path,
         repo_setup=_populate_from_fixaccess)

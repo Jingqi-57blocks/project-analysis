@@ -46,7 +46,7 @@ def _populate_synthetic_repo(repo_path: Path) -> None:
     (common / "util.go").write_text("package common\nfunc noop() {}\n")
 
 
-def test_integration_evidence_provider_conforms(tmp_path):
+def test_integration_evidence_provider_conforms_via_zero_profile_battery_shape(tmp_path):
     run_provider_conformance(
         None, IntegrationEvidenceProvider(), tmp_path=tmp_path,
         repo_setup=_populate_synthetic_repo)

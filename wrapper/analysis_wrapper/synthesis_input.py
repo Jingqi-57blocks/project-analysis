@@ -38,6 +38,23 @@ def _load(path: Path, default: dict | None = None) -> dict:
     return value
 
 
+def _load_or_none(path: Path) -> dict | None:
+    """Like ``_load``, but ``None`` (not ``{}``) when genuinely absent
+    (57B-84 B2) — ``routes/route-inventory.json``/``routes/ui-route-
+    linkage.json`` are legitimately absent for a backend-less workspace,
+    mirroring the retired ``discovery["route_inventory"]``/
+    ``["ui_route_linkage"]`` fields' own ``None`` case, which the
+    projections below still key their ``None if not ... else {...}`` shape
+    on."""
+    try:
+        value = json.loads(path.read_text("utf-8"))
+    except FileNotFoundError:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{path.name} must contain a JSON object")
+    return value
+
+
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -196,6 +213,8 @@ def build(run_dir: str | Path) -> dict:
     table_evidence_by_repo = identity.load_table_evidence_by_repo(run, identities)
     access_model_by_repo = identity.load_access_model_by_repo(run, identities)
     deploy_units_by_repo = identity.load_deploy_units_by_repo(run, identities)
+    route_inventory_doc = _load_or_none(run / "routes" / "route-inventory.json")
+    ui_route_linkage_doc = _load_or_none(run / "routes" / "ui-route-linkage.json")
     targets = _load(run / "targets.json")
     capabilities = _load(run / "capabilities.json")
     model = _load(run / "system-model.json")
@@ -284,26 +303,26 @@ def build(run_dir: str | Path) -> dict:
                                     identities),
             key=lambda row: row.get("candidate_id", ""),
             limit=_CANDIDATE_LIMIT),
-        "route_inventory": (None if not discovery.get("route_inventory") else {
-            "rows": _bounded(list(discovery["route_inventory"].get("rows", [])),
+        "route_inventory": (None if not route_inventory_doc else {
+            "rows": _bounded(list(route_inventory_doc.get("rows", [])),
                              key=lambda row: (str(row.get("repository_ref", "")),
                                               str(row.get("method", "")),
                                               str(row.get("path", ""))),
                              limit=_CANDIDATE_LIMIT),
-            "notes": discovery["route_inventory"].get("notes", []),
+            "notes": route_inventory_doc.get("notes", []),
         }),
-        "ui_route_linkage": (None if not discovery.get("ui_route_linkage") else {
-            "frontends": discovery["ui_route_linkage"].get("frontends", []),
-            "calls_by_frontend_repository": discovery["ui_route_linkage"].get(
+        "ui_route_linkage": (None if not ui_route_linkage_doc else {
+            "frontends": ui_route_linkage_doc.get("frontends", []),
+            "calls_by_frontend_repository": ui_route_linkage_doc.get(
                 "calls_by_frontend_repository", {}),
-            "rows": _bounded(list(discovery["ui_route_linkage"].get("rows", [])),
+            "rows": _bounded(list(ui_route_linkage_doc.get("rows", [])),
                              key=lambda row: (
                                               str(row.get("frontend_repository_ref", "")),
                                               str(row.get("repository_ref", "")),
                                               str(row.get("method", "")),
                                               str(row.get("path", ""))),
                              limit=_CANDIDATE_LIMIT),
-            "notes": discovery["ui_route_linkage"].get("notes", []),
+            "notes": ui_route_linkage_doc.get("notes", []),
         }),
         # 57B-84: role_catalog_by_repository used to be a discovery-report
         # top-level field, cross-repo-derived at stage-1 from each repo's

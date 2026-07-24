@@ -219,6 +219,15 @@ def test_cli_run_without_targets_is_input_error(tmp_path, capsys):
 
 
 def test_route_inventory_is_independent_of_multiple_frontends(tmp_path):
+    """57B-84 B2: route_inventory/ui_route_linkage are now written by
+    RouteInventoryProvider/UiRouteLinkageProvider + routes.emit.assemble
+    (routes/route-inventory.json, routes/ui-route-linkage.json), not
+    computed inline by ``emit.discover()`` — this test's own name is exactly
+    the property that migration is meant to preserve: adding a second
+    frontend must not perturb the first frontend's own route-linkage rows
+    (the retired inline block used to re-scan every backend once per
+    frontend; the fragment+assemble shape scans each backend once, total,
+    and joins every frontend against that single scan)."""
     ws = tmp_path / "workspace"
     api = ws / "api"
     _write(api / "package.json", '{"dependencies":{"express":"1"}}')
@@ -229,16 +238,28 @@ def test_route_inventory_is_independent_of_multiple_frontends(tmp_path):
         _write(web / "src" / "api.ts",
                "get(`${api}/items`); get(`${api}/health`);\n")
 
-    _, report = emit.discover(ws)
+    run = tmp_path / "run"
+    spec, report = emit.discover(ws)
+    emit.write_stage1(run, spec, report)
+    from analysis_wrapper import identity
+    from analysis_wrapper.profiles.execution import run_provider_stage
+    from analysis_wrapper.routes import emit as routes_emit
+    identities = identity.load(run)
+    run_provider_stage(run, spec, identities, scan_date="2026-07-23",
+                       network_authorized=False, provenance={})
+    routes_emit.assemble(run)
 
-    assert len(report["route_inventory"]["rows"]) == 2
-    assert report["ui_route_linkage"]["frontends"] == [
-        next(row["repo_id"] for row in report["repos"] if "web-a" in row["repo_id"]),
-        next(row["repo_id"] for row in report["repos"] if "web-b" in row["repo_id"]),
-    ]
-    assert {row["frontend_repo_id"]
-            for row in report["ui_route_linkage"]["rows"]} == set(
-                report["ui_route_linkage"]["frontends"])
+    inventory = json.loads((run / "routes" / "route-inventory.json").read_text("utf-8"))
+    linkage = json.loads((run / "routes" / "ui-route-linkage.json").read_text("utf-8"))
+    web_a_ref = identities.reference_for(
+        next(t.repo_id for t in spec.repos if "web-a" in t.repo_id))
+    web_b_ref = identities.reference_for(
+        next(t.repo_id for t in spec.repos if "web-b" in t.repo_id))
+
+    assert len(inventory["rows"]) == 2
+    assert linkage["frontends"] == sorted([web_a_ref, web_b_ref])
+    assert {row["frontend_repository_ref"] for row in linkage["rows"]} == set(
+        linkage["frontends"])
 
 
 def test_canonical_routes_and_datastores_bypass_summary_cap(tmp_path):
@@ -256,16 +277,21 @@ def test_canonical_routes_and_datastores_bypass_summary_cap(tmp_path):
     # 57B-80 PR3: data-store nodes now come from the datastore-evidence
     # capability provider's own artifacts, not straight from discovery-report
     # — run the provider stage (exactly what prepare-overview does) before
-    # assembling, so system_model has something to read.
+    # assembling, so system_model has something to read. 57B-84 B2: routes
+    # are the same shape now — RouteInventoryProvider's own fragment +
+    # routes.emit.assemble, not an inline discovery-report field.
     from analysis_wrapper import identity
     from analysis_wrapper.profiles.execution import run_provider_stage
+    from analysis_wrapper.routes import emit as routes_emit
     run_provider_stage(run, spec, identity.load(run), scan_date="2026-07-23",
                        network_authorized=False, provenance={})
+    routes_emit.assemble(run)
     model = system_model.assemble(run).to_dict()
     candidates = module_map.build_candidates(run, model)
+    inventory = json.loads((run / "routes" / "route-inventory.json").read_text("utf-8"))
 
     assert len(report["repos"][0]["module_signals"]["routes"]) == 200
-    assert len(report["route_inventory"]["rows"]) == 230
+    assert len(inventory["rows"]) == 230
     assert sum(node["kind"] == "route" for node in model["nodes"]) == 230
     assert sum(node["kind"] == "data-store" for node in model["nodes"]) == 230
     assert sum(row["signal_kind"] == "route"
@@ -282,6 +308,16 @@ def test_route_candidate_identity_includes_method(tmp_path):
     run = tmp_path / "run"
     spec, report = emit.discover(ws)
     emit.write_stage1(run, spec, report)
+    # 57B-84 B2: route nodes come from RouteInventoryProvider's own fragment
+    # + routes.emit.assemble now (routes/route-inventory.json), not an
+    # inline discovery-report field — both must run before system_model has
+    # anything to read.
+    from analysis_wrapper import identity
+    from analysis_wrapper.profiles.execution import run_provider_stage
+    from analysis_wrapper.routes import emit as routes_emit
+    run_provider_stage(run, spec, identity.load(run), scan_date="2026-07-23",
+                       network_authorized=False, provenance={})
+    routes_emit.assemble(run)
     model = system_model.assemble(run).to_dict()
     values = {row["value"] for row in module_map.build_candidates(
         run, model)["candidates"] if row["signal_kind"] == "route"}

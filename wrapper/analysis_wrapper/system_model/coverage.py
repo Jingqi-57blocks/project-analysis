@@ -80,7 +80,9 @@ def build(spec, report: dict, builder: ModelBuilder, cg: dict,
           table_evidence_by_repo: dict[str, dict] | None = None,
           access_model_by_repo: dict[str, dict] | None = None,
           integration_evidence_by_repo: dict[str, dict] | None = None,
-          deploy_units_by_repo: dict[str, dict] | None = None) -> dict:
+          deploy_units_by_repo: dict[str, dict] | None = None,
+          route_inventory: dict | None = None,
+          ui_route_linkage: dict | None = None) -> dict:
     """Assemble every coverage partition. ``cg`` is the from_callgraph summary,
     ``disc`` the from_discovery summary, ``imports`` the from_imports summary,
     ``scan_date`` the model's resolved scan date (empty when it could not be
@@ -90,7 +92,11 @@ def build(spec, report: dict, builder: ModelBuilder, cg: dict,
     (57B-82 A1) are each capability provider's own per-repo artifacts (see
     ``identity.load_*_by_repo``) — ``_tables``/``_access``/``_boundaries``/
     ``_deploy`` below are unchanged; only where their input comes from moved
-    off the discovery report."""
+    off the discovery report. ``route_inventory``/``ui_route_linkage``
+    (57B-84 B2) are the ``routes.emit.assemble``-produced run-level docs,
+    replacing the retired ``report["route_inventory"]``/
+    ``report["ui_route_linkage"]`` fields — ``_routes`` below is unchanged;
+    only where its input comes from moved."""
     table_evidence_by_repo = table_evidence_by_repo or {}
     access_model_by_repo = access_model_by_repo or {}
     integration_evidence_by_repo = integration_evidence_by_repo or {}
@@ -111,7 +117,8 @@ def build(spec, report: dict, builder: ModelBuilder, cg: dict,
         "repositories": _repositories(builder, spec).to_dict(),
         "files": _files(builder).to_dict(),
         "symbols_and_calls": _calls(builder, cg, spec, identities).to_dict(),
-        "routes": _routes(builder, report, disc).to_dict(),
+        "routes": _routes(builder, report, disc,
+                          route_inventory, ui_route_linkage).to_dict(),
         "tables": _tables(builder, blocks_merged).to_dict(),
         "access_model": _access(blocks_merged).to_dict(),
         "external_boundaries": _boundaries(builder, blocks_merged).to_dict(),
@@ -188,7 +195,9 @@ def _calls(builder: ModelBuilder, cg: dict, spec,
         unresolved=unresolved)
 
 
-def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
+def _routes(builder: ModelBuilder, report: dict, disc: dict,
+           route_inventory: dict | None = None,
+           ui_route_linkage: dict | None = None) -> Partition:
     if not disc.get("routes_present"):
         registered = sum(len(block.get("module_signals", {}).get("routes", []))
                          for block in report.get("repos", []))
@@ -207,14 +216,14 @@ def _routes(builder: ModelBuilder, report: dict, disc: dict) -> Partition:
             node_kinds=["route"], edge_types=["route-linkage"],
             counts={"routes": 0}, notes=[note],
             source_universe="detailed route-registration inventory unavailable.")
-    inventory = report.get("route_inventory") or {}
+    inventory = route_inventory or {}
     rows = inventory.get("rows", [])
     mounts = sum(1 for row in rows if row.get("registration_kind") == "mount")
     unresolved = {
         "no_caller_found": sum(1 for r in rows if r.get("status") == "no-direct-path-match"),
         "match_ambiguous": sum(1 for r in rows if r.get("status") == "match-ambiguous"),
         "ui_method_unresolved": sum(
-            1 for r in (report.get("ui_route_linkage") or {}).get("rows", [])
+            1 for r in (ui_route_linkage or {}).get("rows", [])
             if r.get("status") == "method-unresolved"),
     }
     notes = ["route registrations come from the DETAILED route_inventory rows, "

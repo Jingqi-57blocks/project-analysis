@@ -585,6 +585,7 @@ def _prepare_overview(args: argparse.Namespace) -> int:
                    workspace_metrics)
     from .callgraph import emit as cg_emit
     from .depmap import emit as dm_emit
+    from .routes import emit as routes_emit
     from .system_model.assemble import assemble, dump
 
     run = Path(args.run).expanduser().resolve()
@@ -649,6 +650,14 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     elif (run / "imports").exists():
         raise ValueError("imports/ exists without canonical coverage; refuse partial reuse")
 
+    routes_marker = run / "routes" / "route-coverage.json"
+    need_routes = not routes_marker.is_file()
+    if not need_routes:
+        _load_object(routes_marker)
+        print("routes: reused canonical coverage")
+    elif (run / "routes").exists():
+        raise ValueError("routes/ exists without canonical coverage; refuse partial reuse")
+
     # The provider stage now ALWAYS runs on every full prepare-overview pass
     # (57B-80 PR2), regardless of need_callgraph/need_depmap: BUNDLED_PROVIDERS
     # also carries universal providers (datastore-evidence, deploy-units,
@@ -694,6 +703,10 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     if need_depmap:
         report = dm_emit.assemble(run, args.scan_date)
         print(f"dependency-map: wrote {len(report.repos)} lane result(s)")
+    if need_routes:
+        route_result = routes_emit.assemble(run)
+        print(f"routes: {route_result.backends} backend(s), "
+              f"{route_result.frontends} frontend(s)")
 
     run_provenance.refresh_tool_versions(run)
 
