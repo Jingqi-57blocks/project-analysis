@@ -158,6 +158,21 @@ def _read_current_contract(path: Path) -> dict | None:
     return data
 
 
+def _read_legacy_tolerant_contract(path: Path) -> dict | None:
+    """Like ``_read_current_contract``, but for a run already known to predate
+    57B-88 (identity had to be derived — see ``load()`` below): an artifact
+    using an older/unrecognized contract is treated as honestly absent
+    (feeding ``missing_artifacts()``) rather than raising, since regenerating
+    a pre-88 run isn't the point of reading it read-only. Never used for a
+    run whose identity loaded through the strict path — there, a contract
+    mismatch is still a loud regenerate-the-run error, unchanged.
+    """
+    try:
+        return _read_current_contract(path)
+    except ValueError:
+        return None
+
+
 def _detect_drilldown(run_dir: Path) -> list[DrilldownModule]:
     """Detect per-module drill-down artifacts under ``<run>/drilldown/``.
 
@@ -198,10 +213,31 @@ def load(run_dir: str | Path) -> RunInputs:
         raise FileNotFoundError(f"run directory not found: {run_dir}")
 
     run_state = _read_json(run_dir / "run-state.json") or {}
+    legacy = False
     try:
         identities = identity.load(run_dir)
-    except (OSError, ValueError, KeyError) as exc:
-        raise ValueError(f"report input uses an unsupported identity contract: {exc}") from exc
+    except (OSError, ValueError, KeyError) as strict_exc:
+        # A pre-57B-88 run is DEFINED by identity-map.json's absence — that is
+        # the only condition under which identity.derive_legacy() may be
+        # attempted. A run whose identity-map.json IS present but broken
+        # (corrupt, truncated, inconsistent with its own TargetSpec/discovery
+        # report) must fail loudly like every other present-but-inconsistent
+        # artifact in this codebase, not silently fall back to a derived
+        # identity. This is the ONLY place that reaches
+        # identity.derive_legacy(): it never runs for a run whose strict
+        # identity load already succeeded, and no analysis-plane producer
+        # calls either this function or that one.
+        if (run_dir / identity.FILENAME).is_file():
+            raise ValueError(
+                f"report input uses an unsupported identity contract: {strict_exc}"
+            ) from strict_exc
+        try:
+            identities = identity.derive_legacy(run_dir)
+        except (OSError, ValueError, KeyError) as legacy_exc:
+            raise ValueError(
+                f"report input uses an unsupported identity contract: {strict_exc}"
+            ) from legacy_exc
+        legacy = True
 
     docs: list[DocSource] = []
     for doc_id, filename, title in CANONICAL_DOCS:
@@ -216,17 +252,26 @@ def load(run_dir: str | Path) -> RunInputs:
                 )
             )
 
+    # A legacy run's structured artifacts (system-model.json etc.) may predate
+    # the current 2.0.0 contract too; tolerate that only on the path already
+    # known to be pre-88 (an honestly-missing artifact, not a crash). Its
+    # discovery-report.json predates the externalized contract
+    # load_discovery_report() enforces (different field names throughout, no
+    # schema_version) — read it as absent rather than attempting a lossy
+    # translation of a shape that isn't this module's contract to interpret.
+    contract_reader = _read_legacy_tolerant_contract if legacy else _read_current_contract
+    discovery = None
+    if not legacy and (run_dir / "discovery-report.json").is_file():
+        discovery = identity.load_discovery_report(run_dir, identities)
+
     return RunInputs(
         run_dir=run_dir,
         run_state=run_state,
         docs=docs,
-        system_model=_read_current_contract(run_dir / "system-model.json"),
-        callgraph_coverage=_read_current_contract(
-            run_dir / "callgraph-coverage.json"),
-        depmap_coverage=_read_current_contract(
-            run_dir / "imports" / "depmap-coverage.json"),
-        discovery=(identity.load_discovery_report(run_dir, identities)
-                   if (run_dir / "discovery-report.json").is_file() else None),
+        system_model=contract_reader(run_dir / "system-model.json"),
+        callgraph_coverage=contract_reader(run_dir / "callgraph-coverage.json"),
+        depmap_coverage=contract_reader(run_dir / "imports" / "depmap-coverage.json"),
+        discovery=discovery,
         identity_map=identities,
         drilldown_modules=_detect_drilldown(run_dir),
     )
