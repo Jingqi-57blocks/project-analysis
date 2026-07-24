@@ -489,3 +489,17 @@ def tool_for(name: str, target: RepoTarget) -> ToolDef:
     if name not in definitions:
         raise KeyError(f"tool {name!r} is not applicable to {target.repo_id}")
     return definitions[name]
+
+
+# Single source of truth (57B-82 A2): these ToolDef names now execute through
+# their own capability providers (profiles.providers.GitHistoryProvider /
+# DependencyRiskProvider) rather than the legacy sweep. ``cli._sweep``'s
+# prepare-overview call site excludes them by this set so the tool never runs
+# twice in one pass; the STANDALONE ``run``/``sweep`` CLI subcommands are
+# user-facing debug paths and deliberately keep running every tool directly
+# (they do not consult this set at all). ``local_tools``/``network_tools``
+# above are UNCHANGED — still the full legacy catalog — since the standalone
+# paths, and the providers' own ``tool_for`` resolution (dependency-risk) or
+# direct ``git_history(...)`` call (git-history, for its run-bound
+# since/coupling-sample-cap), both still need them.
+PROVIDER_OWNED_SIGNAL_TOOLS = frozenset({"git-history", "osv-scanner", "outdated"})

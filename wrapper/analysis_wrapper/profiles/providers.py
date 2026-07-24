@@ -1,5 +1,6 @@
 """Bundled capability providers (57B-81 callgraph/depmap; 57B-80 datastore;
-57B-82 A1 deploy-units; 57B-84 access-model/integration-evidence).
+57B-82 A1 deploy-units; 57B-82 A2 git-history/dependency-risk; 57B-84
+access-model/integration-evidence).
 
 Each provider below is a thin adapter, not a reimplementation: it resolves
 identity through ``context.identities`` (a provider's ONLY path to a
@@ -20,9 +21,21 @@ the artifact shape its capability owns:
   integration-evidence providers each write the FULL per-repo producer
   result directly (one repo, one producer, no per-lane fragmentation or
   cross-repo assembler needed) and are ``universal`` — see each one's own
-  docstring below. The latter three carry NO linked profiles at all
-  (``profile_ids = ()``); see ``CapabilityProvider``'s docstring for why
-  ``ProfileRegistry`` accepts that.
+  docstring below. deploy-units/access-evidence/integration-evidence carry
+  NO linked profiles at all (``profile_ids = ()``); see
+  ``CapabilityProvider``'s docstring for why ``ProfileRegistry`` accepts
+  that.
+* the git-history and dependency-risk providers are the FIRST to actually
+  execute an external SIGNAL TOOL (via ``context.tool_access.execute`` —
+  every provider above either calls an in-process analyzer function directly
+  or, for datastore/deploy-units/access-evidence/integration-evidence, a
+  producer with no executor seam at all) rather than wrap one. Both are
+  zero-profile ``universal``, like deploy-units, and both are RESUME-SAFE: a
+  signal artifact is write-once (``run_tool``'s own collision-refusal,
+  unlike the idempotent ``replace_artifact_text`` every other provider here
+  uses), so re-running the provider stage over an already-populated
+  ``signals/`` directory reuses the existing manifest instead of
+  re-invoking the tool — see ``_run_or_reuse_signal`` below.
 
 Every write goes through :func:`~analysis_wrapper.executor.replace_artifact_text`
 (atomic, idempotent) rather than the create-once ``write_new_text`` the
@@ -30,7 +43,12 @@ legacy emitters used: the execution loop may legitimately invoke a provider
 more than once against the same output directory (the shared conformance
 battery's own determinism check does exactly this), and a provider's output
 for one (repo, lane) pair is always the SAME deterministic content for the
-same inputs — so re-writing it must never be treated as a clobber.
+same inputs — so re-writing it must never be treated as a clobber. The two
+signal-tool providers below are the one exception: THEIR underlying
+artifacts (``signals/*.manifest.json``/``*.view.txt``) are written by
+``run_tool`` itself, which is write-once by design (immutable per-signal
+evidence) — ``_run_or_reuse_signal`` is what keeps re-invocation safe for
+them specifically.
 """
 
 from __future__ import annotations
@@ -44,12 +62,13 @@ from ..callgraph import js_lane as callgraph_js_lane
 from ..datastore_coverage import classify as classify_data_model
 from ..depmap import go_lane as depmap_go_lane
 from ..depmap import js_lane as depmap_js_lane
-from ..evidence.coverage import Coverage, from_datastore_coverage
+from ..evidence.coverage import Coverage, aggregate, from_datastore_coverage
 from ..evidence.facts import Fact, SourceRef, make_fact_id
 from ..executor import create_stage_dir, replace_artifact_text
 from ..sanitize import sanitize_text
 from ..targetspec import RepoTarget
 from .contracts import ArtifactRef, CapabilityResult, RunContext
+from .selection import is_go_target, is_node_target
 
 # Bounded free-text detail (mirrors the ~300-char bounds lanes already apply to
 # their own failure reasons); generous enough to keep a lane's reason+notes
@@ -551,5 +570,223 @@ class IntegrationEvidenceProvider:
             coverage=_coverage_from_availability(
                 payload, reason_prefix="integration-evidence"),
             artifact_refs=(_artifact_ref(artifact_path, run_dir, "integration-evidence"),),
+            facet_provenance=_facet_provenance(target, self.profile_ids),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Signal-tool-executing providers (57B-82 A2).
+# ---------------------------------------------------------------------------
+
+_VALID_SIGNAL_STATUS = {"complete", "partial", "failed", "skipped"}
+
+
+def _coverage_from_signal(reason_prefix: str, status: str, reason: str) -> Coverage:
+    """Map one signal-tool outcome straight into Coverage: a signal that ran
+    (or was validly SKIPPED by the executor itself — never invoked, but for
+    a disclosed, deliberate reason such as missing network authorization) is,
+    by definition, applicable. ``reason`` is passed through UNMODIFIED as
+    ``detail`` — this is the exact text preservation the network-off SKIPPED
+    case depends on (``run_tool``'s own literal "network-capable tool
+    requires explicit authorization" must survive verbatim)."""
+    safe_status = status if status in _VALID_SIGNAL_STATUS else "failed"
+    return Coverage(applicability="applicable", status=safe_status,
+                    reason_code=f"{reason_prefix}-{safe_status}",
+                    detail=reason[:_DETAIL_LIMIT])
+
+
+def _signal_artifact_refs(run_dir: Path, manifest_path: "Path | None",
+                         view_path: "Path | None") -> tuple[ArtifactRef, ...]:
+    refs = []
+    if manifest_path is not None:
+        refs.append(_artifact_ref(manifest_path, run_dir, "signal-manifest"))
+    if view_path is not None:
+        refs.append(_artifact_ref(view_path, run_dir, "signal-view"))
+    return tuple(refs)
+
+
+def _run_or_reuse_signal(context: RunContext, tool_id: str, target: RepoTarget,
+                         artifact_key: str, *, tooldef=None,
+                         ) -> tuple[str, str, tuple[ArtifactRef, ...]]:
+    """Execute ``tool_id`` via ``context.tool_access``, or reuse an
+    already-written manifest from a prior ``prepare-overview`` pass.
+
+    Signal-tool artifacts are write-once (``run_tool``'s own
+    ``_assert_signal_paths_available`` refuses to overwrite an existing
+    manifest/view) — unlike every OTHER bundled provider's idempotent
+    ``replace_artifact_text`` writes. Since the provider stage runs
+    UNCONDITIONALLY on every ``prepare-overview`` pass (including one that
+    resumes an already-completed run, where ``signals/`` already holds this
+    exact tool's manifest from a PRIOR pass), re-invoking here would hit that
+    collision refusal and crash a normal resume. Checking for the existing
+    manifest FIRST — and reading its own recorded ``status``/``reason``
+    instead of re-running — keeps this provider naturally idempotent, and
+    (proven by the shared conformance battery's own determinism check, which
+    calls ``run_providers`` twice against the SAME context) produces the
+    IDENTICAL Coverage either way.
+
+    Defensive against the conformance battery's ``_StatusStub``-based
+    tool_access (only ever provides ``.status`` — no ``.reason``,
+    ``.manifest_path``, or ``.view_path``: real only in production, where
+    ``ExecutorToolAccess`` always returns a genuine ``SignalResult``) via
+    ``getattr`` with honest fallbacks rather than a crash.
+
+    KNOWN, INTENTIONAL disclosure difference from every other bundled
+    provider: on the reuse branch, ``context.tool_access.execute(...)`` is
+    never called, so ``execution.py``'s ``RecordingToolAccess`` never sees
+    this (provider, target) pair's tool call — that row's own
+    ``provider-execution.json["tools"]`` entry is an empty list on a
+    resumed pass, where a fresh pass shows the real invocation. This is
+    HONEST, not a bug: an empty ``tools`` list truthfully means no tool call
+    happened THIS pass. Coverage/status/reason are UNCHANGED either way
+    (proven by the conformance battery's own two-call determinism check,
+    and by ``tests/test_cli.py``'s real, non-stubbed resume test), so
+    ``provider-execution.json`` is not strictly byte-for-byte identical
+    between a fresh and a resumed pass for these two providers specifically
+    — every OTHER field of every row is.
+    """
+    run_dir = Path(context.output_dir)
+    signals_dir = run_dir / "signals"
+    name = f"{tool_id}-{artifact_key}"
+    manifest_path = signals_dir / f"{name}.manifest.json"
+    if manifest_path.is_file():
+        try:
+            doc = json.loads(manifest_path.read_text("utf-8"))
+        except (OSError, ValueError):
+            doc = {}
+        status = str(doc.get("status", "failed"))
+        reason = str(doc.get("reason", ""))
+        view_path = signals_dir / f"{name}.view.txt"
+        refs = _signal_artifact_refs(
+            run_dir, manifest_path, view_path if view_path.is_file() else None)
+        return status, reason, refs
+
+    result = context.tool_access.execute(tool_id, target, tooldef=tooldef)
+    raw_status = getattr(result, "status", None)
+    status = raw_status.value if hasattr(raw_status, "value") else str(raw_status or "failed")
+    reason = getattr(result, "reason", "")
+    refs = _signal_artifact_refs(
+        run_dir, getattr(result, "manifest_path", None), getattr(result, "view_path", None))
+    return status, reason, refs
+
+
+@dataclass(frozen=True)
+class GitHistoryProvider:
+    """Wraps the ``git-history`` signal tool (57B-82 A2) via
+    ``context.tool_access`` — see ``_run_or_reuse_signal`` above and
+    ``contracts.ToolAccess``'s own docstring for the ``tooldef`` passthrough
+    this needs: ``since``/``coupling_sample_cap`` are RUN-BOUND values
+    (recorded once per run in ``RunContext.provenance["preparation"]``), not
+    derivable from ``target`` alone the way ``registry.tool_for``'s default
+    resolution assumes.
+
+    ``universal`` (every repo is visited, git or not — a non-git verdict is
+    POSITIVE provenance, never a skipped scan) and zero-profile, mirroring
+    ``DeployUnitsProvider`` above: no detected TECHNOLOGY facet predicts
+    whether a target is a git checkout at all — that's ``target.git.is_git``,
+    a TargetSpec field, not something ``profiles.detection`` observes.
+    """
+
+    provider_id: str = "git-history"
+    capability_id: str = "git-history"
+    profile_ids: tuple[str, ...] = ()
+    universal: bool = True
+
+    def run(self, context: RunContext, target: RepoTarget) -> CapabilityResult:
+        if not target.git.is_git:
+            return CapabilityResult(
+                capability_id=self.capability_id, provider_id=self.provider_id,
+                repo_id=target.repo_id,
+                coverage=Coverage(
+                    applicability="not-applicable", status="complete",
+                    reason_code="git-history-non-git",
+                    detail="non-git folder: reduced coverage — no history lane, "
+                           "non-reproducible citations, no caching"),
+                facet_provenance=_facet_provenance(target, self.profile_ids),
+            )
+
+        # Function-local import: same registry<->profiles circular-import
+        # trap DatastoreEvidenceProvider/DeployUnitsProvider document above
+        # (registry.py itself only ever imports profiles.selection lazily).
+        from ..registry import git_history
+
+        identities = _identities(context, self.provider_id)
+        artifact_key = identities.artifact_key_for(target.repo_id)
+        preparation = (context.provenance or {}).get("preparation") or {}
+        since = preparation.get("history_since") or None
+        coupling_sample_cap = int(preparation.get("coupling_sample_cap") or 0)
+        tooldef = git_history(target, since, coupling_sample_cap)
+
+        status, reason, refs = _run_or_reuse_signal(
+            context, "git-history", target, artifact_key, tooldef=tooldef)
+        return CapabilityResult(
+            capability_id=self.capability_id, provider_id=self.provider_id,
+            repo_id=target.repo_id,
+            coverage=_coverage_from_signal("git-history", status, reason),
+            artifact_refs=refs,
+            facet_provenance=_facet_provenance(target, self.profile_ids),
+        )
+
+
+@dataclass(frozen=True)
+class DependencyRiskProvider:
+    """Replicates ``registry.network_tools``'s exact ecosystem gates (57B-82
+    A2) as ONE capability: osv-scanner when the target declares ANY lockfile
+    OR is a Go target; outdated when it's a Node target (yarn-vs-npm stays
+    entirely inside ``registry.outdated`` — package-manager IDENTITY, not a
+    facet predicate, per that function's own comment; no ``tooldef``
+    passthrough is needed for either sub-tool, since neither depends on a
+    run-bound value ``registry.tool_for``'s default resolution can't supply).
+
+    A repo can select BOTH (e.g. a Node repo with a committed lockfile);
+    this provider's own Coverage is the worst case across whichever ran, via
+    :func:`~analysis_wrapper.evidence.coverage.aggregate` — so a
+    network-unauthorized run's exact executor SKIPPED reason ("network-
+    capable tool requires explicit authorization") surfaces unmodified in
+    ``detail`` regardless of which sub-tool(s) produced it.
+
+    ``universal`` + zero-profile, same rationale as ``GitHistoryProvider``:
+    lockfile presence and Go/Node-ness are TargetSpec/facet questions this
+    provider answers itself every run, not a pre-selected profile match.
+    """
+
+    provider_id: str = "dependency-risk"
+    capability_id: str = "dependency-risk"
+    profile_ids: tuple[str, ...] = ()
+    universal: bool = True
+
+    def run(self, context: RunContext, target: RepoTarget) -> CapabilityResult:
+        run_osv = bool(target.pm.lockfile) or is_go_target(target)
+        run_outdated = is_node_target(target)
+        if not run_osv and not run_outdated:
+            return CapabilityResult(
+                capability_id=self.capability_id, provider_id=self.provider_id,
+                repo_id=target.repo_id,
+                coverage=Coverage(
+                    applicability="not-applicable", status="complete",
+                    reason_code="dependency-risk-not-applicable",
+                    detail="no declared lockfile and neither a Go nor a Node "
+                           "target — no dependency-risk tool applies"),
+                facet_provenance=_facet_provenance(target, self.profile_ids),
+            )
+
+        identities = _identities(context, self.provider_id)
+        artifact_key = identities.artifact_key_for(target.repo_id)
+        coverages: list[Coverage] = []
+        refs: list[ArtifactRef] = []
+        if run_osv:
+            status, reason, tool_refs = _run_or_reuse_signal(
+                context, "osv-scanner", target, artifact_key)
+            coverages.append(_coverage_from_signal("dependency-risk-osv", status, reason))
+            refs.extend(tool_refs)
+        if run_outdated:
+            status, reason, tool_refs = _run_or_reuse_signal(
+                context, "outdated", target, artifact_key)
+            coverages.append(_coverage_from_signal("dependency-risk-outdated", status, reason))
+            refs.extend(tool_refs)
+        return CapabilityResult(
+            capability_id=self.capability_id, provider_id=self.provider_id,
+            repo_id=target.repo_id, coverage=aggregate(coverages),
+            artifact_refs=tuple(refs),
             facet_provenance=_facet_provenance(target, self.profile_ids),
         )

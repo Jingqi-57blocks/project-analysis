@@ -23,7 +23,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..evidence import catalog
 from ..executor import SignalResult, replace_artifact_text
@@ -34,6 +34,9 @@ from .bundled import bundled_registry
 from .contracts import CapabilityResult, RunContext, ToolAccess, run_provider
 from .registry import ProfileRegistry
 from .tool_access import ExecutorToolAccess
+
+if TYPE_CHECKING:
+    from ..tooldefs import ToolDef
 
 SCHEMA_VERSION = "1.0.0"
 FILENAME = "provider-execution.json"
@@ -50,10 +53,24 @@ class RecordingToolAccess:
     wrapper any more than through the one it wraps.  It exists purely so one
     provider execution's tool calls can be disclosed in that execution's own
     record row, without changing what the provider receives back.
+
+    ``signals`` (57B-82 A2) additionally collects the REAL
+    :class:`~..executor.SignalResult` objects seen (``log`` above only ever
+    kept a reduced ``{tool_id, signal_id, status}`` dict, enough for the
+    execution-record row but not enough to rebuild a run-summary.json row) —
+    ``run_providers``' own optional ``signal_results`` collector reads this
+    to let a caller (``cli._prepare_overview``) merge a provider's own
+    signal-tool executions into the same run-summary.json the legacy sweep
+    used to own alone. A test double whose ``execute()`` returns something
+    other than a genuine ``SignalResult`` (the shared conformance battery's
+    ``_StatusStub``, which carries only ``.status``) is silently excluded
+    from ``signals`` — never a crash, since that stub was never a real
+    execution to begin with.
     """
 
     inner: ToolAccess
     log: list[dict[str, str]] = dataclasses.field(default_factory=list)
+    signals: list[SignalResult] = dataclasses.field(default_factory=list)
 
     def execute(
         self,
@@ -61,21 +78,36 @@ class RecordingToolAccess:
         target: RepoTarget,
         *,
         signal_id: str = "",
+        tooldef: "ToolDef | None" = None,
     ) -> SignalResult:
-        result = self.inner.execute(tool_id, target, signal_id=signal_id)
+        result = self.inner.execute(tool_id, target, signal_id=signal_id, tooldef=tooldef)
         status = getattr(result, "status", None)
         status_text = status.value if hasattr(status, "value") else str(status)
         self.log.append({
             "tool_id": tool_id, "signal_id": signal_id, "status": status_text,
         })
+        if isinstance(result, SignalResult):
+            self.signals.append(result)
         return result
 
 
 def run_providers(
     registry: ProfileRegistry,
     context: RunContext,
+    *,
+    signal_results: list[SignalResult] | None = None,
 ) -> tuple[list[CapabilityResult], list[dict[str, Any]]]:
     """Execute every applicable (provider, repository) pair exactly once.
+
+    ``signal_results`` (57B-82 A2, OPTIONAL, additive) is a caller-owned
+    collector: when given, every REAL ``SignalResult`` any provider produced
+    via ``context.tool_access.execute(...)`` this call (success or failure)
+    is appended to it, in execution order. This is purely a side channel —
+    the return signature is UNCHANGED — so every existing caller that omits
+    it keeps working identically. It exists so ``cli._prepare_overview`` can
+    fold a signal-tool-executing provider's own results into the same
+    run-summary.json the legacy sweep used to build alone, without forcing
+    every other caller (tests, the conformance battery) to know or care.
 
     Repositories are visited in ``repo_id`` order (mirroring the executor
     sweep's own convention) and, within each, providers in the registry's
@@ -146,6 +178,8 @@ def run_providers(
                 row.update(outcome="failed", reason=reason,
                           coverage=None, tools=list(recorder.log))
                 rows.append(row)
+                if signal_results is not None:
+                    signal_results.extend(recorder.signals)
                 continue
             results.append(result)
             row.update(
@@ -159,6 +193,8 @@ def run_providers(
                 tools=list(recorder.log),
             )
             rows.append(row)
+            if signal_results is not None:
+                signal_results.extend(recorder.signals)
     rows.sort(key=lambda row: (row["provider_id"], row["repository_ref"]))
     return results, rows
 
@@ -197,6 +233,7 @@ def run_provider_stage(
     scan_date: str,
     network_authorized: bool,
     provenance: dict[str, Any],
+    signal_results: list[SignalResult] | None = None,
 ) -> dict[str, int]:
     """The one-call driver: select, execute, and record for this run only.
 
@@ -204,16 +241,29 @@ def run_provider_stage(
     uses, runs every applicable (provider, repository) pair against the
     bundled registry, and writes both the run-level execution record and the
     evidence-catalog projection over whatever results came back.
+
+    The tool-access seam's OWN output directory is ``<run>/signals`` (57B-82
+    A2) — NOT ``run_dir`` itself (that stays every OTHER provider's
+    ``RunContext.output_dir``, e.g. ``run/callgraph``, ``run/datastore``):
+    ``context.tool_access.execute(...)`` is ``run_tool``'s own path, and
+    signal-tool manifests/views have always lived in ``signals/`` (the
+    legacy sweep's own directory) — a git-history/dependency-risk provider's
+    artifacts must land there too for byte-identical ``signals/`` output.
+    None of the four pre-57B-82-A2 bundled providers ever call
+    ``context.tool_access.execute(...)`` at all, so this is inert for them.
+
+    ``signal_results`` (57B-82 A2, optional) is threaded straight through to
+    :func:`run_providers` — see its own docstring.
     """
     run = Path(run_dir).expanduser().resolve()
     access = ExecutorToolAccess(
-        spec, identities, run, scan_date, network_authorized=network_authorized)
+        spec, identities, run / "signals", scan_date, network_authorized=network_authorized)
     context = RunContext(
         targets=spec, output_dir=run, scan_date=scan_date,
         network_authorized=network_authorized, provenance=provenance,
         tool_access=access, identities=identities,
     )
-    results, rows = run_providers(bundled_registry(), context)
+    results, rows = run_providers(bundled_registry(), context, signal_results=signal_results)
     write_execution_record(
         run, rows=rows, network_authorized=network_authorized, scan_date=scan_date)
     catalog.write(run, results, identities)

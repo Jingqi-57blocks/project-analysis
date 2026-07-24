@@ -31,7 +31,7 @@ from provider_conformance import (
 class _NoopToolAccess:
     """The facts-behavior provider under test never calls tool_access."""
 
-    def execute(self, tool_id, target, *, signal_id=""):
+    def execute(self, tool_id, target, *, signal_id="", tooldef=None):
         raise AssertionError("facts-behavior provider should not use tool_access")
 
 

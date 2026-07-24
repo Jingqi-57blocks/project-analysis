@@ -22,6 +22,7 @@ from ..identity import IdentityMap
 if TYPE_CHECKING:
     from ..executor import SignalResult
     from ..targetspec import RepoTarget, TargetSpec
+    from ..tooldefs import ToolDef
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -141,7 +142,22 @@ class CapabilityResult:
 
 @runtime_checkable
 class ToolAccess(Protocol):
-    """The only external-tool execution surface available to providers."""
+    """The only external-tool execution surface available to providers.
+
+    ``tooldef`` (57B-82 A2, OPTIONAL, defaults to ``None``) lets a provider
+    supply an ALREADY-CONSTRUCTED, explicitly reviewed :class:`ToolDef`
+    instead of the run's default resolution (``registry.tool_for(tool_id,
+    target)``). The ONLY reason this seam exists: ``git-history``'s
+    ``since``/``coupling_sample_cap`` are RUN-BOUND values (recorded once per
+    run in ``RunContext.provenance["preparation"]``), not derivable from
+    ``target`` alone the way every other tool's definition is — a provider
+    still names an explicit ``tool_id`` and gets back a definition built by
+    ``registry.py``'s own constructors, never raw argv/binaries/env/guards
+    of its own devising. Every existing ``run_tool`` safety check
+    (allowlisted binary, guards, staleness, containment) applies UNCHANGED
+    to whichever definition ultimately executes. Omitting ``tooldef``
+    (the default) is byte-identical to this parameter not existing.
+    """
 
     def execute(
         self,
@@ -149,6 +165,7 @@ class ToolAccess(Protocol):
         target: "RepoTarget",
         *,
         signal_id: str = "",
+        tooldef: "ToolDef | None" = None,
     ) -> "SignalResult": ...
 
 
@@ -190,10 +207,11 @@ class CapabilityProvider(Protocol):
     ``getattr(provider, "universal", False)``, so a provider that omits the
     attribute keeps its existing purely facet-gated selection unchanged.
 
-    Set ``universal = True`` when a provider's OWN full-tree scan is itself
-    the honest absence proof behind a ``not-applicable`` verdict for its
-    capability (57B-80 PR2's ``datastore-evidence`` provider; future
-    repository-wide providers such as 57B-82's git/deploy ones) — i.e. the
+    Set ``universal = True`` when a provider's OWN full-tree scan (or, for
+    git-history/dependency-risk, own executor-backed run) is itself the
+    honest absence proof behind a ``not-applicable``/coverage verdict for
+    its capability (57B-80 PR2's ``datastore-evidence``; 57B-82's
+    ``deploy-units``, ``git-history``, ``dependency-risk``) — i.e. the
     provider must run on every repository regardless of which facets were
     detected there, not only the ones already carrying one of its linked
     profiles. ``profile_ids`` still governs which detected facets are

@@ -3,7 +3,7 @@ import os
 import argparse
 from pathlib import Path
 
-from analysis_wrapper.cli import _sweep, main
+from analysis_wrapper.cli import PROVIDER_OWNED_SIGNAL_TOOLS, _record_summary, _sweep, main
 from analysis_wrapper.callgraph.contract import CoverageReport, RepoCoverage
 from analysis_wrapper.depmap import emit as dm_emit
 from analysis_wrapper.depmap.contract import DepMapReport, RepoDepCoverage
@@ -151,6 +151,128 @@ def test_sweep_records_unauthorized_network_lanes_as_skipped(monkeypatch, tmp_pa
     assert "explicit authorization" in results[0].reason
 
 
+def test_sweep_exclude_tool_names_is_additive_and_standalone_path_ignores_it(
+        tmp_path, target):
+    """57B-82 A2: ``exclude_tool_names`` (only ``cli._prepare_overview``
+    passes it, as ``PROVIDER_OWNED_SIGNAL_TOOLS``) strips exactly those tool
+    names from the sweep's own selection; omitting it (every OTHER call
+    site, including the standalone ``sweep``/``run`` CLI subcommands) keeps
+    running every applicable tool directly, unchanged."""
+    args = argparse.Namespace(since="2020-01-01", coupling_sample_cap=0,
+                              scan_date="2026-07-24", include_network=False)
+    spec = TargetSpec([target])
+    identities = identity.build(
+        spec, workspace_root=tmp_path, project_id=stable_repo_id(str(tmp_path)))
+
+    excluded = _sweep(args, spec, tmp_path / "signals-a", identities,
+                      exclude_tool_names=PROVIDER_OWNED_SIGNAL_TOOLS)
+    assert "git-history" not in {r.tool for r in excluded}
+
+    full = _sweep(args, spec, tmp_path / "signals-b", identities)
+    assert "git-history" in {r.tool for r in full}
+
+
+def test_prepare_overview_signals_merge_includes_provider_owned_tools(tmp_path, target):
+    """The PRODUCT of the A2 restructuring: run-summary.json still carries a
+    row for every signal tool that ran this pass, including git-history/
+    outdated — now executed via their own capability providers rather than
+    the sweep — merged in by ``cli._prepare_overview``, not silently
+    dropped. Exercises the REAL sweep + REAL provider stage (not stubbed),
+    proving the merge end to end on a genuine git+JS fixture repo (the
+    shared ``target``/``synthetic_repo`` conftest fixture — real commit,
+    real head, ``language.javascript`` facet so dependency-risk selects
+    ``outdated`` too)."""
+    from analysis_wrapper.profiles.execution import run_provider_stage
+
+    spec = TargetSpec([target])
+    identities = identity.build(
+        spec, workspace_root=tmp_path, project_id=stable_repo_id(str(tmp_path)))
+    run_dir = tmp_path / "run"
+    signals = run_dir / "signals"
+    signals.mkdir(parents=True)
+
+    args = argparse.Namespace(since="2020-01-01", coupling_sample_cap=0,
+                              scan_date="2026-07-24", include_network=False)
+    sweep_results = _sweep(args, spec, signals, identities,
+                          exclude_tool_names=PROVIDER_OWNED_SIGNAL_TOOLS)
+    assert not any(r.tool in PROVIDER_OWNED_SIGNAL_TOOLS for r in sweep_results)
+
+    collected: list = []
+    run_provider_stage(
+        run_dir, spec, identities, scan_date="2026-07-24", network_authorized=False,
+        provenance={"preparation": {"history_since": "2020-01-01",
+                                    "coupling_sample_cap": 0}},
+        signal_results=collected)
+    assert {"git-history", "outdated"} <= {r.tool for r in collected}
+
+    combined = sweep_results + collected
+    _record_summary(signals, combined)
+    payload = json.loads((signals / "run-summary.json").read_text("utf-8"))
+    tools = {row["tool"] for row in payload["signals"]}
+    assert "git-history" in tools
+    assert "outdated" in tools
+    # Every (tool, repository_ref) pair appears exactly once — no duplicate
+    # execution between the sweep and the providers.
+    keys = [(row["tool"], row["repository_ref"]) for row in payload["signals"]]
+    assert len(keys) == len(set(keys))
+
+
+def test_run_provider_stage_resumes_over_real_signal_artifacts_without_crashing(
+        tmp_path, target):
+    """The highest-risk scenario 57B-82 A2 introduces: signal-tool artifacts
+    are write-once (``run_tool``'s own collision refusal), but the provider
+    stage runs UNCONDITIONALLY on every ``prepare-overview`` pass — including
+    one that resumes an already-signals-complete run. A SECOND
+    ``run_provider_stage`` call over the SAME real ``run/signals/`` output
+    (git-history executes for real; dependency-risk selects ``outdated`` for
+    this JS fixture) must not crash, must keep reporting the SAME
+    executions/failed counts and the SAME per-row coverage, and must leave
+    evidence-catalog.json byte-identical (it is built purely from
+    CapabilityResult.coverage/facts/artifact_refs, none of which differ
+    between a fresh and a resumed pass — see
+    ``providers.py``'s ``_run_or_reuse_signal`` docstring).
+
+    provider-execution.json's git-history/dependency-risk ROWS are NOT
+    expected to be fully byte-identical across the two calls: each row's
+    ``tools`` field honestly discloses whether THIS pass actually called
+    ``context.tool_access.execute(...)`` — populated on the fresh pass,
+    empty on the resumed one, since reusing an existing manifest never
+    touches tool_access. Every OTHER field of every row (including
+    ``coverage``) is identical — asserted explicitly below, since that is
+    the part that actually matters."""
+    from analysis_wrapper.evidence import catalog
+    from analysis_wrapper.profiles.execution import FILENAME, run_provider_stage
+
+    spec = TargetSpec([target])
+    identities = identity.build(
+        spec, workspace_root=tmp_path, project_id=stable_repo_id(str(tmp_path)))
+    run_dir = tmp_path / "run"
+    (run_dir / "signals").mkdir(parents=True)
+    kwargs = dict(
+        scan_date="2026-07-24", network_authorized=False,
+        provenance={"preparation": {"history_since": "2020-01-01",
+                                    "coupling_sample_cap": 0}})
+
+    summary_one = run_provider_stage(run_dir, spec, identities, **kwargs)
+    rows_one = json.loads((run_dir / FILENAME).read_text("utf-8"))["executions"]
+    catalog_one = (run_dir / catalog.FILENAME).read_bytes()
+
+    summary_two = run_provider_stage(run_dir, spec, identities, **kwargs)  # must not raise
+    rows_two = json.loads((run_dir / FILENAME).read_text("utf-8"))["executions"]
+    catalog_two = (run_dir / catalog.FILENAME).read_bytes()
+
+    assert summary_one == summary_two
+    assert catalog_one == catalog_two
+    assert [{k: v for k, v in row.items() if k != "tools"} for row in rows_one] == \
+        [{k: v for k, v in row.items() if k != "tools"} for row in rows_two]
+    resumed_providers = {"git-history", "dependency-risk"}
+    for row in rows_two:
+        if row["provider_id"] in resumed_providers:
+            assert row["tools"] == [], (
+                "a resumed pass must not re-invoke tool_access for a provider "
+                "that reused an existing signal manifest")
+
+
 def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path, target):
     from analysis_wrapper import run_provenance
     project_id = stable_repo_id(str(tmp_path))
@@ -189,7 +311,7 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
         TargetSpec([target]), analyzer_root=tmp_path,
         language="en", analyzed_at=state.analyzed_at))
 
-    def sweep(_args, _spec, out, _identities):
+    def sweep(_args, _spec, out, _identities, **_kwargs):
         view = Path(out) / f"fixture-{repository.artifact_key}.view.txt"
         view.write_text("items: 0\n", "utf-8")
         (Path(out) / f"fixture-{repository.artifact_key}.manifest.json").write_text(json.dumps({
@@ -224,12 +346,12 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
         return report
 
     def fake_run_provider_stage(run_dir, spec, identities, *, scan_date,
-                                network_authorized, provenance):
+                                network_authorized, provenance, signal_results=None):
         # The provider loop itself has its own dedicated coverage (57B-78/86)
-        # plus the four real providers' own coverage (57B-81 PR2 fixtures);
-        # here it must not require a real go/node toolchain, so it's stubbed
-        # to the same behavior-neutral no-op the empty bundled registry gave
-        # before 57B-81 — this test is only about canonical paths + resume.
+        # plus the real providers' own coverage (57B-81/82 fixtures); here it
+        # must not require a real go/node toolchain, so it's stubbed to the
+        # same behavior-neutral no-op the empty bundled registry gave before
+        # 57B-81 — this test is only about canonical paths + resume.
         return {"executions": 0, "failed": 0}
 
     monkeypatch.setattr("analysis_wrapper.callgraph.emit.assemble", callgraph_assemble)
