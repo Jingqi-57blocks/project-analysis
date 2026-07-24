@@ -1,4 +1,5 @@
-"""Bundled capability providers (57B-81 PR2 callgraph/depmap; 57B-80 PR2 datastore).
+"""Bundled capability providers (57B-81 PR2 callgraph/depmap; 57B-80 PR2
+datastore; 57B-82 A1 deploy-units).
 
 Each provider below is a thin adapter, not a reimplementation: it resolves
 identity through ``context.identities`` (a provider's ONLY path to a
@@ -19,6 +20,12 @@ the artifact shape its capability owns:
   ``discovery.tables.generate`` result directly (one repo, one datastore
   producer, no per-lane fragmentation or cross-repo assembler needed) and is
   ``universal`` — see its own docstring below.
+* the deploy-units provider writes the FULL per-repo
+  ``discovery.deploy_units.generate`` result directly (same one-repo,
+  one-producer shape as datastore-evidence) and is likewise ``universal`` —
+  but unlike every other provider here, it carries NO linked profiles at all
+  (``profile_ids = ()``); see its own docstring below for why, and for the
+  registration status this currently blocks on.
 
 Every write goes through :func:`~analysis_wrapper.executor.replace_artifact_text`
 (atomic, idempotent) rather than the create-once ``write_new_text`` the
@@ -372,3 +379,73 @@ class DatastoreEvidenceProvider:
         }
         fact_id = make_fact_id(capability_id, repo_id, "data-store", (name,))
         return Fact(fact_id=fact_id, kind="data-store", data=data, source_refs=source_refs)
+
+
+def _coverage_from_deploy_units(status: str, notes: tuple[str, ...] | list[str]) -> Coverage:
+    """Map ``deploy_units.generate()``'s own two-value status vocabulary
+    straight across: ``inferred`` (artifacts found) and ``unknown`` (a
+    completed scan found none — the honest answer today, never converted to
+    ``not-applicable``, which would require a producer that positively proves
+    absence rather than merely not finding one) are BOTH complete, applicable
+    outcomes. A disclosed ``COVERAGE CAP`` note (the module's own file/byte
+    scan-cap disclosure — see ``deploy_units._MAX_FILES``/``_MAX_BYTES``)
+    degrades the outcome to ``partial`` instead, the same free-text
+    reason+notes join ``_coverage_from_lane`` uses above."""
+    capped = any("COVERAGE CAP" in note for note in notes)
+    detail = "; ".join(notes)[:_DETAIL_LIMIT]
+    return Coverage(applicability="applicable", status="partial" if capped else "complete",
+                    reason_code=f"deploy-units-{status}", detail=detail)
+
+
+@dataclass(frozen=True)
+class DeployUnitsProvider:
+    """Wraps :func:`analysis_wrapper.discovery.deploy_units.generate` (57B-82 A1).
+
+    ``universal`` for the same reason as ``DatastoreEvidenceProvider`` above:
+    ``deploy_units.generate``'s full-tree walk is itself the honest "unknown"
+    disclosure for a repo with no deploy artifact, so it must run on every
+    repository, not only ones carrying some pre-selected facet.
+
+    Unlike every other bundled provider, ``profile_ids`` is INTENTIONALLY
+    empty: a Dockerfile, compose file, Go ``package main`` entrypoint, or CI
+    deploy step can appear in a repo carrying any combination of detected
+    language/framework/datastore facets (or none at all) — there is no
+    detected technology whose presence predicts a deploy artifact's presence,
+    so linking this provider to one would assert a relationship discovery
+    never observed. ``facet_provenance`` is therefore always empty for this
+    provider's results, which is the honest disclosure, not an omission.
+
+    Same ``context.tool_access``/``network_authorized`` constraint as
+    ``DatastoreEvidenceProvider``: ``deploy_units.generate()`` has no
+    executor seam and is called exactly as the legacy stage-1 discovery
+    producer already did.
+    """
+
+    provider_id: str = "deploy-units"
+    capability_id: str = "deployable-units"
+    profile_ids: tuple[str, ...] = ()
+    universal: bool = True
+
+    def run(self, context: RunContext, target: RepoTarget) -> CapabilityResult:
+        # Function-local import: same discovery/<->profiles circular-import
+        # trap ``DatastoreEvidenceProvider`` documents above.
+        from ..discovery import deploy_units
+
+        identities = _identities(context, self.provider_id)
+        artifact_key = identities.artifact_key_for(target.repo_id)
+
+        result = deploy_units.generate(target.path, target.tier2_exclusions)
+        payload = result.to_dict()
+
+        run_dir = Path(context.output_dir)
+        deploy_dir = create_stage_dir(run_dir / "deploy")
+        artifact_path = deploy_dir / f"{artifact_key}.json"
+        _write_json(artifact_path, payload)
+
+        coverage = _coverage_from_deploy_units(result.status, result.notes)
+        return CapabilityResult(
+            capability_id=self.capability_id, provider_id=self.provider_id,
+            repo_id=target.repo_id, coverage=coverage,
+            artifact_refs=(_artifact_ref(artifact_path, run_dir, "deploy-units-evidence"),),
+            facet_provenance=_facet_provenance(target, self.profile_ids),
+        )
