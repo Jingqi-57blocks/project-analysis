@@ -9,8 +9,9 @@ from __future__ import annotations
 from .contracts import CapabilityProvider, Fingerprint, Profile
 from .providers import (AccessEvidenceProvider, CallgraphGoProvider,
                         CallgraphJsProvider, DatastoreEvidenceProvider,
-                        DeployUnitsProvider, DepmapGoProvider,
-                        DepmapJsProvider, IntegrationEvidenceProvider)
+                        DependencyRiskProvider, DeployUnitsProvider,
+                        DepmapGoProvider, DepmapJsProvider, GitHistoryProvider,
+                        IntegrationEvidenceProvider)
 from .registry import ProfileRegistry
 
 
@@ -152,14 +153,17 @@ BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
     AccessEvidenceProvider(),
     CallgraphGoProvider(), CallgraphJsProvider(),
     DatastoreEvidenceProvider(),
-    # DeployUnitsProvider (57B-82 A1) is the first BUNDLED provider with
-    # empty profile_ids: no detected facet predicts a deploy artifact's
-    # presence, so it has nothing to link to. It is still selected on every
-    # target via `universal=True` — registry.py's own carve-out for exactly
-    # this shape (a universal provider can never be "dead" the way an
-    # unlinked, non-universal one would be).
+    # DependencyRiskProvider/DeployUnitsProvider/GitHistoryProvider (57B-82
+    # A1/A2) are bundled providers with empty profile_ids: no detected facet
+    # predicts a deploy artifact's presence, a dependency-risk ecosystem, or
+    # a git checkout, so they have nothing to link to. Each is still
+    # selected on every target via `universal=True` — registry.py's own
+    # carve-out for exactly this shape (a universal provider can never be
+    # "dead" the way an unlinked, non-universal one would be).
+    DependencyRiskProvider(),
     DeployUnitsProvider(),
     DepmapGoProvider(), DepmapJsProvider(),
+    GitHistoryProvider(),
     IntegrationEvidenceProvider(),
 )
 

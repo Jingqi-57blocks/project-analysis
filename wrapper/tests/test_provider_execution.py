@@ -67,7 +67,7 @@ def _profile(profile_id: str, capability_id: str) -> Profile:
 class _NoopToolAccess:
     """A provider that never calls tool_access should never reach this."""
 
-    def execute(self, tool_id, target, *, signal_id=""):
+    def execute(self, tool_id, target, *, signal_id="", tooldef=None):
         raise AssertionError("tool_access should not be used by this provider")
 
 
@@ -224,7 +224,7 @@ def test_provider_failure_is_recorded_not_raised_and_others_still_run(tmp_path):
 
 
 class _StubSkipToolAccess:
-    def execute(self, tool_id, target, *, signal_id=""):
+    def execute(self, tool_id, target, *, signal_id="", tooldef=None):
         return SimpleNamespace(status=Status.SKIPPED)
 
 
@@ -366,15 +366,18 @@ def test_legitimate_empty_result_is_completed_not_failed(tmp_path):
 def test_run_provider_stage_only_runs_universal_providers_with_no_matching_facets(tmp_path):
     """A repo with NO detected facets matches none of the four FACET-GATED
     bundled providers (57B-81 PR2's callgraph/dependency-map ones, each
-    linked to a specific language facet) — but the four ``universal``
-    providers (57B-80's datastore-evidence, 57B-82 A1's deploy-units, 57B-84's
-    access-evidence and integration-evidence) run regardless, so this is no
-    longer a zero-execution no-op. Three of the four (all but
-    datastore-evidence) are ALSO zero-profile — see ``profiles/registry.py``'s
-    carve-out — so their empty ``matched_profiles`` reflects having no
-    profile to match at all, not merely a facet that didn't match. The stage
-    stays deterministic and byte-identical across repeated calls either way.
-    """
+    linked to a specific language facet) — but the SIX ``universal``
+    providers (57B-80's datastore-evidence, 57B-82's deploy-units/
+    dependency-risk/git-history, 57B-84's access-evidence and
+    integration-evidence) all run regardless, so this is no longer a
+    zero-execution no-op. Five of the six (all but datastore-evidence) are
+    ALSO zero-profile — see ``profiles/registry.py``'s carve-out — so their
+    empty ``matched_profiles`` reflects having no profile to match at all,
+    not merely a facet that didn't match. This bare repo is also non-git
+    with no declared lockfile/ecosystem, so dependency-risk/git-history both
+    land on their own not-applicable branch rather than executing a real
+    signal tool. The stage stays deterministic and byte-identical across
+    repeated calls either way."""
     workspace = tmp_path / "workspace"
     repo = _target(workspace / "svc")
     identities = _identities(workspace, [repo])
@@ -396,13 +399,13 @@ def test_run_provider_stage_only_runs_universal_providers_with_no_matching_facet
     execution_bytes_two = (run_dir / FILENAME).read_bytes()
     catalog_bytes_two = (run_dir / catalog.FILENAME).read_bytes()
 
-    assert summary_one == {"executions": 4, "failed": 0} == summary_two
+    assert summary_one == {"executions": 6, "failed": 0} == summary_two
     executions = json.loads(execution_bytes_one)["executions"]
     assert [row["provider_id"] for row in executions] == [
-        "access-evidence", "datastore-evidence", "deploy-units", "integration-evidence"]
-    for row in executions:
-        assert row["matched_profiles"] == []
-        assert row["universal"] is True
+        "access-evidence", "datastore-evidence", "dependency-risk",
+        "deploy-units", "git-history", "integration-evidence"]
+    assert all(row["matched_profiles"] == [] for row in executions)
+    assert all(row["universal"] is True for row in executions)
     assert execution_bytes_one == execution_bytes_two
     assert catalog_bytes_one == catalog_bytes_two
     assert bundled_registry().providers

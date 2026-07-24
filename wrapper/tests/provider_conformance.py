@@ -163,7 +163,7 @@ class _StatusStub:
 
     status: object
 
-    def execute(self, tool_id, target, *, signal_id=""):
+    def execute(self, tool_id, target, *, signal_id="", tooldef=None):
         return self
 
 

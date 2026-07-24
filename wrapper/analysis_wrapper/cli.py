@@ -12,7 +12,8 @@ from pathlib import Path
 from .executor import (SignalResult, WrapperSafetyError,
                        prepare_output_directory, run_tool,
                        use_existing_run_directory)
-from .registry import git_history, jscpd_multi, local_tools, network_tools, tool_for
+from .registry import (PROVIDER_OWNED_SIGNAL_TOOLS, git_history, jscpd_multi,
+                       local_tools, network_tools, tool_for)
 from .sanitize import sanitize_text
 from .status import Status, aggregate, wrapper_exit_code
 from .targetspec import TargetSpec
@@ -63,7 +64,15 @@ def _run_one(args: argparse.Namespace, spec: TargetSpec, out: Path,
 
 
 def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
-           identities) -> list[SignalResult]:
+           identities, *,
+           exclude_tool_names: frozenset[str] = frozenset()) -> list[SignalResult]:
+    """``exclude_tool_names`` (57B-82 A2, additive, default empty — every
+    pre-existing call site is unaffected): ``cli._prepare_overview`` passes
+    ``PROVIDER_OWNED_SIGNAL_TOOLS`` so git-history/osv-scanner/outdated run
+    exactly once, through their own capability providers, instead of also
+    running here. The standalone ``run``/``sweep`` CLI subcommands are
+    user-facing debug paths and never pass this — they keep executing every
+    tool directly, unchanged."""
     results: list[SignalResult] = []
     repos = sorted(spec.repos, key=lambda r: r.repo_id)
     for target in repos:
@@ -75,6 +84,8 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
         # them as SKIPPED without authorization, so absence cannot masquerade
         # as a clean/covered result.
         definitions += network_tools(target)
+        if exclude_tool_names:
+            definitions = [d for d in definitions if d.name not in exclude_tool_names]
         for definition in definitions:
             results.append(run_tool(
                 definition, target, out, args.scan_date,
@@ -603,6 +614,15 @@ def _prepare_overview(args: argparse.Namespace) -> int:
 
     signals = run / "signals"
     signal_summary = signals / "run-summary.json"
+    # ``fresh_sweep_results`` stays None on a REUSED signals stage (below):
+    # no new signal ran, so nothing needs recording into run-summary.json —
+    # matching the untouched "reused canonical run-summary.json" contract.
+    # On a FRESH stage it holds the sweep's own results (now excluding
+    # PROVIDER_OWNED_SIGNAL_TOOLS — see git-history/dependency-risk below),
+    # merged with the providers' own signal results once they've run, so the
+    # single run-summary.json write still reflects every signal tool that
+    # actually executed this pass (57B-82 A2).
+    fresh_sweep_results: list[SignalResult] | None = None
     if signal_summary.is_file():
         _load_object(signal_summary)
         print("signals: reused canonical run-summary.json")
@@ -611,9 +631,8 @@ def _prepare_overview(args: argparse.Namespace) -> int:
             raise ValueError("signals/ exists without run-summary.json; refuse partial reuse")
         out = prepare_output_directory(signals, spec.repos)
         from . import identity
-        results = _sweep(args, spec, out, identity.load(run))
-        _record_summary(out, results)
-        print(f"signals: wrote {len(results)} result(s)")
+        fresh_sweep_results = _sweep(args, spec, out, identity.load(run),
+                                     exclude_tool_names=PROVIDER_OWNED_SIGNAL_TOOLS)
 
     need_callgraph = not (run / "callgraph-coverage.json").is_file()
     if not need_callgraph:
@@ -632,27 +651,43 @@ def _prepare_overview(args: argparse.Namespace) -> int:
 
     # The provider stage now ALWAYS runs on every full prepare-overview pass
     # (57B-80 PR2), regardless of need_callgraph/need_depmap: BUNDLED_PROVIDERS
-    # also carries universal providers (datastore-evidence today; future
-    # repository-wide providers, e.g. 57B-82's git/deploy ones) whose own
-    # full-tree scan is the honest absence proof behind their capability's
-    # not-applicable verdict, so they need to run every pass — not only when
-    # callgraph/depmap happen to be stale. This is safe unconditionally: an
-    # empty/no-op selection already yields a stable, byte-identical
-    # provider-execution.json/evidence-catalog.json (run_providers's own
-    # documented guarantee), and when BOTH callgraph/depmap coverage docs
-    # already exist, the four lane providers still re-run and rewrite
-    # byte-identical fragments (harmless, but not free) — exactly the same
-    # "re-run, nothing new to assemble" tradeoff already accepted below when
-    # only ONE of the two was previously stale. Only the missing capability's
-    # assembler call actually produces a new final artifact; an
-    # already-assembled capability's output is left untouched.
+    # also carries universal providers (datastore-evidence, deploy-units,
+    # git-history, dependency-risk) whose own full-tree scan (or, for the
+    # signal-tool pair, own executor-backed run) is the honest absence proof
+    # behind their capability's not-applicable/coverage verdict, so they need
+    # to run every pass — not only when callgraph/depmap happen to be stale.
+    # This is safe unconditionally: an empty/no-op selection already yields a
+    # stable, byte-identical provider-execution.json/evidence-catalog.json
+    # (run_providers's own documented guarantee), and when BOTH
+    # callgraph/depmap coverage docs already exist, the four lane providers
+    # still re-run and rewrite byte-identical fragments (harmless, but not
+    # free) — exactly the same "re-run, nothing new to assemble" tradeoff
+    # already accepted below when only ONE of the two was previously stale.
+    # Only the missing capability's assembler call actually produces a new
+    # final artifact; an already-assembled capability's output is left
+    # untouched. git-history/dependency-risk are ALSO safe on a re-run of an
+    # already-signals-complete pass: they reuse the existing manifest rather
+    # than re-invoking the tool (see providers.py's ``_run_or_reuse_signal``)
+    # — the collector below only ever gets fresh entries when the tool
+    # ACTUALLY executed this pass.
     from . import identity
     from .profiles.execution import run_provider_stage
+    provider_signal_results: list[SignalResult] = []
     provider_summary = run_provider_stage(
         run, spec, identity.load(run), scan_date=args.scan_date,
-        network_authorized=args.include_network, provenance=provenance)
+        network_authorized=args.include_network, provenance=provenance,
+        signal_results=provider_signal_results)
     print(f"providers: {provider_summary['executions']} execution(s), "
           f"{provider_summary['failed']} failed")
+    if fresh_sweep_results is not None:
+        # Deferred from the signals block above (57B-82 A2): only NOW do the
+        # git-history/dependency-risk providers' own signal results exist to
+        # fold in, so run-summary.json still carries every signal tool that
+        # ran this pass — byte-identical in shape to the pre-A2 sweep-only
+        # summary, just sourced from two places instead of one.
+        combined_results = fresh_sweep_results + provider_signal_results
+        _record_summary(signals, combined_results)
+        print(f"signals: wrote {len(combined_results)} result(s)")
     if need_callgraph:
         report = cg_emit.assemble(run, args.scan_date)
         print(f"callgraph: wrote {len(report.repos)} lane result(s)")
