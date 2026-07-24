@@ -376,12 +376,19 @@ def _provider_execution_reasons(
 def _noise_strip_discovery(doc: dict) -> dict:
     """Deep copy of ``doc`` with only machine-local/tool-identity fields removed.
 
-    ``route_inventory``'s own tool-identity fields are stripped by
-    ``_noise_strip_route_inventory`` instead (57B-84 B2: that doc is no
-    longer embedded here — it lives in its own ``routes/route-
-    inventory.json`` run-level artifact)."""
+    ``route_inventory``/``ui_route_linkage`` are POPPED unconditionally, not
+    merely left alone: a PRE-57B-84-B2 run still carries them EMBEDDED here
+    (mixed-era comparison — 57B-87's acceptance gate compares against the
+    pre-refactor mainline run, exactly this shape), and their facts are
+    compared exactly ONCE, via ``_resolve_route_docs``'s dedicated
+    route_inventory/ui_route_linkage params below — never also folded into
+    this doc's own per-repo remainder/facet extraction. A POST-B2 run never
+    has these keys here at all (they live in ``routes/route-inventory.json``/
+    ``routes/ui-route-linkage.json`` instead), so the pop is a no-op there."""
     projected = json.loads(json.dumps(doc))
     projected.pop("workspace_root", None)
+    projected.pop("route_inventory", None)
+    projected.pop("ui_route_linkage", None)
     for repo in projected.get("repos", []):
         if isinstance(repo, dict):
             provenance = repo.get("provenance")
@@ -391,15 +398,45 @@ def _noise_strip_discovery(doc: dict) -> dict:
 
 
 def _noise_strip_route_inventory(doc: dict) -> dict:
-    """Deep copy of the standalone ``route-inventory.json`` doc with only
-    its tool-identity fields removed (57B-84 B2: split out of
-    ``_noise_strip_discovery`` when route_inventory moved to its own
-    artifact)."""
+    """Deep copy of a route-inventory doc with only its tool-identity fields
+    removed (57B-84 B2: split out of ``_noise_strip_discovery`` when
+    route_inventory moved to its own artifact). Applies equally to the
+    standalone ``routes/route-inventory.json`` shape and the pre-B2
+    embedded ``discovery-report.json["route_inventory"]`` shape — both
+    carry the same ``tool``/``tool_path``/``tool_version``/``version_drift``
+    fields, so one stripping function covers either era."""
     projected = json.loads(json.dumps(doc))
     projected.pop("tool_path", None)
     projected.pop("tool_version", None)
     projected.pop("version_drift", None)
     return projected
+
+
+def _resolve_route_docs(
+    discovery_doc: dict | None, standalone_route_inventory: dict | None,
+    standalone_ui_route_linkage: dict | None,
+) -> tuple[dict | None, dict | None]:
+    """Effective, RAW (tool identity NOT stripped) (route_inventory,
+    ui_route_linkage) for one run: the standalone ``routes/*.json`` docs
+    when present (57B-84 B2+), else the field EMBEDDED in
+    ``discovery-report.json`` (pre-B2 runs) — so a mixed-era comparison
+    sees route facts from EITHER shape, never silently drops the older
+    run's route rows to zero (which would make every route/linkage row in
+    the newer run look like a spurious add, and swallow any REAL semantic
+    route difference between the two runs).
+
+    Deliberately RAW: ``_collect_tool_versions`` needs the genuine
+    ``tool``/``tool_version`` fields to detect drift; a caller comparing
+    row CONTENT strips tool identity separately via
+    ``_noise_strip_route_inventory`` — stripping here would make every
+    tool-version drift invisible to that check too, silently."""
+    inventory = standalone_route_inventory
+    if inventory is None and discovery_doc is not None:
+        inventory = discovery_doc.get("route_inventory")
+    linkage = standalone_ui_route_linkage
+    if linkage is None and discovery_doc is not None:
+        linkage = discovery_doc.get("ui_route_linkage")
+    return inventory, linkage
 
 
 def _discovery_facets(doc: dict) -> dict[tuple[str, str], dict]:
@@ -422,9 +459,14 @@ def _discovery_evidence_rows(doc: dict, route_inventory: dict | None = None,
     """Canonical-row set for everything in discovery NOT already covered by
     ``_discovery_facets`` (technology_facets) or the prose lanes.
 
-    ``route_inventory``/``ui_route_linkage`` (57B-84 B2) are the standalone
-    ``routes.emit.assemble`` docs, passed in separately now that they are no
-    longer embedded fields on ``doc`` itself."""
+    ``route_inventory``/``ui_route_linkage`` (57B-84 B2) are passed in
+    separately — the CALLER (``compare``, via ``_resolve_route_docs``)
+    resolves whichever era's doc actually holds them (the standalone
+    ``routes.emit.assemble`` artifact, or the pre-B2 embedded
+    discovery-report.json field); this function itself is agnostic to
+    which. ``doc`` here has already had both keys popped by
+    ``_noise_strip_discovery`` regardless of era, so route facts are
+    compared exactly once, only through these two params."""
     rows: set[str] = set()
     for repo in doc.get("repos", []):
         if not isinstance(repo, dict):
@@ -571,8 +613,10 @@ def _collect_tool_versions(
         add(row.get("tool", ""), row.get("tool_version", ""))
     for row in (depmap_doc or {}).get("repos", []):
         add(row.get("tool", ""), row.get("tool_version", ""))
-    # 57B-84 B2: route_inventory's tool identity comes from the standalone
-    # routes/route-inventory.json doc now, not an embedded discovery field.
+    # 57B-84 B2: route_inventory_doc is the CALLER's already-resolved doc
+    # (``_resolve_route_docs``) — the standalone routes/route-inventory.json
+    # artifact, or the pre-B2 embedded discovery field as a fallback for a
+    # mixed-era comparison. This function only ever sees one resolved value.
     inventory = route_inventory_doc or {}
     add(inventory.get("tool", ""), inventory.get("tool_version", ""))
     for row in (provenance_doc or {}).get("tool_versions", []):
@@ -664,13 +708,26 @@ def compare(base_run: str | Path, candidate_run: str | Path) -> dict[str, Any]:
         (candidate_docs["system_model"] or {}).get("generator")
         if candidate_docs["system_model"] is not None else None,
     )
+    # Effective route docs for THIS run: the standalone routes/*.json when
+    # present (57B-84 B2+), else the field embedded in discovery-report.json
+    # (pre-B2) — see _resolve_route_docs's own docstring for why a mixed-era
+    # comparison needs this (57B-87's acceptance gate compares against the
+    # pre-refactor mainline run, exactly this shape). Resolved once, up
+    # front, RAW (tool identity intact) — _collect_tool_versions needs that;
+    # the row-content comparison below strips it separately.
+    base_route_inventory_raw, base_ui_route_linkage = _resolve_route_docs(
+        base_docs["discovery"], base_docs["route_inventory"], base_docs["ui_route_linkage"])
+    candidate_route_inventory_raw, candidate_ui_route_linkage = _resolve_route_docs(
+        candidate_docs["discovery"], candidate_docs["route_inventory"],
+        candidate_docs["ui_route_linkage"])
+
     tool_drift = _tool_drift(
         _collect_tool_versions(base_docs["callgraph"], base_docs["depmap"],
                                base_docs["discovery"], base_docs["provenance"],
-                               base_docs["route_inventory"]),
+                               base_route_inventory_raw),
         _collect_tool_versions(candidate_docs["callgraph"], candidate_docs["depmap"],
                                candidate_docs["discovery"], candidate_docs["provenance"],
-                               candidate_docs["route_inventory"]),
+                               candidate_route_inventory_raw),
     )
 
     sections: dict[str, dict[str, Any]] = {}
@@ -706,21 +763,24 @@ def compare(base_run: str | Path, candidate_run: str | Path) -> dict[str, Any]:
     candidate_discovery = (
         _noise_strip_discovery(candidate_docs["discovery"])
         if candidate_docs["discovery"] is not None else None)
+    # Row-content comparison strips tool identity (already surfaced above,
+    # informationally, via tool_drift) so a version bump alone never counts
+    # as a semantic route-fact difference.
     base_route_inventory = (
-        _noise_strip_route_inventory(base_docs["route_inventory"])
-        if base_docs["route_inventory"] is not None else None)
+        _noise_strip_route_inventory(base_route_inventory_raw)
+        if base_route_inventory_raw is not None else None)
     candidate_route_inventory = (
-        _noise_strip_route_inventory(candidate_docs["route_inventory"])
-        if candidate_docs["route_inventory"] is not None else None)
+        _noise_strip_route_inventory(candidate_route_inventory_raw)
+        if candidate_route_inventory_raw is not None else None)
     sections["discovery_facets"] = _section(
         _discovery_facets(base_discovery) if base_discovery is not None else None,
         _discovery_facets(candidate_discovery) if candidate_discovery is not None else None)
     sections["discovery_evidence"] = _section(
         _rows_to_set_map(_discovery_evidence_rows(
-            base_discovery, base_route_inventory, base_docs["ui_route_linkage"]))
+            base_discovery, base_route_inventory, base_ui_route_linkage))
         if base_discovery is not None else None,
         _rows_to_set_map(_discovery_evidence_rows(
-            candidate_discovery, candidate_route_inventory, candidate_docs["ui_route_linkage"]))
+            candidate_discovery, candidate_route_inventory, candidate_ui_route_linkage))
         if candidate_discovery is not None else None)
     sections["provider_execution"] = _section(
         _provider_execution(base_docs["provider_execution"]),
