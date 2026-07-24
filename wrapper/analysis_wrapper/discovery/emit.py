@@ -30,7 +30,7 @@ from ..profiles import detection as profile_detection
 from ..sanitize import redact
 from ..targetspec import (RepoTarget, TargetSpec, overlapping_repo_pairs,
                           path_contains, stable_repo_id)
-from . import (access_model, candidates, deploy_units, generated, integrations,
+from . import (access_model, candidates, generated, integrations,
                inventory, liveness, modules, pm, provenance, self_exclusion,
                stacks)
 
@@ -160,7 +160,6 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
         "candidate_notes": cand.notes,
         "integration_evidence": integ.to_dict(),
         "access_model": access.to_dict(),
-        "deployable_units": deploy_units.generate(path, tier2.exclusions).to_dict(),
     }
     return target, cand.candidates, report
 

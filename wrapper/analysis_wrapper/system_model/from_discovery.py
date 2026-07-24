@@ -7,6 +7,9 @@ human-synthesis summaries (those are excluded from the canonical graph; the cap
 they carry is disclosed in coverage instead). ``table_evidence`` itself comes
 from the datastore-evidence capability provider's own artifacts (57B-80 PR3),
 not the discovery report — see ``load``'s ``table_evidence_by_repo`` param.
+``deployable_units`` likewise comes from the deploy-units capability
+provider's own artifacts (57B-82 A1) — see ``load``'s
+``deploy_units_by_repo`` param.
 
 Emits, per repo: one ``repository`` node (with stack/provenance/access-model
 attributes), ``route`` nodes + ``route-linkage`` edges, ``data-store`` nodes +
@@ -33,7 +36,8 @@ ACCESS = "discovery/access"
 
 def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
          identities: IdentityMap, *,
-         table_evidence_by_repo: dict[str, dict] | None = None) -> dict:
+         table_evidence_by_repo: dict[str, dict] | None = None,
+         deploy_units_by_repo: dict[str, dict] | None = None) -> dict:
     """Populate ``builder`` from ``targets.json`` (spec) + ``discovery-report``.
 
     ``table_evidence_by_repo`` (57B-80 PR3) is the datastore-evidence
@@ -44,9 +48,16 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
     stays byte-for-byte unchanged, just fed from elsewhere. Defaults to empty
     (no data-store nodes) rather than requiring every caller to pass one.
 
+    ``deploy_units_by_repo`` (57B-82 A1) is the same shape for the
+    deploy-units capability provider's own artifacts, replacing the retired
+    ``block["deployable_units"]`` inline field — see
+    ``identity.load_deploy_units_by_repo``. ``_deploy`` below stays
+    byte-for-byte unchanged, just fed from elsewhere.
+
     Returns per-partition presence flags used by coverage (e.g. whether the
     detailed route artifact existed)."""
     table_evidence_by_repo = table_evidence_by_repo or {}
+    deploy_units_by_repo = deploy_units_by_repo or {}
     heads = {identities.reference_for(r.repo_id): (r.git.head or "")
              for r in spec.repos}
     blocks = {b["repository_ref"]: b for b in report.get("repos", [])}
@@ -59,7 +70,7 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
         _integrations(builder, repo_identity.reference, heads,
                       block.get("integration_evidence", {}))
         _deploy(builder, repo_identity.reference, heads,
-                block.get("deployable_units", {}))
+                deploy_units_by_repo.get(repo_identity.reference, {}))
     _candidates(builder, spec, identities)
     inventory = report.get("route_inventory")
     linkage = report.get("ui_route_linkage")

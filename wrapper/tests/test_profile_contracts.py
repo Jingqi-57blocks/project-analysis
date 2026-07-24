@@ -100,6 +100,48 @@ def test_registry_rejects_duplicates_unknowns_and_untrusted_shapes():
         )
 
 
+def test_registry_allows_zero_profile_only_for_a_universal_provider():
+    """profiles/registry.py's own empty-profile_ids carve-out (57B-82 A1): a
+    provider with zero linked profiles is normally DEAD (it could never be
+    selected — see the "has no profile" check's own rationale comment in
+    registry.py) and rejected at construction. A `universal` provider
+    (selected on every target regardless of matched_profiles — see
+    CapabilityProvider's own docstring) is never dead even with zero linked
+    profiles, so the carve-out applies ONLY when `universal` is True; a
+    zero-profile provider that is NOT universal still raises exactly as
+    before."""
+
+    @dataclass(frozen=True)
+    class ZeroProfileNonUniversal:
+        provider_id: str = "zero-profile-dead"
+        capability_id: str = "synthetic-capability"
+        profile_ids: tuple[str, ...] = ()
+
+        def run(self, context, target):  # pragma: no cover - registry-only fixture
+            raise AssertionError
+
+    @dataclass(frozen=True)
+    class ZeroProfileUniversal:
+        provider_id: str = "zero-profile-universal"
+        capability_id: str = "synthetic-capability"
+        profile_ids: tuple[str, ...] = ()
+        universal: bool = True
+
+        def run(self, context, target):  # pragma: no cover - registry-only fixture
+            raise AssertionError
+
+    with pytest.raises(ValueError, match="has no profile"):
+        ProfileRegistry((), (ZeroProfileNonUniversal(),))
+
+    registry = ProfileRegistry((), (ZeroProfileUniversal(),))
+    assert [item.provider_id for item in registry.providers] == ["zero-profile-universal"]
+
+    # A NON-empty profile_ids provider is validated exactly as before
+    # regardless of `universal` — the carve-out narrows nothing else.
+    with pytest.raises(ValueError, match="unknown profiles"):
+        ProfileRegistry((), (ZeroProfileUniversal(profile_ids=("missing",)),))
+
+
 def test_synthetic_provider_runs_through_the_contract(target, tmp_path):
     registry = ProfileRegistry((_profile(),), (SyntheticProvider(),))
     context = RunContext(

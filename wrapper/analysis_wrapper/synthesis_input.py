@@ -194,6 +194,7 @@ def build(run_dir: str | Path) -> dict:
     identities = identity.load(run)
     discovery = identity.load_discovery_report(run, identities)
     table_evidence_by_repo = identity.load_table_evidence_by_repo(run, identities)
+    deploy_units_by_repo = identity.load_deploy_units_by_repo(run, identities)
     targets = _load(run / "targets.json")
     capabilities = _load(run / "capabilities.json")
     model = _load(run / "system-model.json")
@@ -219,7 +220,7 @@ def build(run_dir: str | Path) -> dict:
             "frameworks": block.get("stacks", {}).get("frameworks", []),
             "package_manager": block.get("package_manager", {}),
             "access_model": block.get("access_model", {}),
-            "deployable_units": block.get("deployable_units", {}),
+            "deployable_units": deploy_units_by_repo.get(repo_identity.reference, {}),
             "table_coverage": {
                 "available": table_evidence_by_repo.get(
                     repo_identity.reference, {}).get("available", False),

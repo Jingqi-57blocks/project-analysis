@@ -43,7 +43,19 @@ class ProfileRegistry:
                 raise ValueError(
                     f"provider {provider.provider_id!r} profile_ids must be iterable"
                 ) from exc
-            if not linked_profiles:
+            # The empty-profile_ids check below exists to catch a DEAD
+            # provider: one that could never be selected because it links to
+            # nothing. A `universal` provider (57B-80 PR2's own
+            # getattr(provider, "universal", False) contract — see
+            # contracts.py's CapabilityProvider docstring) is by definition
+            # never dead: the execution loop selects it on every target
+            # regardless of matched_profiles, so empty profile_ids there is a
+            # deliberate, honest declaration (57B-82 A1's deploy-units
+            # provider: no detected facet predicts a deploy artifact's
+            # presence) rather than an oversight. Every other validation
+            # below is unchanged and still applies when profile_ids IS
+            # non-empty, universal or not.
+            if not linked_profiles and not getattr(provider, "universal", False):
                 raise ValueError(f"provider {provider.provider_id!r} has no profile")
             for profile_id in linked_profiles:
                 _validated_id(profile_id, "provider profile_id")

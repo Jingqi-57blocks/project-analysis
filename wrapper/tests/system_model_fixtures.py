@@ -102,8 +102,27 @@ def _web_table_evidence() -> dict:
             "notes": []}
 
 
-def _api_block(*, capped_routes: bool, deploy_capped: bool = False,
-               boundaries_capped: bool = False) -> dict:
+def _api_deploy_units(*, deploy_capped: bool) -> dict:
+    """The deploy-units provider's own artifact shape (57B-82 A1) — written to
+    ``deploy/<artifact_key>.json``, NOT embedded in the discovery-report block
+    anymore (see ``_write_deploy_artifacts``)."""
+    return {
+        "status": "inferred",
+        "units": [{"kind": "go-main-binary", "name": "cmd/api",
+                   "evidence": "cmd/api/main.go"},
+                  {"kind": "container-image", "name": ".", "evidence": "Dockerfile"}],
+        "artifacts": ["Dockerfile"],
+        "notes": (["COVERAGE CAP: stopped after 6000 files — deploy artifacts "
+                   "beyond the cap were NOT scanned (incomplete)."]
+                  if deploy_capped else []),
+    }
+
+
+def _web_deploy_units() -> dict:
+    return {"status": "unknown", "units": [], "artifacts": [], "notes": []}
+
+
+def _api_block(*, capped_routes: bool, boundaries_capped: bool = False) -> dict:
     return {
         "repo_id": _API,
         "provenance": {"is_git": True, "head": _HA, "branch": "main",
@@ -133,15 +152,6 @@ def _api_block(*, capped_routes: bool, deploy_capped: bool = False,
                                       "http_calls": 3,
                                       "evidence": ["internal/pay/client.go:9"]}],
             "notes": [_BOUNDARY_CAP_NOTE] if boundaries_capped else []},
-        "deployable_units": {
-            "status": "inferred",
-            "units": [{"kind": "go-main-binary", "name": "cmd/api",
-                       "evidence": "cmd/api/main.go"},
-                      {"kind": "container-image", "name": ".", "evidence": "Dockerfile"}],
-            "artifacts": ["Dockerfile"],
-            "notes": (["COVERAGE CAP: stopped after 6000 files — deploy artifacts "
-                       "beyond the cap were NOT scanned (incomplete)."]
-                      if deploy_capped else [])},
     }
 
 
@@ -164,14 +174,11 @@ def _web_block() -> dict:
                          "policy_artifacts": [], "notes": []},
         "integration_evidence": {"available": True, "host_fragments": [],
                                  "integration_packages": [], "notes": []},
-        "deployable_units": {"status": "unknown", "units": [], "artifacts": [],
-                             "notes": []},
     }
 
 
 def _report(*, with_routes: bool, capped_routes: bool,
-            deploy_capped: bool, routes_capped: bool,
-            boundaries_capped: bool) -> dict:
+            routes_capped: bool, boundaries_capped: bool) -> dict:
     inventory = None
     linkage = None
     if with_routes:
@@ -199,7 +206,6 @@ def _report(*, with_routes: bool, capped_routes: bool,
     return {
         "project_id": _PROJECT, "workspace_root": "/ws",
         "repos": [_api_block(capped_routes=capped_routes,
-                             deploy_capped=deploy_capped,
                              boundaries_capped=boundaries_capped), _web_block()],
         "not_targeted": [], "reduced_coverage_targets": [],
         "integration_candidate_count": 1, "route_inventory": inventory,
@@ -278,6 +284,21 @@ def _write_datastore_artifacts(run: Path, identities, *, table_available: bool,
         json.dumps(_web_table_evidence(), indent=2, sort_keys=True), "utf-8")
 
 
+def _write_deploy_artifacts(run: Path, identities, *, deploy_capped: bool) -> None:
+    """Write the deploy-units provider's own per-repo artifacts (57B-82 A1) —
+    ``discovery-report.json`` no longer carries ``deployable_units`` inline;
+    consumers read it from here instead (see
+    ``identity.load_deploy_units_by_repo``)."""
+    deploy_dir = run / "deploy"
+    deploy_dir.mkdir(parents=True, exist_ok=True)
+    api_key = identities.artifact_key_for(_API)
+    web_key = identities.artifact_key_for(_WEB)
+    (deploy_dir / f"{api_key}.json").write_text(json.dumps(
+        _api_deploy_units(deploy_capped=deploy_capped), indent=2, sort_keys=True), "utf-8")
+    (deploy_dir / f"{web_key}.json").write_text(
+        json.dumps(_web_deploy_units(), indent=2, sort_keys=True), "utf-8")
+
+
 def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
               capped_routes: bool = False, table_available: bool = True,
               sql_complete: bool = True, with_imports: bool = False,
@@ -294,12 +315,12 @@ def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
     identity.write_mapping(run, identities)
     report = _report(with_routes=with_routes,
                      capped_routes=capped_routes,
-                     deploy_capped=deploy_capped,
                      routes_capped=routes_capped,
                      boundaries_capped=boundaries_capped)
     (run / "discovery-report.json").write_text(
         json.dumps(identity.externalize_discovery_report(report, identities), indent=2),
         "utf-8")
+    _write_deploy_artifacts(run, identities, deploy_capped=deploy_capped)
     _write_datastore_artifacts(run, identities, table_available=table_available,
                               sql_complete=sql_complete, tables_capped=tables_capped)
     if with_callgraph:
