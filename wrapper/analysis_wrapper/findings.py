@@ -14,6 +14,7 @@ import re
 
 from .executor import replace_artifact_text
 from . import identity
+from . import locale
 from .lifecycle import RunState
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec
@@ -36,24 +37,6 @@ _BASES = {
     "static-reference", "declaration", "configuration", "history",
     "inferred-linkage", "runtime-observation", "user-confirmed",
 }
-
-_LABELS = {
-    "en": {
-        "top": "Top problems", "lens": "Lens", "confidence": "Confidence",
-        "basis": "Evidence basis", "modules": "Affected modules",
-        "evidence": "Atomic evidence", "impact": "Impact",
-        "limitations": "Limitations", "direction": "Suggested direction",
-        "observed_impact": "Observed impact", "pm_evidence": "Evidence",
-    },
-    "zh-CN": {
-        "top": "主要问题", "lens": "分析维度", "confidence": "置信度",
-        "basis": "证据类型", "modules": "受影响模块",
-        "evidence": "原子证据", "impact": "影响",
-        "limitations": "局限", "direction": "方向建议",
-        "observed_impact": "已观察到的影响", "pm_evidence": "证据",
-    },
-}
-
 
 def _load(path: Path) -> dict:
     value = json.loads(path.read_text("utf-8"))
@@ -185,7 +168,16 @@ def _independent_ref_keys(ref: str, *, run: Path,
 
 def _labels(run: Path) -> dict[str, str]:
     language = RunState.load(run).language if (run / RunState.FILENAME).is_file() else "en"
-    return _LABELS.get(language, _LABELS["en"])
+    cat = locale.labels(language)
+    return {
+        "top": cat["findings.top"], "lens": cat["findings.lens"],
+        "confidence": cat["findings.confidence"], "basis": cat["findings.basis"],
+        "modules": cat["findings.modules"], "evidence": cat["findings.evidence"],
+        "impact": cat["findings.impact"], "limitations": cat["findings.limitations"],
+        "direction": cat["findings.direction"],
+        "observed_impact": cat["findings.observed_impact"],
+        "pm_evidence": cat["findings.pm_evidence"],
+    }
 
 
 def validate(run_dir: str | Path) -> dict:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .. import locale
 from .assets import APP_SCRIPT, MERMAID_SCRIPT, STYLESHEET
 from .htmlutil import attr, esc
 from .markdown_render import MarkdownDoc
@@ -34,36 +35,20 @@ def doc_page(doc_id: str) -> str:
 
 # Chrome (UI) strings only — never applied to source content, which is rendered
 # verbatim. Localized so a zh-CN run reads natively; defaults to English.
-_CHROME = {
-    "en": {
-        "index": "Report overview",
-        "findings": "Findings & diagnosis",
-        "coverage": "Evidence & coverage",
-        "topology": "System topology",
-        "modules": "Modules",
-        "documents": "Documents",
-        "full_docs": "Full documents",
-        "subtitle": "Offline project-analysis report",
-        "theme": "Toggle theme",
-        "on_this_page": "On this page",
-    },
-    "zh-CN": {
-        "index": "报告总览",
-        "findings": "发现与诊断",
-        "coverage": "证据与覆盖",
-        "topology": "系统拓扑",
-        "modules": "模块",
-        "documents": "文档",
-        "full_docs": "完整文档",
-        "subtitle": "离线项目分析报告",
-        "theme": "切换主题",
-        "on_this_page": "本页目录",
-    },
-}
-
-
 def chrome(language: str) -> dict:
-    return _CHROME.get(language, _CHROME["en"])
+    cat = locale.labels(language)
+    return {
+        "index": cat["chrome.nav.index"],
+        "findings": cat["chrome.nav.findings"],
+        "coverage": cat["chrome.nav.coverage"],
+        "topology": cat["chrome.nav.topology"],
+        "modules": cat["chrome.nav.modules"],
+        "documents": cat["chrome.nav.documents"],
+        "full_docs": cat["chrome.full_docs"],
+        "subtitle": cat["chrome.subtitle"],
+        "theme": cat["chrome.theme"],
+        "on_this_page": cat["chrome.on_this_page"],
+    }
 
 
 @dataclass(frozen=True)
