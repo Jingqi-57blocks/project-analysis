@@ -223,6 +223,20 @@ def test_derive_legacy_is_reachable_only_from_run_inputs():
 # run_inputs.load() fallback + full export
 # --------------------------------------------------------------------------- #
 
+def test_run_inputs_load_does_not_fall_back_when_identity_map_is_present_but_broken(tmp_path):
+    """A pre-88 run is DEFINED by identity-map.json's absence, not merely by
+    identity.load() raising. A CURRENT run with a present-but-corrupt/
+    truncated identity-map.json must fail loudly like every other
+    present-but-inconsistent artifact in this codebase — never silently
+    export via the legacy resolver.
+    """
+    run, _workspace, _ = make_legacy_run(tmp_path)
+    # Half of a valid identity-map.json: present, but unreadable JSON.
+    (run / "identity-map.json").write_text('{"schema_version": 1, "sou', encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported identity contract"):
+        run_inputs.load(run)
+
+
 def test_run_inputs_load_falls_back_for_a_legacy_run(tmp_path):
     run, _workspace, _ = make_legacy_run(tmp_path)
     inputs = run_inputs.load(run)

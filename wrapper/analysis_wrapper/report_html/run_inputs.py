@@ -217,11 +217,20 @@ def load(run_dir: str | Path) -> RunInputs:
     try:
         identities = identity.load(run_dir)
     except (OSError, ValueError, KeyError) as strict_exc:
-        # Pre-57B-88 runs have no identity-map.json (or an unreadable one) and
-        # always fail identity.load() at its very first check — this is the
-        # ONLY place that reaches identity.derive_legacy(): it never runs for
-        # a run whose strict identity load already succeeded, and no
-        # analysis-plane producer calls either this function or that one.
+        # A pre-57B-88 run is DEFINED by identity-map.json's absence — that is
+        # the only condition under which identity.derive_legacy() may be
+        # attempted. A run whose identity-map.json IS present but broken
+        # (corrupt, truncated, inconsistent with its own TargetSpec/discovery
+        # report) must fail loudly like every other present-but-inconsistent
+        # artifact in this codebase, not silently fall back to a derived
+        # identity. This is the ONLY place that reaches
+        # identity.derive_legacy(): it never runs for a run whose strict
+        # identity load already succeeded, and no analysis-plane producer
+        # calls either this function or that one.
+        if (run_dir / identity.FILENAME).is_file():
+            raise ValueError(
+                f"report input uses an unsupported identity contract: {strict_exc}"
+            ) from strict_exc
         try:
             identities = identity.derive_legacy(run_dir)
         except (OSError, ValueError, KeyError) as legacy_exc:
