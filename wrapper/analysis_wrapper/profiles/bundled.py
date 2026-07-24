@@ -7,9 +7,10 @@ issues, so a detected profile may intentionally have no provider yet.
 from __future__ import annotations
 
 from .contracts import CapabilityProvider, Fingerprint, Profile
-from .providers import (CallgraphGoProvider, CallgraphJsProvider,
-                        DatastoreEvidenceProvider, DeployUnitsProvider,
-                        DepmapGoProvider, DepmapJsProvider)
+from .providers import (AccessEvidenceProvider, CallgraphGoProvider,
+                        CallgraphJsProvider, DatastoreEvidenceProvider,
+                        DeployUnitsProvider, DepmapGoProvider,
+                        DepmapJsProvider, IntegrationEvidenceProvider)
 from .registry import ProfileRegistry
 
 
@@ -148,6 +149,7 @@ BUNDLED_PROFILES: tuple[Profile, ...] = (
     ),
 )
 BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
+    AccessEvidenceProvider(),
     CallgraphGoProvider(), CallgraphJsProvider(),
     DatastoreEvidenceProvider(),
     # DeployUnitsProvider (57B-82 A1) is the first BUNDLED provider with
@@ -158,6 +160,7 @@ BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
     # unlinked, non-universal one would be).
     DeployUnitsProvider(),
     DepmapGoProvider(), DepmapJsProvider(),
+    IntegrationEvidenceProvider(),
 )
 
 

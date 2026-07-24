@@ -567,29 +567,28 @@ def load_discovery_report(run_dir: str | Path,
     return value
 
 
-def load_table_evidence_by_repo(run_dir: str | Path,
-                                mapping: "IdentityMap | None" = None) -> dict[str, dict]:
-    """Load the datastore-evidence provider's per-repo artifacts (57B-80 PR3),
-    keyed by human-readable ``repository_ref`` — the same shape the retired
-    stage-1 discovery producer's ``table_evidence`` block used to carry
-    inline, so every downstream projection keeps consuming it identically.
+def _load_artifacts_by_repo(run_dir: str | Path, subdir: str,
+                            mapping: "IdentityMap | None" = None) -> dict[str, dict]:
+    """Shared body for the ``load_*_by_repo`` loaders below: read every
+    ``<run>/<subdir>/<artifact_key>.json``, resolve each to its human-readable
+    ``repository_ref``, and return ``{repository_ref: value}``.
 
     Mirrors how ``system_model.from_callgraph``/``from_imports`` consume
     their own ``<run>/<stage>/<artifact_key>.*`` artifacts: reads directly
     from ``run_dir`` rather than requiring a prior in-process pass, so a
     resumed or standalone call (the provider stage hasn't necessarily run in
     THIS pass) still finds whatever a previous pass already wrote. A missing
-    ``datastore/`` directory, or a repo with no artifact in it, is silently
+    ``<subdir>/`` directory, or a repo with no artifact in it, is silently
     omitted — never a crash on absence — matching the empty-dict default
-    every consumer already applies at its own ``table_evidence`` lookup.
+    every consumer already applies at its own lookup.
     """
     run = Path(run_dir).expanduser().resolve()
     identities = mapping or load(run)
-    datastore_dir = run / "datastore"
+    artifact_dir = run / subdir
     result: dict[str, dict] = {}
-    if not datastore_dir.is_dir():
+    if not artifact_dir.is_dir():
         return result
-    for path in sorted(datastore_dir.glob("*.json")):
+    for path in sorted(artifact_dir.glob("*.json")):
         try:
             reference = identities.repository_by_artifact_key(path.stem).reference
         except KeyError:
@@ -601,40 +600,44 @@ def load_table_evidence_by_repo(run_dir: str | Path,
         if isinstance(value, dict):
             result[reference] = value
     return result
+
+
+def load_table_evidence_by_repo(run_dir: str | Path,
+                                mapping: "IdentityMap | None" = None) -> dict[str, dict]:
+    """Load the datastore-evidence provider's per-repo artifacts (57B-80 PR3),
+    keyed by human-readable ``repository_ref`` — the same shape the retired
+    stage-1 discovery producer's ``table_evidence`` block used to carry
+    inline, so every downstream projection keeps consuming it identically.
+    See :func:`_load_artifacts_by_repo` for the shared resumed/missing-artifact
+    contract.
+    """
+    return _load_artifacts_by_repo(run_dir, "datastore", mapping)
+
+
+def load_access_model_by_repo(run_dir: str | Path,
+                              mapping: "IdentityMap | None" = None) -> dict[str, dict]:
+    """Load the access-evidence provider's per-repo artifacts (57B-84), keyed
+    by human-readable ``repository_ref`` — replaces the retired stage-1
+    ``access_model`` report block. See :func:`_load_artifacts_by_repo`."""
+    return _load_artifacts_by_repo(run_dir, "access", mapping)
+
+
+def load_integration_evidence_by_repo(run_dir: str | Path,
+                                      mapping: "IdentityMap | None" = None) -> dict[str, dict]:
+    """Load the integration-evidence provider's per-repo artifacts (57B-84),
+    keyed by human-readable ``repository_ref`` — replaces the retired stage-1
+    ``integration_evidence`` report block. See :func:`_load_artifacts_by_repo`.
+    """
+    return _load_artifacts_by_repo(run_dir, "integrations", mapping)
 
 
 def load_deploy_units_by_repo(run_dir: str | Path,
                               mapping: "IdentityMap | None" = None) -> dict[str, dict]:
     """Load the deploy-units provider's per-repo artifacts (57B-82 A1),
-    keyed by human-readable ``repository_ref`` — the same shape the retired
-    stage-1 discovery producer's ``deployable_units`` block used to carry
-    inline, so every downstream projection keeps consuming it identically.
-
-    Mirrors :func:`load_table_evidence_by_repo` exactly (see its own
-    docstring for the resumed/standalone-call rationale): reads directly from
-    ``run_dir``'s ``deploy/`` directory rather than requiring a prior
-    in-process pass, and silently omits a missing directory or repo — never a
-    crash on absence — matching the empty-dict default every consumer already
-    applies at its own ``deployable_units`` lookup.
-    """
-    run = Path(run_dir).expanduser().resolve()
-    identities = mapping or load(run)
-    deploy_dir = run / "deploy"
-    result: dict[str, dict] = {}
-    if not deploy_dir.is_dir():
-        return result
-    for path in sorted(deploy_dir.glob("*.json")):
-        try:
-            reference = identities.repository_by_artifact_key(path.stem).reference
-        except KeyError:
-            continue
-        try:
-            value = json.loads(path.read_text("utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(value, dict):
-            result[reference] = value
-    return result
+    keyed by human-readable ``repository_ref`` — replaces the retired
+    stage-1 ``deployable_units`` report block. See
+    :func:`_load_artifacts_by_repo`."""
+    return _load_artifacts_by_repo(run_dir, "deploy", mapping)
 
 
 def load(run_dir: str | Path) -> IdentityMap:

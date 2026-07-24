@@ -200,6 +200,12 @@ class CapabilityProvider(Protocol):
     disclosed as ``matched_profiles``/``facet_provenance`` on a given run;
     universal selection only widens WHEN the provider runs, never what it
     reports having matched.
+
+    A universal provider with NO dedicated profile at all (57B-84's
+    ``access-evidence``/``integration-evidence``) may declare
+    ``profile_ids = ()`` — ``ProfileRegistry`` accepts an empty tuple only
+    when ``universal`` is set, since a non-universal provider with no linked
+    profile could never be selected by anything.
     """
 
     provider_id: str

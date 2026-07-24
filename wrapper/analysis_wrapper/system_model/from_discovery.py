@@ -4,12 +4,10 @@ CANONICAL COMPLETENESS RULE (57B-31): routes come from the detailed
 ``route_inventory`` rows and tables from the uncapped ``table_evidence`` map —
 NEVER from the capped ``module_signals.routes`` / ``module_signals.tables``
 human-synthesis summaries (those are excluded from the canonical graph; the cap
-they carry is disclosed in coverage instead). ``table_evidence`` itself comes
-from the datastore-evidence capability provider's own artifacts (57B-80 PR3),
-not the discovery report — see ``load``'s ``table_evidence_by_repo`` param.
-``deployable_units`` likewise comes from the deploy-units capability
-provider's own artifacts (57B-82 A1) — see ``load``'s
-``deploy_units_by_repo`` param.
+they carry is disclosed in coverage instead). ``table_evidence``,
+``access_model``, ``integration_evidence``, and ``deployable_units`` all
+come from their own capability provider's artifacts now (57B-80 PR3, 57B-82
+A1, 57B-84), not the discovery report — see ``load``'s ``*_by_repo`` params.
 
 Emits, per repo: one ``repository`` node (with stack/provenance/access-model
 attributes), ``route`` nodes + ``route-linkage`` edges, ``data-store`` nodes +
@@ -37,16 +35,20 @@ ACCESS = "discovery/access"
 def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
          identities: IdentityMap, *,
          table_evidence_by_repo: dict[str, dict] | None = None,
+         access_model_by_repo: dict[str, dict] | None = None,
+         integration_evidence_by_repo: dict[str, dict] | None = None,
          deploy_units_by_repo: dict[str, dict] | None = None) -> dict:
     """Populate ``builder`` from ``targets.json`` (spec) + ``discovery-report``.
 
-    ``table_evidence_by_repo`` (57B-80 PR3) is the datastore-evidence
-    provider's own per-repo artifacts, keyed by ``repository_ref`` — the
-    retired stage-1 producer used to carry this inline on each report block
-    (``block["table_evidence"]``); it is now sourced from
-    ``identity.load_table_evidence_by_repo`` instead, so ``_tables`` below
-    stays byte-for-byte unchanged, just fed from elsewhere. Defaults to empty
-    (no data-store nodes) rather than requiring every caller to pass one.
+    ``table_evidence_by_repo`` (57B-80 PR3), ``access_model_by_repo``, and
+    ``integration_evidence_by_repo`` (57B-84) are each capability provider's
+    own per-repo artifacts, keyed by ``repository_ref`` — the retired stage-1
+    producers used to carry these inline on each report block
+    (``block["table_evidence"]``/``["access_model"]``/["integration_evidence"]);
+    they are now sourced from ``identity.load_*_by_repo`` instead, so
+    ``_tables``/``_repository``/``_integrations`` below stay byte-for-byte
+    unchanged, just fed from elsewhere. Each defaults to empty (no data)
+    rather than requiring every caller to pass one.
 
     ``deploy_units_by_repo`` (57B-82 A1) is the same shape for the
     deploy-units capability provider's own artifacts, replacing the retired
@@ -57,6 +59,8 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
     Returns per-partition presence flags used by coverage (e.g. whether the
     detailed route artifact existed)."""
     table_evidence_by_repo = table_evidence_by_repo or {}
+    access_model_by_repo = access_model_by_repo or {}
+    integration_evidence_by_repo = integration_evidence_by_repo or {}
     deploy_units_by_repo = deploy_units_by_repo or {}
     heads = {identities.reference_for(r.repo_id): (r.git.head or "")
              for r in spec.repos}
@@ -64,11 +68,12 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
     for target in spec.repos:
         repo_identity = identities.repository(target.repo_id)
         block = blocks.get(repo_identity.reference, {})
-        _repository(builder, target, block, repo_identity)
+        _repository(builder, target, block, repo_identity,
+                    access_model_by_repo.get(repo_identity.reference, {}))
         _tables(builder, repo_identity.reference, heads,
                 table_evidence_by_repo.get(repo_identity.reference, {}))
         _integrations(builder, repo_identity.reference, heads,
-                      block.get("integration_evidence", {}))
+                      integration_evidence_by_repo.get(repo_identity.reference, {}))
         _deploy(builder, repo_identity.reference, heads,
                 deploy_units_by_repo.get(repo_identity.reference, {}))
     _candidates(builder, spec, identities)
@@ -84,10 +89,9 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
 # --------------------------------------------------------------------------- #
 
 def _repository(builder: ModelBuilder, target, block: dict,
-                repo_identity: RepositoryIdentity) -> str:
+                repo_identity: RepositoryIdentity, access: dict) -> str:
     prov = block.get("provenance", {})
     stacks = block.get("stacks", {})
-    access = block.get("access_model", {})
     head = target.git.head or ""
     attrs = {
         "name": repo_identity.display_name,

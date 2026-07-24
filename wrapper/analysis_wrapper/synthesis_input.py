@@ -194,6 +194,7 @@ def build(run_dir: str | Path) -> dict:
     identities = identity.load(run)
     discovery = identity.load_discovery_report(run, identities)
     table_evidence_by_repo = identity.load_table_evidence_by_repo(run, identities)
+    access_model_by_repo = identity.load_access_model_by_repo(run, identities)
     deploy_units_by_repo = identity.load_deploy_units_by_repo(run, identities)
     targets = _load(run / "targets.json")
     capabilities = _load(run / "capabilities.json")
@@ -219,7 +220,7 @@ def build(run_dir: str | Path) -> dict:
             "git": repo.get("git", {}),
             "frameworks": block.get("stacks", {}).get("frameworks", []),
             "package_manager": block.get("package_manager", {}),
-            "access_model": block.get("access_model", {}),
+            "access_model": access_model_by_repo.get(repo_identity.reference, {}),
             "deployable_units": deploy_units_by_repo.get(repo_identity.reference, {}),
             "table_coverage": {
                 "available": table_evidence_by_repo.get(
@@ -304,10 +305,16 @@ def build(run_dir: str | Path) -> dict:
                              limit=_CANDIDATE_LIMIT),
             "notes": discovery["ui_route_linkage"].get("notes", []),
         }),
+        # 57B-84: role_catalog_by_repository used to be a discovery-report
+        # top-level field, cross-repo-derived at stage-1 from each repo's
+        # (now-retired) inline access_model block. It is re-derived HERE from
+        # the loaded per-repo access artifacts instead — same values, same
+        # shape, byte-identical output; only the source moved.
         "role_catalog_by_repository": _bounded(
-            [{"repository_ref": key, "roles": value}
-             for key, value in discovery.get(
-                 "role_catalog_by_repository", {}).items()],
+            [{"repository_ref": repo_identity.reference,
+              "roles": access_model_by_repo.get(
+                  repo_identity.reference, {}).get("role_catalog_names", [])}
+             for repo_identity in identities.repositories],
             key=lambda row: row["repository_ref"]),
         "not_targeted": _bounded(
             [{"value": value} for value in discovery.get("not_targeted", [])],
