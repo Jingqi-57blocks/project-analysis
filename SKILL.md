@@ -44,9 +44,11 @@ first-class confidence.
 
 ## Two directory worlds — never mix them
 
-- **`<skill-dir>`** — this skill's own base directory (announced as "Base directory for
-  this skill" when the skill loads; `${CLAUDE_SKILL_DIR}` where the runtime provides it).
-  The wrapper, templates, `state/`, and `output/` all live HERE.
+- **`<skill-dir>`** — this skill's own base directory. The wrapper resolves it
+  automatically from its own location (no environment variable required); a host may also
+  announce it as "Base directory for this skill" or expose `${CLAUDE_SKILL_DIR}`, but those
+  are optional conveniences, never a dependency. The wrapper, templates, `state/`, and
+  `output/` all live HERE.
 - **`<workspace>`** — the target being analyzed. Treat it as read-only: NEVER create
   `state/`, `output/`, virtualenvs, or any other analyzer artifact inside the target; the
   wrapper enforces this for its own outputs, and you must uphold it for report files
@@ -342,6 +344,12 @@ renames/merges recorded as aliases.
 
 ## Running the wrapper
 
+`<skill-dir>/bin/project-analysis` is a pre-venv launcher, invocable **by absolute path
+from any working directory**: it self-locates the skill (no environment variable needed),
+checks the one hard prerequisite — Python 3.11+, with an actionable message otherwise —
+and dispatches to the wrapper. `${CLAUDE_SKILL_DIR}` is an optional host convenience, never
+required; every skill-local path below is relative to the self-resolved `<skill-dir>`.
+
 One-time per machine, from `<skill-dir>/wrapper`:
 `python3 -m analysis_wrapper.bootstrap` (creates the gitignored `wrapper/.venv` and
 installs only the project-local Python runtime — nothing global, no dev dependencies).
@@ -355,14 +363,15 @@ first bootstrap on a machine. Analysis itself touches no network unless
 `--include-network` is separately authorized. Then:
 
 ```
-"${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-analysis-wrapper" \
+"<skill-dir>/wrapper/.venv/bin/project-analysis-wrapper" \
     --since <YYYY-MM-DD> prepare-overview \
-    --run "${CLAUDE_SKILL_DIR}/output/<project-key>/overview/<run-id>"
+    --run "<skill-dir>/output/<project-key>/overview/<run-id>"
 ```
 
-(If `CLAUDE_SKILL_DIR` is unset in your shell, substitute the absolute skill base
-directory announced when this skill loaded — never a relative path: relative paths
-resolve against the target workspace and would write analyzer artifacts into it.)
+`<skill-dir>` is the self-resolved skill base directory (the wrapper locates it from its
+own path; `${CLAUDE_SKILL_DIR}` may substitute for it but is not required). Always use that
+absolute base — never a relative path: relative paths resolve against the target workspace
+and would write analyzer artifacts into it.
 
 - The run directory is minted by `new-run`; `prepare-overview` owns every deterministic
   subdirectory beneath it and refuses partial or relocated checkpoints. It must live
