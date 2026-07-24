@@ -24,8 +24,9 @@ the artifact shape its capability owns:
   ``discovery.deploy_units.generate`` result directly (same one-repo,
   one-producer shape as datastore-evidence) and is likewise ``universal`` —
   but unlike every other provider here, it carries NO linked profiles at all
-  (``profile_ids = ()``); see its own docstring below for why, and for the
-  registration status this currently blocks on.
+  (``profile_ids = ()``), the first bundled provider to do so; see its own
+  docstring below for why, and ``profiles/registry.py``'s carve-out that
+  makes this shape constructible.
 
 Every write goes through :func:`~analysis_wrapper.executor.replace_artifact_text`
 (atomic, idempotent) rather than the create-once ``write_new_text`` the
