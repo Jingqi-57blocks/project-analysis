@@ -25,6 +25,15 @@ TIER1_FILE_GLOBS = [
 
 NODE_ENV_REMOVALS = ["NODE_OPTIONS"]
 
+# Shared stage-1 source-file extension set (57B-85): the exact value three
+# discovery/*.py scanners (candidates.py, generated.py, liveness.py) each
+# hand-duplicated identically. Extracted verbatim, not "corrected" — it is
+# NOT the same as profiles/bundled.py's or callgraph/sources.py's own
+# (broader) extension lists, which also include .mts/.cts; widening this set
+# to match would change which files those three scanners walk on a real
+# repo using .mts/.cts, a behavior change out of scope for a pure dedup.
+SOURCE_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go"}
+
 
 def is_excluded_relative(target: RepoTarget, relative_path: str) -> bool:
     """Whether a repository-relative path is outside the analyzable source universe."""

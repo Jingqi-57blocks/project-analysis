@@ -478,10 +478,6 @@ def _discovery_evidence_rows(doc: dict, route_inventory: dict | None = None,
         rows.add(json.dumps(row, sort_keys=True))
     for row in (ui_route_linkage or {}).get("rows", []):
         rows.add(json.dumps(row, sort_keys=True))
-    role_catalog = doc.get("role_catalog_by_repository", {})
-    for repository_ref, roles in role_catalog.items():
-        rows.add(json.dumps(
-            {"repository_ref": repository_ref, "roles": roles}, sort_keys=True))
     return rows
 
 

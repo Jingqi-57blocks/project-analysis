@@ -12,27 +12,16 @@ byte shape the legacy single-pass emitter produced for identical inputs) and
 rolls every fragment's coverage row into ``<out>/callgraph-coverage.json``.
 This module never branches on a language name itself: "go"/"js" only ever
 appear here as DATA read back out of a fragment.
-
-:func:`run_callgraph` is a legacy, single-process entry point kept ONLY for
-the symlink-containment regression (``tests/test_depmap_containment.py``
-calls it directly and must keep passing unmodified); production runs (the
-CLI's ``callgraph``/``dependency-map`` subcommands and ``prepare-overview``)
-go through the provider loop + :func:`assemble` instead.
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
-from typing import Callable
 
 from ..executor import create_stage_dir, write_new_text
-from .. import identity
 from ..sanitize import sanitize_text
 from ..status import Status, aggregate
-from ..targetspec import RepoTarget, TargetSpec
-from . import go_lane, js_lane
 from .contract import CallEdge, CallSiteCounts, CoverageReport, RepoCoverage
 
 _STATUS_MAP = {
@@ -41,60 +30,12 @@ _STATUS_MAP = {
     "failed": Status.FAILED,
     "unavailable": Status.SKIPPED,
 }
-_JS_PROFILES = frozenset({"language.javascript", "language.typescript"})
-
-
-def _lanes(target: RepoTarget) -> list[str]:
-    """The call-graph lanes a repo's DETECTED facets make applicable — the
-    legacy-compatible, facet-only successor to the old stack/manifest-based
-    lane selector, used only by :func:`run_callgraph` below."""
-    profiles = set(target.profiles_for_capability("callgraph"))
-    lanes: list[str] = []
-    if "language.go" in profiles:
-        lanes.append("go")
-    if profiles & _JS_PROFILES:
-        lanes.append("js")
-    return lanes
 
 
 def _write_jsonl(path: Path, edges: list[CallEdge]) -> None:
     ordered = sorted(set(edges), key=lambda e: e.sort_key())
     body = "".join(edge.to_json_line() + "\n" for edge in ordered)
     write_new_text(path, sanitize_text(body))
-
-
-def run_callgraph(spec: TargetSpec, out_dir: str | Path, scan_date: str, *,
-                  allow_network: bool = False,
-                  identities: identity.IdentityMap | None = None,
-                  run: Callable[..., subprocess.CompletedProcess] = subprocess.run
-                  ) -> CoverageReport:
-    """Legacy single-process call-graph stage (see module docstring) — run a
-    repo's applicable lanes directly and write its merged edges + coverage in
-    one pass, with no fragment intermediary."""
-    out = Path(out_dir).expanduser().resolve()
-    identities = identities or identity.load(out)
-    cg_dir = create_stage_dir(out / "callgraph")   # never write THROUGH a symlink
-    coverages: list[RepoCoverage] = []
-    for target in sorted(spec.repos, key=lambda r: r.repo_id):
-        repo_identity = identities.repository(target.repo_id)
-        lanes = _lanes(target)
-        if not lanes:
-            continue
-        edges: list[CallEdge] = []
-        for lane in lanes:
-            if lane == "go":
-                lane_edges, cov = go_lane.analyze(
-                    target, repository_ref=repo_identity.reference,
-                    allow_network=allow_network, run=run)
-            else:
-                lane_edges, cov = js_lane.analyze(
-                    target, repository_ref=repo_identity.reference, run=run)
-            edges.extend(lane_edges)
-            coverages.append(cov)
-        _write_jsonl(cg_dir / f"{repo_identity.artifact_key}.jsonl", edges)
-    report = CoverageReport(scan_date=scan_date, repos=coverages)
-    write_new_text(out / "callgraph-coverage.json", sanitize_text(report.to_json()))
-    return report
 
 
 # ---------------------------------------------------------------------------

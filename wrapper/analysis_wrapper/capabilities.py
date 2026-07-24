@@ -14,6 +14,7 @@ from pathlib import Path
 from .datastore_coverage import classify as classify_data_model
 from .executor import replace_artifact_text
 from . import identity
+from .profiles.selection import is_node_target
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec
 
@@ -167,18 +168,27 @@ def build(run_dir: str | Path) -> dict:
                        if block.get("module_signals", {}).get("routes")}
     any_registered_routes = bool(backend_ids)
     frontend_ids = set()
-    for block in repos:
-        stacks = {str(item).lower()
-                  for item in block.get("stacks", {}).get("stacks", [])}
+    blocks_by_ref = {block.get("repository_ref", ""): block for block in repos}
+    for target in spec.repos:
+        repository_ref = identities.reference_for(target.repo_id)
+        block = blocks_by_ref.get(repository_ref, {})
         folders = set(block.get("module_signals", {}).get("folders", []))
         # A Node/TS repository may be a frontend, a backend, or a full-stack
         # unit.  Route registrations do not prove it has no UI, so retain it as
         # UI-capable and report unavailable linkage when discovery could not
         # establish the pair.  Go-only/backend-only workspaces remain genuinely
         # not-applicable.
-        if stacks & {"js", "ts", "tsx", "javascript", "typescript"} \
-                and "src" in folders:
-            frontend_ids.add(block.get("repository_ref", ""))
+        #
+        # 57B-85: migrated off a hand-rolled ``stacks & {"js","ts",...}``
+        # check over the legacy discovery-report "stacks" block, onto the
+        # canonical facet predicate. ``profiles/selection.py``'s own
+        # docstring documents that its facet-driven gates are STRICTLY
+        # BROADER than the old stack/manifest-sniffing probes (e.g. a
+        # JS-source repo with no committed package.json now facet-matches
+        # where the old probe would not have) — the same widening 57B-81 PR3
+        # already accepted for ``registry.network_tools``.
+        if is_node_target(target) and "src" in folders:
+            frontend_ids.add(repository_ref)
     unresolved_mounts = sum(1 for row in route_rows
                             if row.get("registration_kind") == "mount")
     route_status = ("partial" if route_doc is not None and unresolved_mounts else

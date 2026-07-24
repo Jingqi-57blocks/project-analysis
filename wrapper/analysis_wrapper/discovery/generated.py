@@ -12,7 +12,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_SOURCE_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go"}
+from ..exclusions import SOURCE_EXT as _SOURCE_EXT
+
 _GENERATED_MARKER = re.compile(r"Code generated .* DO NOT EDIT|@generated", re.I)
 _MIGRATION_FILE = re.compile(r"^\d{8,}[-_]|\.sql$", re.I)
 _SAMPLE_FILES = 40      # files sampled per directory
