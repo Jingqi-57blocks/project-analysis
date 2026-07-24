@@ -700,8 +700,12 @@ class GitHistoryProvider:
                 coverage=Coverage(
                     applicability="not-applicable", status="complete",
                     reason_code="git-history-non-git",
-                    detail="non-git folder: reduced coverage — no history lane, "
-                           "non-reproducible citations, no caching"),
+                    # Verbatim match to discovery/emit.py's own disclosure
+                    # (its ``reduced.append(...)`` line) — same positive
+                    # provenance proof, not a paraphrase.
+                    detail="non-git folder: targeted with reduced coverage — "
+                           "no history lane, non-reproducible citations, "
+                           "no caching"),
                 facet_provenance=_facet_provenance(target, self.profile_ids),
             )
 

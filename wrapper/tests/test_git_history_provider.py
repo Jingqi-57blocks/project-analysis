@@ -90,10 +90,11 @@ def test_non_git_target_is_not_applicable_with_discoverys_own_disclosure(tmp_pat
 
     assert result.coverage.applicability == "not-applicable"
     assert result.coverage.status == "complete"
-    # Mirrors discovery/emit.py's own "non-git folder: ... reduced coverage"
-    # disclosure verbatim (see that module's admit()/reduced.append() call).
-    assert "non-git folder: reduced coverage" in result.coverage.detail
-    assert "no history lane" in result.coverage.detail
+    # Verbatim match to discovery/emit.py's own disclosure (its
+    # ``reduced.append(...)`` line) — the strict canonical phrase, not a
+    # paraphrase.
+    assert ("non-git folder: targeted with reduced coverage — no history "
+            "lane, non-reproducible citations, no caching") == result.coverage.detail
     assert result.facts == ()
     assert result.artifact_refs == ()
 

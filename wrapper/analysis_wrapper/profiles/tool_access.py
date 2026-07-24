@@ -33,12 +33,14 @@ class ExecutorToolAccess:
         recorded = self.targets.repo(target.repo_id)
         if recorded.path != target.path:
             raise ValueError("provider target does not match the recorded TargetSpec")
-        # Providers name an explicitly reviewed definition; they never supply
-        # argv, binaries, network flags, or guards of their own devising.
         # ``tooldef`` (57B-82 A2), when given, MUST still be that same named
         # tool's own definition — never a mismatched swap — and exists only
         # for run-bound construction (e.g. git-history's since/cap) that the
-        # default ``tool_for`` resolution below has no way to supply.
+        # default ``tool_for`` resolution below has no way to supply. This
+        # name check is the ONLY validation performed here: it does not
+        # verify the definition came from a registry.py constructor, nor
+        # inspect argv/binary/network — see ToolAccess.execute's own
+        # docstring (contracts.py) for the full trust-boundary explanation.
         if tooldef is not None:
             if tooldef.name != tool_id:
                 raise ValueError(

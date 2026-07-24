@@ -145,18 +145,32 @@ class ToolAccess(Protocol):
     """The only external-tool execution surface available to providers.
 
     ``tooldef`` (57B-82 A2, OPTIONAL, defaults to ``None``) lets a provider
-    supply an ALREADY-CONSTRUCTED, explicitly reviewed :class:`ToolDef`
-    instead of the run's default resolution (``registry.tool_for(tool_id,
-    target)``). The ONLY reason this seam exists: ``git-history``'s
-    ``since``/``coupling_sample_cap`` are RUN-BOUND values (recorded once per
-    run in ``RunContext.provenance["preparation"]``), not derivable from
-    ``target`` alone the way every other tool's definition is — a provider
-    still names an explicit ``tool_id`` and gets back a definition built by
-    ``registry.py``'s own constructors, never raw argv/binaries/env/guards
-    of its own devising. Every existing ``run_tool`` safety check
-    (allowlisted binary, guards, staleness, containment) applies UNCHANGED
-    to whichever definition ultimately executes. Omitting ``tooldef``
-    (the default) is byte-identical to this parameter not existing.
+    supply an ALREADY-CONSTRUCTED :class:`ToolDef` instead of the run's
+    default resolution (``registry.tool_for(tool_id, target)``). The ONLY
+    reason this seam exists: ``git-history``'s ``since``/
+    ``coupling_sample_cap`` are RUN-BOUND values (recorded once per run in
+    ``RunContext.provenance["preparation"]``), not derivable from ``target``
+    alone the way every other tool's definition is.
+
+    TRUST BOUNDARY (be precise about what this seam does and does not
+    enforce): ``execute()`` validates only that ``tooldef.name == tool_id``
+    — it does NOT verify the definition was actually produced by one of
+    ``registry.py``'s own constructors, nor inspect its ``binary``/``argv``/
+    ``network`` fields for legitimacy. Every existing ``run_tool`` safety
+    check (allowlisted binary, guards, staleness, containment, env
+    scrubbing, version pinning) still applies UNCHANGED to whichever
+    definition ultimately executes — but those checks constrain HOW a
+    definition's own fields are used, not WHERE those fields came from. This
+    is therefore a trust-bounded seam for BUNDLED providers only: today's
+    two callers (git-history, and implicitly every ``tool_for``-based
+    resolution) are reviewed source we control, and the convention — never
+    enforced by this Protocol — is that a supplied ``tooldef`` MUST come
+    from a ``registry.py`` constructor. A less-trusted or third-party
+    provider path would need actual registry-derivation enforcement (e.g.
+    verifying field-for-field equality against what ``registry.py`` would
+    have built) added here before this parameter could be safely exposed to
+    it. Omitting ``tooldef`` (the default) is byte-identical to this
+    parameter not existing.
     """
 
     def execute(
