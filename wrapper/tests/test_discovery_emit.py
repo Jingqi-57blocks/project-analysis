@@ -96,20 +96,15 @@ def test_datastore_facet_is_additive_only_and_never_leaks_into_legacy_stacks_blo
     assert not any("datastore" in item for item in repo_report["stacks"]["evidence"])
 
 
-def test_scan_derived_signals_record_astgrep_version(tmp_path):
-    # Every ast-grep scan()-derived signal in the discovery report carries the
-    # runtime version/path/drift, using the executor path's field names (57B-37).
-    # table_evidence moved off the discovery report in 57B-80 PR3 (it's now
-    # the datastore-evidence provider's own artifact); its OWN astgrep
-    # provenance is pinned by the exact to_dict() equality check in
-    # test_datastore_evidence_provider.py instead.
-    ws = _workspace(tmp_path)
-    _, report = emit.discover(ws)
-    for repo in report["repos"]:
-        for key in ("integration_evidence", "access_model"):
-            sig = repo[key]
-            assert sig["tool"] == "ast-grep"
-            assert {"tool_version", "tool_path", "version_drift"} <= set(sig)
+# test_scan_derived_signals_record_astgrep_version (57B-37) checked that
+# every ast-grep scan()-derived discovery-report signal (table_evidence,
+# integration_evidence, access_model) carried the runtime version/path/drift.
+# All three have now moved off the discovery report onto their own capability
+# provider's artifact (57B-80 PR3, 57B-84 this slice) — each one's OWN
+# astgrep provenance is pinned by the exact to_dict() equality check in
+# test_datastore_evidence_provider.py / test_access_evidence_provider.py /
+# test_integration_evidence_provider.py instead, so nothing is left to assert
+# about the discovery report itself.
 
 
 def test_stage1_checkpoint_roundtrip_and_no_secret_values(tmp_path):

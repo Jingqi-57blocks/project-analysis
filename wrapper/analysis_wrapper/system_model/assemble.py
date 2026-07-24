@@ -64,11 +64,16 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
              for r in spec.repos}
     report = identity.load_discovery_report(run, identities)
     table_evidence_by_repo = identity.load_table_evidence_by_repo(run, identities)
+    access_model_by_repo = identity.load_access_model_by_repo(run, identities)
+    integration_evidence_by_repo = identity.load_integration_evidence_by_repo(
+        run, identities)
     deploy_units_by_repo = identity.load_deploy_units_by_repo(run, identities)
 
     builder = ModelBuilder()
     disc = from_discovery.load(builder, spec, report, identities,
                               table_evidence_by_repo=table_evidence_by_repo,
+                              access_model_by_repo=access_model_by_repo,
+                              integration_evidence_by_repo=integration_evidence_by_repo,
                               deploy_units_by_repo=deploy_units_by_repo)
     cg = from_callgraph.load(builder, run, identities)
     imports = _merge_imports(
@@ -91,6 +96,8 @@ def assemble(run_dir: str | Path, *, scan_date: str = "") -> SystemModel:
                          identities=identities,
                          scan_date=resolved_scan_date,
                          table_evidence_by_repo=table_evidence_by_repo,
+                         access_model_by_repo=access_model_by_repo,
+                         integration_evidence_by_repo=integration_evidence_by_repo,
                          deploy_units_by_repo=deploy_units_by_repo)
     return SystemModel(
         scan_date=resolved_scan_date,

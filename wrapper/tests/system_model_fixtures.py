@@ -122,7 +122,51 @@ def _web_deploy_units() -> dict:
     return {"status": "unknown", "units": [], "artifacts": [], "notes": []}
 
 
-def _api_block(*, capped_routes: bool, boundaries_capped: bool = False) -> dict:
+def _api_access_model() -> dict:
+    """The access-evidence provider's own artifact shape (57B-84) — written
+    to ``access/<artifact_key>.json``, NOT embedded in the discovery-report
+    block anymore (see ``_write_access_artifacts``)."""
+    return {
+        "available": True, "role_catalog": [{"name": "Admin"}],
+        "role_catalog_names": ["Admin"],
+        "authz_checks": {"count": 2, "sample": ["a.go:1"]},
+        "middleware": {"count": 1, "sample": []},
+        "route_guards": {"count": 0, "sample": []},
+        "contextual_identity": {"count": 0, "sample": []},
+        "policy_artifacts": [{"path": "casbin/model.conf", "kind": "casbin-model"}],
+        "notes": []}
+
+
+def _web_access_model() -> dict:
+    return {"available": True, "role_catalog": [],
+            "role_catalog_names": [],
+            "authz_checks": {"count": 0, "sample": []},
+            "middleware": {"count": 0, "sample": []},
+            "route_guards": {"count": 1, "sample": ["src/guard.tsx:3"]},
+            "contextual_identity": {"count": 0, "sample": []},
+            "policy_artifacts": [], "notes": []}
+
+
+def _api_integration_evidence(*, boundaries_capped: bool) -> dict:
+    """The integration-evidence provider's own artifact shape (57B-84) —
+    written to ``integrations/<artifact_key>.json`` (see
+    ``_write_integration_artifacts``)."""
+    return {
+        "available": True,
+        "host_fragments": [{"value": "api.stripe.com",
+                            "evidence": ["internal/pay/client.go:5"]}],
+        "integration_packages": [{"package": "stripe", "dirs": ["internal/pay"],
+                                  "http_calls": 3,
+                                  "evidence": ["internal/pay/client.go:9"]}],
+        "notes": [_BOUNDARY_CAP_NOTE] if boundaries_capped else []}
+
+
+def _web_integration_evidence() -> dict:
+    return {"available": True, "host_fragments": [],
+            "integration_packages": [], "notes": []}
+
+
+def _api_block(*, capped_routes: bool) -> dict:
     return {
         "repo_id": _API,
         "provenance": {"is_git": True, "head": _HA, "branch": "main",
@@ -135,23 +179,6 @@ def _api_block(*, capped_routes: bool, boundaries_capped: bool = False) -> dict:
             "tables": [{"name": "users", "evidence": "x:1"}], "api_configs": [],
             "notes": (["route cap hit at 200: further signals not recorded"]
                       if capped_routes else [])},
-        "access_model": {
-            "available": True, "role_catalog": [{"name": "Admin"}],
-            "role_catalog_names": ["Admin"],
-            "authz_checks": {"count": 2, "sample": ["a.go:1"]},
-            "middleware": {"count": 1, "sample": []},
-            "route_guards": {"count": 0, "sample": []},
-            "contextual_identity": {"count": 0, "sample": []},
-            "policy_artifacts": [{"path": "casbin/model.conf", "kind": "casbin-model"}],
-            "notes": []},
-        "integration_evidence": {
-            "available": True,
-            "host_fragments": [{"value": "api.stripe.com",
-                                "evidence": ["internal/pay/client.go:5"]}],
-            "integration_packages": [{"package": "stripe", "dirs": ["internal/pay"],
-                                      "http_calls": 3,
-                                      "evidence": ["internal/pay/client.go:9"]}],
-            "notes": [_BOUNDARY_CAP_NOTE] if boundaries_capped else []},
     }
 
 
@@ -165,20 +192,11 @@ def _web_block() -> dict:
                    "evidence": []},
         "module_signals": {"folders": ["src"], "routes": [], "tables": [],
                            "api_configs": [], "notes": []},
-        "access_model": {"available": True, "role_catalog": [],
-                         "role_catalog_names": [],
-                         "authz_checks": {"count": 0, "sample": []},
-                         "middleware": {"count": 0, "sample": []},
-                         "route_guards": {"count": 1, "sample": ["src/guard.tsx:3"]},
-                         "contextual_identity": {"count": 0, "sample": []},
-                         "policy_artifacts": [], "notes": []},
-        "integration_evidence": {"available": True, "host_fragments": [],
-                                 "integration_packages": [], "notes": []},
     }
 
 
 def _report(*, with_routes: bool, capped_routes: bool,
-            routes_capped: bool, boundaries_capped: bool) -> dict:
+            routes_capped: bool) -> dict:
     inventory = None
     linkage = None
     if with_routes:
@@ -205,8 +223,7 @@ def _report(*, with_routes: bool, capped_routes: bool,
         }
     return {
         "project_id": _PROJECT, "workspace_root": "/ws",
-        "repos": [_api_block(capped_routes=capped_routes,
-                             boundaries_capped=boundaries_capped), _web_block()],
+        "repos": [_api_block(capped_routes=capped_routes), _web_block()],
         "not_targeted": [], "reduced_coverage_targets": [],
         "integration_candidate_count": 1, "route_inventory": inventory,
         "ui_route_linkage": linkage,
@@ -299,6 +316,31 @@ def _write_deploy_artifacts(run: Path, identities, *, deploy_capped: bool) -> No
         json.dumps(_web_deploy_units(), indent=2, sort_keys=True), "utf-8")
 
 
+def _write_access_artifacts(run: Path, identities) -> None:
+    """Write the access-evidence provider's own per-repo artifacts (57B-84) —
+    ``discovery-report.json`` no longer carries ``access_model`` inline."""
+    access_dir = run / "access"
+    access_dir.mkdir(parents=True, exist_ok=True)
+    (access_dir / f"{identities.artifact_key_for(_API)}.json").write_text(
+        json.dumps(_api_access_model(), indent=2, sort_keys=True), "utf-8")
+    (access_dir / f"{identities.artifact_key_for(_WEB)}.json").write_text(
+        json.dumps(_web_access_model(), indent=2, sort_keys=True), "utf-8")
+
+
+def _write_integration_artifacts(run: Path, identities, *,
+                                 boundaries_capped: bool) -> None:
+    """Write the integration-evidence provider's own per-repo artifacts
+    (57B-84) — ``discovery-report.json`` no longer carries
+    ``integration_evidence`` inline."""
+    integrations_dir = run / "integrations"
+    integrations_dir.mkdir(parents=True, exist_ok=True)
+    (integrations_dir / f"{identities.artifact_key_for(_API)}.json").write_text(
+        json.dumps(_api_integration_evidence(boundaries_capped=boundaries_capped),
+                   indent=2, sort_keys=True), "utf-8")
+    (integrations_dir / f"{identities.artifact_key_for(_WEB)}.json").write_text(
+        json.dumps(_web_integration_evidence(), indent=2, sort_keys=True), "utf-8")
+
+
 def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
               capped_routes: bool = False, table_available: bool = True,
               sql_complete: bool = True, with_imports: bool = False,
@@ -315,14 +357,15 @@ def write_run(run_dir, *, with_callgraph: bool = True, with_routes: bool = True,
     identity.write_mapping(run, identities)
     report = _report(with_routes=with_routes,
                      capped_routes=capped_routes,
-                     routes_capped=routes_capped,
-                     boundaries_capped=boundaries_capped)
+                     routes_capped=routes_capped)
     (run / "discovery-report.json").write_text(
         json.dumps(identity.externalize_discovery_report(report, identities), indent=2),
         "utf-8")
     _write_deploy_artifacts(run, identities, deploy_capped=deploy_capped)
     _write_datastore_artifacts(run, identities, table_available=table_available,
                               sql_complete=sql_complete, tables_capped=tables_capped)
+    _write_access_artifacts(run, identities)
+    _write_integration_artifacts(run, identities, boundaries_capped=boundaries_capped)
     if with_callgraph:
         _write_callgraph(run)
     if with_imports:

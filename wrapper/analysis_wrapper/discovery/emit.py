@@ -30,9 +30,8 @@ from ..profiles import detection as profile_detection
 from ..sanitize import redact
 from ..targetspec import (RepoTarget, TargetSpec, overlapping_repo_pairs,
                           path_contains, stable_repo_id)
-from . import (access_model, candidates, generated, integrations,
-               inventory, liveness, modules, pm, provenance, self_exclusion,
-               stacks)
+from . import (candidates, generated, inventory, liveness, modules, pm,
+               provenance, self_exclusion, stacks)
 
 
 def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
@@ -129,8 +128,6 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     cand = candidates.generate(
         path, repo_id, dependencies=deps, go_requires=requires,
         tier2_exclusions=tier2.exclusions)
-    integ = integrations.generate(path, repo_id, tier2_exclusions=tier2.exclusions)
-    access = access_model.generate(path, repo_id, tier2_exclusions=tier2.exclusions)
     signals = modules.extract(path, tier2_exclusions=tier2.exclusions)
 
     target = RepoTarget(
@@ -158,8 +155,6 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
                              "evidence": tier2.evidence},
         "module_signals": signals.to_dict(),
         "candidate_notes": cand.notes,
-        "integration_evidence": integ.to_dict(),
-        "access_model": access.to_dict(),
     }
     return target, cand.candidates, report
 
@@ -370,12 +365,11 @@ def discover(workspace_root: str | Path,
         "integration_candidate_count": len(all_candidates),
         "route_inventory": route_inventory,
         "ui_route_linkage": ui_route_linkage,
-        # Cross-repo role-catalog summary so catalog DIFFERENCES are computable
-        # (locate-only; names, not meanings).
-        "role_catalog_by_repo": {
-            r["repo_id"]: r.get("access_model", {}).get("role_catalog_names", [])
-            for r in repo_reports
-        },
+        # role_catalog_by_repo (cross-repo role-catalog summary) retired here
+        # (57B-84): access_model, its own source, is now the access-evidence
+        # provider's own per-repo artifact, not a stage-1 report block —
+        # synthesis_input.py re-derives role_catalog_by_repository from the
+        # loaded access artifacts instead (byte-identical output, new source).
     }
     return spec, report
 

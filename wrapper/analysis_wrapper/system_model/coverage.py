@@ -78,24 +78,29 @@ def build(spec, report: dict, builder: ModelBuilder, cg: dict,
           disc: dict, imports: dict, modules: dict, *, identities: IdentityMap,
           scan_date: str = "",
           table_evidence_by_repo: dict[str, dict] | None = None,
+          access_model_by_repo: dict[str, dict] | None = None,
+          integration_evidence_by_repo: dict[str, dict] | None = None,
           deploy_units_by_repo: dict[str, dict] | None = None) -> dict:
     """Assemble every coverage partition. ``cg`` is the from_callgraph summary,
     ``disc`` the from_discovery summary, ``imports`` the from_imports summary,
     ``scan_date`` the model's resolved scan date (empty when it could not be
     recorded — disclosed here rather than left as a silent blank field).
-    ``table_evidence_by_repo`` (57B-80 PR3) is the datastore-evidence
-    provider's own per-repo artifacts (see
-    ``identity.load_table_evidence_by_repo``) — ``_tables`` below is
-    unchanged; only where its input comes from moved off the discovery
-    report. ``deploy_units_by_repo`` (57B-82 A1) is the same shape for the
-    deploy-units provider's own artifacts (see
-    ``identity.load_deploy_units_by_repo``) — ``_deploy`` below is likewise
-    unchanged."""
+    ``table_evidence_by_repo`` (57B-80 PR3), ``access_model_by_repo``,
+    ``integration_evidence_by_repo`` (57B-84), and ``deploy_units_by_repo``
+    (57B-82 A1) are each capability provider's own per-repo artifacts (see
+    ``identity.load_*_by_repo``) — ``_tables``/``_access``/``_boundaries``/
+    ``_deploy`` below are unchanged; only where their input comes from moved
+    off the discovery report."""
     table_evidence_by_repo = table_evidence_by_repo or {}
+    access_model_by_repo = access_model_by_repo or {}
+    integration_evidence_by_repo = integration_evidence_by_repo or {}
     deploy_units_by_repo = deploy_units_by_repo or {}
     blocks = {b["repository_ref"]: b for b in report.get("repos", [])}
-    blocks_with_tables = {
-        ref: {**block, "table_evidence": table_evidence_by_repo.get(ref, {})}
+    blocks_merged = {
+        ref: {**block,
+              "table_evidence": table_evidence_by_repo.get(ref, {}),
+              "access_model": access_model_by_repo.get(ref, {}),
+              "integration_evidence": integration_evidence_by_repo.get(ref, {})}
         for ref, block in blocks.items()
     }
     blocks_with_deploy = {
@@ -107,9 +112,9 @@ def build(spec, report: dict, builder: ModelBuilder, cg: dict,
         "files": _files(builder).to_dict(),
         "symbols_and_calls": _calls(builder, cg, spec, identities).to_dict(),
         "routes": _routes(builder, report, disc).to_dict(),
-        "tables": _tables(builder, blocks_with_tables).to_dict(),
-        "access_model": _access(blocks).to_dict(),
-        "external_boundaries": _boundaries(builder, blocks).to_dict(),
+        "tables": _tables(builder, blocks_merged).to_dict(),
+        "access_model": _access(blocks_merged).to_dict(),
+        "external_boundaries": _boundaries(builder, blocks_merged).to_dict(),
         "deployable_units": _deploy(builder, blocks_with_deploy).to_dict(),
         "dependency_imports": _imports(builder, imports).to_dict(),
         "modules": _modules(modules).to_dict(),

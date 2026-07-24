@@ -1,5 +1,5 @@
-"""Bundled capability providers (57B-81 PR2 callgraph/depmap; 57B-80 PR2
-datastore; 57B-82 A1 deploy-units).
+"""Bundled capability providers (57B-81 callgraph/depmap; 57B-80 datastore;
+57B-82 A1 deploy-units; 57B-84 access-model/integration-evidence).
 
 Each provider below is a thin adapter, not a reimplementation: it resolves
 identity through ``context.identities`` (a provider's ONLY path to a
@@ -16,17 +16,13 @@ the artifact shape its capability owns:
   (a repo's Go map and JS/TS map never collide on name — different suffixes —
   so there is nothing to merge) plus a coverage-only fragment for
   :func:`analysis_wrapper.depmap.emit.assemble` to roll up.
-* the datastore-evidence provider writes the FULL per-repo
-  ``discovery.tables.generate`` result directly (one repo, one datastore
-  producer, no per-lane fragmentation or cross-repo assembler needed) and is
-  ``universal`` — see its own docstring below.
-* the deploy-units provider writes the FULL per-repo
-  ``discovery.deploy_units.generate`` result directly (same one-repo,
-  one-producer shape as datastore-evidence) and is likewise ``universal`` —
-  but unlike every other provider here, it carries NO linked profiles at all
-  (``profile_ids = ()``), the first bundled provider to do so; see its own
-  docstring below for why, and ``profiles/registry.py``'s carve-out that
-  makes this shape constructible.
+* the datastore-evidence, deploy-units, access-evidence, and
+  integration-evidence providers each write the FULL per-repo producer
+  result directly (one repo, one producer, no per-lane fragmentation or
+  cross-repo assembler needed) and are ``universal`` — see each one's own
+  docstring below. The latter three carry NO linked profiles at all
+  (``profile_ids = ()``); see ``CapabilityProvider``'s docstring for why
+  ``ProfileRegistry`` accepts that.
 
 Every write goes through :func:`~analysis_wrapper.executor.replace_artifact_text`
 (atomic, idempotent) rather than the create-once ``write_new_text`` the
@@ -84,6 +80,21 @@ def _coverage_from_lane(status: str, *, reason: str, notes: str) -> Coverage:
     detail = "; ".join(part for part in (reason, notes) if part)
     return Coverage(applicability="applicable", status=status,
                     reason_code=f"lane-{status}", detail=detail[:_DETAIL_LIMIT])
+
+
+def _coverage_from_availability(payload: dict, *, reason_prefix: str) -> Coverage:
+    """Coverage for a simple ast-grep fail-closed producer (57B-84's
+    access-model/integration-evidence): ``available`` IS the whole story —
+    unlike ``discovery.tables`` there is no partial sub-lane (no SQL-style
+    second producer that can independently fail) — so this is always
+    ``applicable``, ``complete`` when ast-grep ran, ``unavailable`` with the
+    producer's own notes as detail when it didn't."""
+    if payload.get("available"):
+        return Coverage(applicability="applicable", status="complete",
+                        reason_code=f"{reason_prefix}-complete", detail="")
+    detail = "; ".join(payload.get("notes", [])) or f"{reason_prefix} unavailable"
+    return Coverage(applicability="applicable", status="unavailable",
+                    reason_code=f"{reason_prefix}-unavailable", detail=detail)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -448,5 +459,97 @@ class DeployUnitsProvider:
             capability_id=self.capability_id, provider_id=self.provider_id,
             repo_id=target.repo_id, coverage=coverage,
             artifact_refs=(_artifact_ref(artifact_path, run_dir, "deploy-units-evidence"),),
+            facet_provenance=_facet_provenance(target, self.profile_ids),
+        )
+
+
+@dataclass(frozen=True)
+class AccessEvidenceProvider:
+    """Wraps :func:`analysis_wrapper.discovery.access_model.generate` (57B-84).
+
+    Unlike ``DatastoreEvidenceProvider``, this producer has no dedicated
+    profile at all — access-control-shaped code is looked for in every
+    repository regardless of language/framework, so ``profile_ids`` is
+    deliberately empty; ``universal=True`` is what makes the execution loop
+    select it anyway (``ProfileRegistry`` accepts an empty ``profile_ids``
+    only for a universal provider — see its own docstring). This slice emits
+    NO Facts (coverage + the full artifact only); a downstream consumer that
+    wants per-role/per-check evidence reads the artifact directly, exactly as
+    the retired stage-1 producer's callers already did.
+
+    Same accepted tool_access constraint as ``DatastoreEvidenceProvider``:
+    ``access_model.generate()`` has no such seam (calls ``astgrep`` directly,
+    unchanged from the legacy stage-1 call), so this provider's ``tools`` log
+    is always empty and it cannot honor ``network_authorized``.
+    """
+
+    provider_id: str = "access-evidence"
+    capability_id: str = "access-model"
+    profile_ids: tuple[str, ...] = ()
+    universal: bool = True
+
+    def run(self, context: RunContext, target: RepoTarget) -> CapabilityResult:
+        # Function-local import: same profiles<->discovery circular-import
+        # trap as DatastoreEvidenceProvider's own import of discovery.tables.
+        from ..discovery import access_model
+
+        identities = _identities(context, self.provider_id)
+        artifact_key = identities.artifact_key_for(target.repo_id)
+
+        evidence = access_model.generate(
+            target.path, target.repo_id, tier2_exclusions=target.tier2_exclusions)
+        payload = evidence.to_dict()
+
+        run_dir = Path(context.output_dir)
+        access_dir = create_stage_dir(run_dir / "access")
+        artifact_path = access_dir / f"{artifact_key}.json"
+        _write_json(artifact_path, payload)
+
+        return CapabilityResult(
+            capability_id=self.capability_id, provider_id=self.provider_id,
+            repo_id=target.repo_id,
+            coverage=_coverage_from_availability(payload, reason_prefix="access-model"),
+            artifact_refs=(_artifact_ref(artifact_path, run_dir, "access-evidence"),),
+            facet_provenance=_facet_provenance(target, self.profile_ids),
+        )
+
+
+@dataclass(frozen=True)
+class IntegrationEvidenceProvider:
+    """Wraps :func:`analysis_wrapper.discovery.integrations.generate` (57B-84).
+
+    Same shape as ``AccessEvidenceProvider``: no dedicated profile (assembled-
+    URL / integration-package evidence is looked for everywhere), universal
+    selection, no Facts this slice, same accepted tool_access constraint.
+    """
+
+    provider_id: str = "integration-evidence"
+    capability_id: str = "integration-evidence"
+    profile_ids: tuple[str, ...] = ()
+    universal: bool = True
+
+    def run(self, context: RunContext, target: RepoTarget) -> CapabilityResult:
+        # Function-local import: same profiles<->discovery circular-import
+        # trap as DatastoreEvidenceProvider's own import of discovery.tables.
+        from ..discovery import integrations
+
+        identities = _identities(context, self.provider_id)
+        artifact_key = identities.artifact_key_for(target.repo_id)
+
+        evidence = integrations.generate(
+            target.path, target.repo_id, tier2_exclusions=target.tier2_exclusions)
+        payload = evidence.to_dict()
+
+        run_dir = Path(context.output_dir)
+        integrations_dir = create_stage_dir(run_dir / "integrations")
+        artifact_path = integrations_dir / f"{artifact_key}.json"
+        _write_json(artifact_path, payload)
+
+        return CapabilityResult(
+            capability_id=self.capability_id, provider_id=self.provider_id,
+            repo_id=target.repo_id,
+            coverage=_coverage_from_availability(
+                payload, reason_prefix="integration-evidence"),
+            artifact_refs=(_artifact_ref(artifact_path, run_dir, "integration-evidence"),),
             facet_provenance=_facet_provenance(target, self.profile_ids),
         )
