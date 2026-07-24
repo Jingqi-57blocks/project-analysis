@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+# Project Analysis - pre-venv launcher.
+#
+# Deliberately written to a LOW Python syntax floor (no f-strings, no type
+# annotations, function-call print) so that even an unsupported interpreter
+# parses this file and reaches the version check, printing an actionable
+# message instead of dying with a SyntaxError.
+#
+# Invocable BY ABSOLUTE PATH FROM ANY WORKING DIRECTORY. It self-locates the
+# skill from its own path and never depends on the current directory or on
+# CLAUDE_SKILL_DIR.
+import os
+import sys
+
+MIN_PYTHON = (3, 11)
+
+
+def skill_root():
+    # <skill-root>/bin/project-analysis  ->  <skill-root>
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _need_python():
+    have = ".".join(str(part) for part in sys.version_info[:3])
+    sys.stderr.write(
+        "Project Analysis requires Python %d.%d+ (found %s).\n"
+        "It is the only hard prerequisite - everything else is set up on first "
+        "run or gracefully degraded.\n"
+        "  macOS:          brew install python@3.11\n"
+        "  Debian/Ubuntu:  sudo apt-get install python3.11\n"
+        "  or use pyenv:   https://github.com/pyenv/pyenv\n"
+        % (MIN_PYTHON[0], MIN_PYTHON[1], have)
+    )
+    return 3  # environment-incomplete
+
+
+def main():
+    if tuple(sys.version_info[:2]) < MIN_PYTHON:
+        return _need_python()
+    wrapper = os.path.join(skill_root(), "wrapper")
+    if wrapper not in sys.path:
+        sys.path.insert(0, wrapper)
+    try:
+        from analysis_wrapper.cli import main as cli_main
+    except Exception as exc:  # import / installation problem
+        sys.stderr.write(
+            "Project Analysis: could not load the wrapper from %s (%s).\n"
+            "The installation looks incomplete or corrupt.\n"
+            % (wrapper, repr(exc))
+        )
+        return 4  # installation-corrupt
+    return cli_main(sys.argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())
