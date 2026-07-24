@@ -2,16 +2,21 @@
 
 Two concerns, mirroring ``test_datastore_evidence_provider.py``'s structure:
 
-1. ``AccessEvidenceProvider`` passes the shared conformance battery — but
-   unlike the datastore/callgraph/depmap providers, it has NO dedicated
-   profile at all (``profile_ids == ()``), so the battery entry point is
-   ``run_universal_provider_conformance`` (57B-84), not the profile-linked
-   ``run_provider_conformance``.
+1. ``AccessEvidenceProvider`` passes the shared conformance battery via
+   ``run_provider_conformance``'s zero-profile ``profile=None`` shape
+   (``profiles/registry.py`` and ``tests/provider_conformance.py`` both
+   gained a carve-out for exactly this in 57B-82 A1 — a ``universal``
+   provider with empty ``profile_ids``, since no detected facet predicts
+   access-control-shaped code's presence): ``test_conformance.py`` already
+   pins that MECHANISM generically with a synthetic provider; the test below
+   proves the REAL ``AccessEvidenceProvider`` passes it too, using
+   ``repo_setup`` to populate the battery's own repo directory with the
+   existing ``rules/fixtures/access`` content.
 
 2. The provider is a THIN adapter over
    :func:`analysis_wrapper.discovery.access_model.generate` (unmodified):
    its coverage/artifact must be provably equivalent to a direct call —
-   exercised against the existing ``rules/fixtures/access`` fixture (role
+   exercised against the same ``rules/fixtures/access`` fixture (role
    catalog, authz checks, middleware, contextual identity, casbin policy)
    rather than inventing new fixtures. This slice emits NO Facts (coverage +
    artifact only).
@@ -25,6 +30,7 @@ empty and it cannot honor ``network_authorized``. Intentional, not a gap.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from analysis_wrapper import astgrep, identity
@@ -34,13 +40,23 @@ from analysis_wrapper.profiles.contracts import RunContext
 from analysis_wrapper.profiles.providers import AccessEvidenceProvider
 from analysis_wrapper.profiles.tool_access import ExecutorToolAccess
 from analysis_wrapper.targetspec import RepoTarget, TargetSpec, stable_repo_id
-from provider_conformance import run_universal_provider_conformance
+from provider_conformance import run_provider_conformance
 
 FIXACCESS = astgrep.RULES_DIR / "fixtures" / "access"
 
 
+def _populate_from_fixaccess(repo: Path) -> None:
+    """``repo_setup`` callback (the zero-profile shape
+    ``run_provider_conformance`` expects): copy the existing
+    ``rules/fixtures/access`` content into the battery's own prepared repo
+    directory rather than inventing new fixture content."""
+    shutil.copytree(FIXACCESS, repo, dirs_exist_ok=True)
+
+
 def test_access_evidence_provider_conforms(tmp_path):
-    run_universal_provider_conformance(AccessEvidenceProvider(), tmp_path=tmp_path)
+    run_provider_conformance(
+        None, AccessEvidenceProvider(), tmp_path=tmp_path,
+        repo_setup=_populate_from_fixaccess)
 
 
 def test_bundled_access_provider_is_universal_with_no_profile():

@@ -1,13 +1,17 @@
 """57B-84: the integration-evidence capability provider.
 
-Same shape as ``test_access_evidence_provider.py``: no dedicated profile
-(``run_universal_provider_conformance``), a thin unmodified wrapper over
-:func:`analysis_wrapper.discovery.integrations.generate`, no Facts this
+Same shape as ``test_access_evidence_provider.py``: no dedicated profile,
+conformance via ``run_provider_conformance``'s zero-profile ``profile=None``
+shape (57B-82 A1's carve-out in ``profiles/registry.py`` and
+``tests/provider_conformance.py`` — ``test_conformance.py`` already pins that
+MECHANISM generically; the test below proves the REAL
+``IntegrationEvidenceProvider`` passes it too), a thin unmodified wrapper
+over :func:`analysis_wrapper.discovery.integrations.generate`, no Facts this
 slice. There is no dedicated ``rules/fixtures`` directory for integrations
-(unlike access/db), so the equality fixture below reuses the exact synthetic
-repo shape already proven in ``test_integrations.py::
-test_integration_evidence_on_synthetic_repo`` rather than inventing new
-content.
+(unlike access/db), so the equality fixture (and the conformance battery's
+``repo_setup``) both reuse the exact synthetic repo content already proven
+in ``test_integrations.py::test_integration_evidence_on_synthetic_repo``
+rather than inventing new content.
 """
 
 from __future__ import annotations
@@ -22,11 +26,30 @@ from analysis_wrapper.profiles.contracts import RunContext
 from analysis_wrapper.profiles.providers import IntegrationEvidenceProvider
 from analysis_wrapper.profiles.tool_access import ExecutorToolAccess
 from analysis_wrapper.targetspec import RepoTarget, TargetSpec, stable_repo_id
-from provider_conformance import run_universal_provider_conformance
+from provider_conformance import run_provider_conformance
+
+
+def _populate_synthetic_repo(repo_path: Path) -> None:
+    """Mirrors test_integrations.py::test_integration_evidence_on_synthetic_repo:
+    a distinctively-named package (``acme``) making an HTTP call, a
+    host-fragment constant, and a generic-named package with no HTTP call
+    (must NOT be reported). Also the ``repo_setup`` callback shape
+    ``run_provider_conformance`` expects for a zero-profile provider."""
+    acme = repo_path / "internal" / "handlers" / "acme"
+    acme.mkdir(parents=True)
+    (acme / "service.go").write_text(
+        'package acme\nconst (\n\tscheme = "https"\n\thost = "api.acme.io"\n)\n')
+    (acme / "http.go").write_text(
+        'package acme\nimport "net/http"\nfunc call(u string) { http.Get(u) }\n')
+    common = repo_path / "internal" / "handlers" / "common"
+    common.mkdir(parents=True)
+    (common / "util.go").write_text("package common\nfunc noop() {}\n")
 
 
 def test_integration_evidence_provider_conforms(tmp_path):
-    run_universal_provider_conformance(IntegrationEvidenceProvider(), tmp_path=tmp_path)
+    run_provider_conformance(
+        None, IntegrationEvidenceProvider(), tmp_path=tmp_path,
+        repo_setup=_populate_synthetic_repo)
 
 
 def test_bundled_integration_provider_is_universal_with_no_profile():
@@ -43,20 +66,8 @@ def test_bundled_integration_provider_is_universal_with_no_profile():
 
 
 def _synthetic_repo(tmp_path: Path) -> RepoTarget:
-    """Mirrors test_integrations.py::test_integration_evidence_on_synthetic_repo:
-    a distinctively-named package (``acme``) making an HTTP call, a
-    host-fragment constant, and a generic-named package with no HTTP call
-    (must NOT be reported)."""
     repo_path = tmp_path / "repo"
-    acme = repo_path / "internal" / "handlers" / "acme"
-    acme.mkdir(parents=True)
-    (acme / "service.go").write_text(
-        'package acme\nconst (\n\tscheme = "https"\n\thost = "api.acme.io"\n)\n')
-    (acme / "http.go").write_text(
-        'package acme\nimport "net/http"\nfunc call(u string) { http.Get(u) }\n')
-    common = repo_path / "internal" / "handlers" / "common"
-    common.mkdir(parents=True)
-    (common / "util.go").write_text("package common\nfunc noop() {}\n")
+    _populate_synthetic_repo(repo_path)
     return RepoTarget(repo_id=stable_repo_id(str(repo_path)), path=str(repo_path))
 
 
