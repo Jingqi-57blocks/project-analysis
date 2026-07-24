@@ -23,6 +23,13 @@ from .targetspec import TargetSpec, stable_repo_id
 FILENAME = "identity-map.json"
 SCHEMA_VERSION = 1
 _SOURCE_NATIVE = "native"
+# In-memory-only source for IdentityMap instances derived by derive_legacy()
+# (57B-83 C2). Never written to identity-map.json: write_mapping()/build()'s
+# default keep producing "native", and load()'s own equality-with-a-freshly
+# -built-expected-map check would reject an on-disk file claiming this source
+# anyway (the freshly built comparison map always defaults to "native").
+_SOURCE_LEGACY_DERIVED = "legacy-derived"
+_VALID_SOURCES = {_SOURCE_NATIVE, _SOURCE_LEGACY_DERIVED}
 _PROJECT_FIELDS = {
     "internal_id", "display_name", "reference", "artifact_key", "canonical_path",
 }
@@ -196,8 +203,8 @@ class IdentityMap:
     def __post_init__(self) -> None:
         if type(self.schema_version) is not int or self.schema_version != SCHEMA_VERSION:
             raise ValueError("identity map has an unsupported schema version")
-        if self.source != _SOURCE_NATIVE:
-            raise ValueError("identity map source must be native")
+        if self.source not in _VALID_SOURCES:
+            raise ValueError("identity map has an unsupported source")
         object.__setattr__(self, "repositories", tuple(self.repositories))
         internal_ids = [item.internal_id for item in self.repositories]
         references = [item.reference for item in self.repositories]
@@ -634,3 +641,141 @@ def load(run_dir: str | Path) -> IdentityMap:
     if mapping != expected:
         raise ValueError(f"{FILENAME} differs from deterministic discovery identity")
     return mapping
+
+
+# --------------------------------------------------------------------------- #
+# Read-only legacy fallback (57B-83 C2) — export path only.
+#
+# Pre-57B-88 completed runs predate identity-map.json (and their
+# discovery-report.json predates the externalized 2.0.0 contract that
+# load_discovery_report() enforces), so load() above always fails on them at
+# its very first check. derive_legacy() is a SEPARATE, best-effort function
+# that reconstructs a read-only equivalent IdentityMap purely from what an old
+# run already carries on disk: run-state.json's provenance rows (repo_id +
+# path) for repository identity. It is called from exactly one place —
+# report_html.run_inputs.load()'s fallback branch, reached only after load()
+# itself has already failed — and from nowhere else: no analysis-plane
+# producer (discovery, callgraph, findings, system-model, ...) may reach it,
+# and load()'s own strict behavior above is untouched by its existence.
+#
+# It never opens targets.json (whose pre-88 shape has no schema_version and a
+# completely different per-repo layout — see TargetSpec.from_dict, which
+# would reject it outright) and never writes anything: the old run directory
+# is read-only input, never a write target.
+# --------------------------------------------------------------------------- #
+
+def _legacy_workspace_root(run: Path, repo_paths: list[Path]) -> Path:
+    """Best-effort workspace root for a pre-88 run's PROJECT display name only.
+
+    Never used as a join key (run-state.json's own project_id is trusted for
+    that) — only its basename feeds the project's human-readable reference.
+    Prefers discovery-report.json's ``workspace_root`` field (present even in
+    the pre-88 shape); reads it as plain JSON, tolerating any other shape or
+    schema mismatch in that file, since only this one field is needed. Falls
+    back to the common parent of the run's own repository paths when that
+    field, or the file itself, is unavailable.
+    """
+    discovery_path = run / "discovery-report.json"
+    if discovery_path.is_file():
+        try:
+            discovery = json.loads(discovery_path.read_text("utf-8"))
+        except (OSError, ValueError):
+            discovery = None
+        if isinstance(discovery, dict):
+            root = discovery.get("workspace_root")
+            if isinstance(root, str) and root:
+                return _canonical(root)
+    if not repo_paths:
+        raise ValueError("cannot derive a workspace root with no repository paths")
+    return Path(os.path.commonpath([str(path) for path in repo_paths]))
+
+
+def derive_legacy(run_dir: str | Path) -> IdentityMap:
+    """Derive a read-only IdentityMap for a pre-57B-88 run with no
+    identity-map.json on disk. See the module section comment above for the
+    reachability guarantee and why targets.json is never consulted here.
+
+    Uses the same reference-derivation rules as build() (shortest unique
+    basename per repository, tie-broken by the shortest unique workspace-
+    relative path suffix; a portable, collision-free artifact key per
+    reference) so a legacy-derived map agrees with what build() would have
+    produced natively, had this run gone through the modern producer.
+    ``project_id`` is trusted as recorded in run-state.json rather than
+    recomputed from the derived workspace root: recomputing would make a
+    purely best-effort display-name derivation load-bearing for a join key
+    that is already trustworthy as recorded, and best-effort root inference
+    (see ``_legacy_workspace_root``) is not guaranteed to reproduce the exact
+    canonical path the id was originally minted from.
+    """
+    run = Path(run_dir).expanduser().resolve()
+    try:
+        state = json.loads((run / "run-state.json").read_text("utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read run-state.json: {exc}") from exc
+    if not isinstance(state, dict):
+        raise ValueError("run-state.json must contain an object")
+    project_id = state.get("project_id")
+    if not isinstance(project_id, str) or not project_id:
+        raise ValueError("run-state.json is missing project_id")
+
+    repo_paths: dict[str, Path] = {}
+    for index, row in enumerate(state.get("provenance", []) or []):
+        if not isinstance(row, dict):
+            raise ValueError(f"run-state.json provenance[{index}] must be an object")
+        repo_id, path = row.get("repo_id"), row.get("path")
+        if not isinstance(repo_id, str) or not repo_id:
+            raise ValueError(f"run-state.json provenance[{index}] is missing repo_id")
+        if not isinstance(path, str) or not path:
+            raise ValueError(f"run-state.json provenance[{index}] is missing path")
+        repo_paths[repo_id] = _canonical(path)
+    if not repo_paths:
+        raise ValueError("run-state.json carries no provenance rows to derive identity from")
+
+    workspace_root = _legacy_workspace_root(run, list(repo_paths.values()))
+    reference_paths: dict[str, PurePosixPath] = {}
+    workspace_relatives: dict[str, str] = {}
+    display_names: dict[str, str] = {}
+    for repo_id, path in repo_paths.items():
+        try:
+            relative = path.relative_to(workspace_root)
+            workspace_relative = relative.as_posix()
+            reference_path = PurePosixPath(
+                path.name if relative == Path(".") else workspace_relative)
+        except ValueError:
+            # This repo's recorded path isn't under the (best-effort) derived
+            # workspace root; fall back to its own basename as an
+            # independent reference rather than failing the whole run.
+            workspace_relative = path.name
+            reference_path = PurePosixPath(path.name)
+        if not reference_path.name:
+            raise ValueError(f"repository {repo_id!r} has no readable basename")
+        reference_paths[repo_id] = reference_path
+        workspace_relatives[repo_id] = workspace_relative
+        display_names[repo_id] = path.name
+
+    references = _shortest_unique_references(reference_paths)
+    artifact_keys = _portable_artifact_keys(references)
+    repositories = tuple(
+        RepositoryIdentity(
+            internal_id=repo_id,
+            display_name=display_names[repo_id],
+            reference=references[repo_id],
+            artifact_key=artifact_keys[repo_id],
+            workspace_relative_path=workspace_relatives[repo_id],
+            canonical_path=str(repo_paths[repo_id]),
+        )
+        for repo_id in sorted(repo_paths, key=lambda rid: references[rid])
+    )
+    project_name = _require_text(workspace_root.name, "project display name")
+    return IdentityMap(
+        schema_version=SCHEMA_VERSION,
+        source=_SOURCE_LEGACY_DERIVED,
+        project=ProjectIdentity(
+            internal_id=project_id,
+            display_name=project_name,
+            reference=project_name,
+            artifact_key=artifact_key(project_name),
+            canonical_path=str(workspace_root),
+        ),
+        repositories=repositories,
+    )
