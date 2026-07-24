@@ -58,29 +58,34 @@ def test_dependency_map_providers_are_selected_by_facet_not_by_stack_or_manifest
     """The lane a repo gets is now entirely a function of its DETECTED
     facets (the old lane selector used to also sniff go.mod/package.json
     presence directly; that fallback is gone — a repo's facets are the
-    single source of truth)."""
+    single source of truth). Selection is checked through the REAL bundled
+    provider set (what production actually runs), not a standalone selector
+    helper (57B-85 retired the legacy ``_lanes``/``run_depmap`` — see
+    ``depmap/emit.py``'s module docstring)."""
     (tmp_path / "go.mod").write_text("module x\n")
     go_target = RepoTarget(repo_id="g", path=str(tmp_path), facets=[
         TechnologyFacet("language.go", "language", ["."], ["go.mod"])
     ])
-    assert emit._lanes(go_target) == ["go"]
-
     js = tmp_path / "js"
     js.mkdir()
     (js / "package.json").write_text("{}\n")
     js_target = RepoTarget(repo_id="j", path=str(js), facets=[
         TechnologyFacet("language.javascript", "language", ["."], ["package.json"])
     ])
-    assert emit._lanes(js_target) == ["js"]
 
+    # A manifest present with NO matching facet selects nothing — an empty
+    # ``facets`` list means ``profiles_for_capability`` is trivially empty
+    # regardless of what manifest sits on disk, which IS the proof.
     unfaceted = tmp_path / "unfaceted"
     unfaceted.mkdir()
     (unfaceted / "package.json").write_text("{}\n")
-    assert emit._lanes(RepoTarget(repo_id="u", path=str(unfaceted))) == []
+    assert RepoTarget(repo_id="u", path=str(unfaceted)).profiles_for_capability(
+        "dependency-map") == ()
 
     other = tmp_path / "other"
     other.mkdir()
-    assert emit._lanes(RepoTarget(repo_id="o", path=str(other))) == []
+    assert RepoTarget(repo_id="o", path=str(other)).profiles_for_capability(
+        "dependency-map") == ()
 
     assert {p.provider_id for p in _DEPMAP_PROVIDERS
            if set(go_target.profiles_for_capability("dependency-map")) & set(p.profile_ids)

@@ -32,34 +32,38 @@ def test_callgraph_providers_are_selected_by_facet_not_by_stack_or_manifest(tmp_
     """The lane a repo gets is now entirely a function of its DETECTED
     facets (the old lane selector used to also sniff go.mod/package.json
     presence directly; that fallback is gone — a repo's facets are the
-    single source of truth)."""
+    single source of truth). Selection is checked through the REAL bundled
+    registry (what production actually runs), not a standalone selector
+    helper (57B-85 retired the legacy ``_lanes``/``run_callgraph`` — see
+    ``callgraph/emit.py``'s module docstring)."""
     (tmp_path / "go.mod").write_text("module x\n")
     go_target = RepoTarget(repo_id="g", path=str(tmp_path), facets=[
         TechnologyFacet("language.go", "language", ["."], ["go.mod"])
     ])
-    assert emit._lanes(go_target) == ["go"]
-
     js_dir = tmp_path / "js"
     js_dir.mkdir()
     (js_dir / "package.json").write_text("{}\n")
     js_target = RepoTarget(repo_id="j", path=str(js_dir), facets=[
         TechnologyFacet("language.javascript", "language", ["."], ["package.json"])
     ])
-    assert emit._lanes(js_target) == ["js"]
 
     # A manifest present with NO matching facet selects nothing — facets, not
-    # file sniffing, decide applicability.
+    # file sniffing, decide applicability. An empty ``facets`` list means
+    # ``profiles_for_capability`` is trivially empty regardless of what
+    # manifest sits on disk, which IS the proof: no facet, no capability.
     unfaceted = tmp_path / "unfaceted"
     unfaceted.mkdir()
     (unfaceted / "package.json").write_text("{}\n")
-    assert emit._lanes(RepoTarget(repo_id="u", path=str(unfaceted))) == []
+    assert RepoTarget(repo_id="u", path=str(unfaceted)).profiles_for_capability(
+        "callgraph") == ()
 
     other = tmp_path / "other"
     other.mkdir()
-    assert emit._lanes(RepoTarget(repo_id="o", path=str(other))) == []
+    assert RepoTarget(repo_id="o", path=str(other)).profiles_for_capability(
+        "callgraph") == ()
 
     # The SAME facets select the matching bundled providers through the real
-    # registry (what production actually runs), not just the legacy helper.
+    # registry.
     assert {p.provider_id for p in BUNDLED_PROVIDERS
            if p.capability_id == "callgraph"
            and set(go_target.profiles_for_capability("callgraph")) & set(p.profile_ids)

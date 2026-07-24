@@ -18,10 +18,10 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..exclusions import SOURCE_EXT as _SOURCE_EXT
 from ..targetspec import IntegrationCandidate
 
 _SKIP_DIRS = {"node_modules", "vendor", ".git", "dist", "build", "coverage"}
-_SOURCE_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go"}
 _CONFIG_EXT = {".json", ".yml", ".yaml", ".toml", ".ini", ".conf"}
 _MAX_FILES = 4000
 _MAX_EVIDENCE = 3

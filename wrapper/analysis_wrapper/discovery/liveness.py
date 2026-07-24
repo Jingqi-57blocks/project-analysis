@@ -22,12 +22,12 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from .. import astgrep
+from ..exclusions import SOURCE_EXT as _SOURCE_EXT
 from .base_map import resolve_base_backends
 
 _SKIP_DIRS = {"node_modules", "vendor", ".git", "dist", "build", "coverage"}
 _MAX_FILES = 6000
 _MAX_BYTES = 262_144
-_SOURCE_EXT = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go"}
 
 # Frontend HTTP call sites: `${base}/path...` — capture whether the base was
 # written `config.X` (explicit global base) vs a bare `X` (which may be a LOCAL

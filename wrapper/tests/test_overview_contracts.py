@@ -358,14 +358,29 @@ def test_ui_linkage_is_not_applicable_for_go_only_backend(tmp_path):
 
 
 def test_full_stack_node_shape_never_claims_ui_not_applicable(tmp_path):
+    """A full-stack repo (Go API backend that ALSO carries a TypeScript
+    facet — e.g. an embedded admin UI) must never be dismissed as
+    ui-route-linkage not-applicable. Frontend-capability is now a FACET
+    predicate (57B-85: ``profiles.selection.is_node_target``), not the
+    legacy discovery-report "stacks" display block, so the fixture's
+    ``targets.json`` facets are what must say "TypeScript" here — mutating
+    the report's "stacks" block alone (the pre-57B-85 way to drive this
+    test) no longer has any effect on the outcome."""
     run = _prepared(write_run(tmp_path / "run", with_imports=True,
                               with_routes=False))
+    targets = json.loads((run / "targets.json").read_text())
+    api = next(row for row in targets["repos"] if row["repo_id"] == "api-11111111")
+    api["facets"].append({
+        "profile_id": "language.typescript", "kind": "language",
+        "scope_roots": ["src"], "evidence": ["tsconfig.json"],
+        "confidence": "high", "state": "resolved",
+    })
+    (run / "targets.json").write_text(json.dumps(targets), "utf-8")
     report = json.loads((run / "discovery-report.json").read_text())
-    api = next(row for row in report["repos"]
-               if row["repository_ref"] == "api")
-    api["stacks"] = {"stacks": ["ts", "tsx"], "frameworks": [], "evidence": []}
-    api["module_signals"]["folders"] = ["src"]
-    report["repos"] = [api]
+    api_block = next(row for row in report["repos"]
+                     if row["repository_ref"] == "api")
+    api_block["module_signals"]["folders"] = ["src"]
+    report["repos"] = [api_block]
     (run / "discovery-report.json").write_text(json.dumps(report), "utf-8")
     states = {row["capability_id"]: row["status"]
               for row in capabilities.build(run)["capabilities"]}

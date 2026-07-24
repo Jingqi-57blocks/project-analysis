@@ -126,14 +126,11 @@ def _discovery(*, workspace_root="/ws-a", not_targeted=None, facet_state="resolv
                               "api_configs": [], "notes": []},
             "candidate_notes": [],
             "integration_evidence": {"available": True, "notes": []},
-            "table_evidence": {"available": True, "notes": []},
             "access_model": {"available": True, "notes": []},
-            "deployable_units": {"status": "unknown", "units": [], "artifacts": [],
-                                 "notes": []},
             "notes": [],
         }],
         "not_targeted": sorted(not_targeted or []), "reduced_coverage_targets": [],
-        "integration_candidate_count": 0, "role_catalog_by_repository": {},
+        "integration_candidate_count": 0,
     }
 
 
