@@ -292,8 +292,9 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         check("dependency-map-consumption", mapped_repos == consumed_repos,
               f"producer repos={mapped_repos}, system-model repos={consumed_repos}")
 
-    report = identity.load_discovery_report(run, identities)
-    route_rows = (report.get("route_inventory") or {}).get("rows", [])
+    route_inventory_path = run / "routes" / "route-inventory.json"
+    route_rows = (_load(route_inventory_path) if route_inventory_path.is_file()
+                 else {}).get("rows", [])
     route_nodes = int(coverage.get("routes", {}).get("counts", {}).get("routes", 0))
     check("route-liveness-consumption", not route_rows or route_nodes > 0,
           f"producer rows={len(route_rows)}, system-model routes={route_nodes}")

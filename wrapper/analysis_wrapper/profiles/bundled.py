@@ -11,7 +11,8 @@ from .providers import (AccessEvidenceProvider, CallgraphGoProvider,
                         CallgraphJsProvider, DatastoreEvidenceProvider,
                         DependencyRiskProvider, DeployUnitsProvider,
                         DepmapGoProvider, DepmapJsProvider, GitHistoryProvider,
-                        IntegrationEvidenceProvider)
+                        IntegrationEvidenceProvider, RouteInventoryProvider,
+                        UiRouteLinkageProvider)
 from .registry import ProfileRegistry
 
 
@@ -165,6 +166,13 @@ BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
     DepmapGoProvider(), DepmapJsProvider(),
     GitHistoryProvider(),
     IntegrationEvidenceProvider(),
+    # RouteInventoryProvider/UiRouteLinkageProvider (57B-84 B2): also
+    # zero-profile universal, same registry carve-out as DeployUnitsProvider
+    # above — no detected facet predicts a route registration/UI call site's
+    # presence on its own (an explicit route-inventory/ui-route-linkage
+    # profile match is one INPUT to each provider's own applicability gate,
+    # not a selection precondition; universal=True is what selects them).
+    RouteInventoryProvider(), UiRouteLinkageProvider(),
 )
 
 

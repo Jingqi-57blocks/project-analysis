@@ -30,7 +30,7 @@ from ..profiles import detection as profile_detection
 from ..sanitize import redact
 from ..targetspec import (RepoTarget, TargetSpec, overlapping_repo_pairs,
                           path_contains, stable_repo_id)
-from . import (candidates, generated, inventory, liveness, modules, pm,
+from . import (candidates, generated, inventory, modules, pm,
                provenance, self_exclusion, stacks)
 
 
@@ -282,80 +282,6 @@ def discover(workspace_root: str | Path,
     if overlaps:
         raise ValueError(f"canonical analysis targets overlap: {overlaps}")
 
-    # Route liveness: a frontend (Node/TS repo with a src/ SPA layout, no route
-    # registrations of its own) joined against the backend route tables.
-    def _tier2(repo_id: str) -> list:
-        r = next((x for x in repo_reports if x["repo_id"] == repo_id), None)
-        return r["tier2_exclusions"]["dirs"] if r else []
-    backends, frontends = [], []
-    for t in repo_targets:
-        has_routes = any(_produce_has_routes(r) for r in repo_reports
-                         if r["repo_id"] == t.repo_id)
-        repo_report = next((r for r in repo_reports if r["repo_id"] == t.repo_id), {})
-        stacks_l = {s.lower() for s in t.stacks}
-        if has_routes or t.profiles_for_capability("route-inventory"):
-            backends.append((t.repo_id, t.path, _tier2(t.repo_id)))
-        if (t.profiles_for_capability("ui-route-linkage") or
-                (not t.profiles_for_capability("route-inventory") and
-                 stacks_l & {"ts", "tsx", "js"} and
-                 (Path(t.path) / "src").is_dir() and not has_routes)):
-            frontends.append(t)
-    route_inventory = None
-    ui_route_linkage = None
-    if backends:
-        inventory_rows = []
-        inventory_notes = []
-        for repo_id, path, tier2_dirs in sorted(backends):
-            stats = {"file_cap_hit": False, "oversized": 0}
-            for hit in liveness.route_registrations(
-                    path, tier2_dirs, stats, include_mounts=True):
-                inventory_rows.append({
-                    "repo_id": repo_id, "method": hit.method, "path": hit.path,
-                    "route_evidence": hit.evidence,
-                    "registration_kind": (
-                        "mount" if hit.method.upper() in liveness._MOUNTS else "endpoint"),
-                })
-            if stats["file_cap_hit"] or stats["oversized"]:
-                inventory_notes.append(
-                    f"{repo_id}: COVERAGE CAP in fallback route scan "
-                    f"(file_cap={stats['file_cap_hit']}, oversized={stats['oversized']})")
-        if not liveness.astgrep.available():
-            inventory_notes.append("ROUTE EXTRACTION FALLBACK: ast-grep unavailable")
-        route_inventory = {
-            "notes": inventory_notes,
-            "rows": sorted(inventory_rows, key=lambda row: (
-                row["repo_id"], row["method"], row["path"], row["route_evidence"])),
-            **liveness.astgrep.probe().provenance(),
-        }
-        linkage_rows = []
-        calls_by_frontend = {}
-        linkage_notes = []
-        for frontend in sorted(frontends, key=lambda row: row.repo_id):
-            linked = liveness.liveness(frontend.path, backends)
-            calls_by_frontend[frontend.repo_id] = linked.calls_by_base()
-            linkage_notes.extend(f"{frontend.repo_id}: {note}" for note in linked.notes)
-            for row in linked.rows:
-                if row.status not in {"ui-called", "method-unresolved"} \
-                        or not row.caller_evidence:
-                    continue
-                linkage_rows.append({
-                    "frontend_repo_id": frontend.repo_id,
-                    "repo_id": row.repo_id,
-                    "method": row.method,
-                    "path": row.path,
-                    "route_evidence": row.route_evidence,
-                    "status": row.status,
-                    "caller_evidence": row.caller_evidence,
-                })
-        ui_route_linkage = {
-            "frontends": sorted(t.repo_id for t in frontends),
-            "calls_by_frontend": calls_by_frontend,
-            "rows": sorted(linkage_rows, key=lambda row: (
-                row["frontend_repo_id"], row["repo_id"], row["method"],
-                row["path"], row["route_evidence"])),
-            "notes": sorted(set(linkage_notes)),
-        }
-
     report = {
         "project_id": inv.project_id,
         "workspace_root": inv.workspace_root,
@@ -363,8 +289,16 @@ def discover(workspace_root: str | Path,
         "not_targeted": sorted(disclosed),
         "reduced_coverage_targets": sorted(reduced),
         "integration_candidate_count": len(all_candidates),
-        "route_inventory": route_inventory,
-        "ui_route_linkage": ui_route_linkage,
+        # route_inventory/ui_route_linkage (route liveness: a frontend joined
+        # against backend route tables) retired here (57B-84 B2):
+        # RouteInventoryProvider/UiRouteLinkageProvider are now the
+        # capability-provider fragment source, and routes.emit.assemble
+        # writes the canonical routes/route-inventory.json + routes/ui-
+        # route-linkage.json run-level docs directly — see that module's
+        # own docstring for the fragment+assemble shape and why it replaces
+        # this stage-1 block (it also eliminates this block's own
+        # `liveness.liveness()`-per-frontend backend rescan).
+        #
         # role_catalog_by_repo (cross-repo role-catalog summary) retired here
         # (57B-84): access_model, its own source, is now the access-evidence
         # provider's own per-repo artifact, not a stage-1 report block —
@@ -372,10 +306,6 @@ def discover(workspace_root: str | Path,
         # loaded access artifacts instead (byte-identical output, new source).
     }
     return spec, report
-
-
-def _produce_has_routes(repo_report: dict) -> bool:
-    return bool(repo_report.get("module_signals", {}).get("routes"))
 
 
 def write_stage1(run_dir: str | Path, spec: TargetSpec, report: dict) -> tuple[Path, Path]:

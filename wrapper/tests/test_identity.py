@@ -261,10 +261,6 @@ def test_discovery_projection_only_rewrites_identity_bearing_fields(tmp_path):
             },
             "notes": [f"{target.repo_id}: wrapper-owned note", target.repo_id],
         }],
-        "ui_route_linkage": {
-            "frontends": [target.repo_id],
-            "calls_by_frontend": {target.repo_id: {"/api": 1}},
-        },
     }
 
     projected = identity.externalize_discovery_report(report, mapping)
@@ -275,9 +271,37 @@ def test_discovery_projection_only_rewrites_identity_bearing_fields(tmp_path):
     assert "project_id" in projected["repos"][0]["table_evidence"]["tables"]
     assert projected["repos"][0]["notes"] == [
         "api: wrapper-owned note", target.repo_id]
-    assert projected["ui_route_linkage"]["frontends"] == ["api"]
-    assert projected["ui_route_linkage"]["calls_by_frontend_repository"] == {
-        "api": {"/api": 1}}
+
+
+def test_discovery_projection_no_longer_touches_route_fields(tmp_path):
+    """route_inventory/ui_route_linkage externalization retired from here
+    (57B-84 B2): those fields moved OFF the discovery report entirely (see
+    ``discovery/emit.py``'s own retirement comment) — RouteInventoryProvider/
+    UiRouteLinkageProvider write already-externalized identity directly, and
+    ``routes.emit.assemble`` needs no discovery-report rewrite pass. A stale
+    input that happens to still carry ``ui_route_linkage`` (e.g. a
+    hand-built test fixture, or a not-yet-migrated caller) passes through
+    completely UNCHANGED — proving the retirement is total, not partial."""
+    workspace = tmp_path / "workspace"
+    target = _target(workspace / "api")
+    mapping = identity.build(
+        TargetSpec([target]), workspace_root=workspace,
+        project_id=stable_repo_id(str(workspace)))
+    report = {
+        "project_id": stable_repo_id(str(workspace)),
+        "repos": [],
+        "ui_route_linkage": {
+            "frontends": [target.repo_id],
+            "calls_by_frontend": {target.repo_id: {"/api": 1}},
+        },
+    }
+
+    projected = identity.externalize_discovery_report(report, mapping)
+
+    assert projected["ui_route_linkage"] == {
+        "frontends": [target.repo_id],
+        "calls_by_frontend": {target.repo_id: {"/api": 1}},
+    }
 
 
 def test_stage1_retry_refuses_without_mixing_checkpoint_files(tmp_path):

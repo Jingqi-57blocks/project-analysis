@@ -106,8 +106,7 @@ def _signals(*, status="complete"):
     }
 
 
-def _discovery(*, workspace_root="/ws-a", not_targeted=None, facet_state="resolved",
-              route_inventory=None):
+def _discovery(*, workspace_root="/ws-a", not_targeted=None, facet_state="resolved"):
     return {
         "schema_version": "2.0.0", "project_ref": "proj", "workspace_root": workspace_root,
         "repos": [{
@@ -134,8 +133,7 @@ def _discovery(*, workspace_root="/ws-a", not_targeted=None, facet_state="resolv
             "notes": [],
         }],
         "not_targeted": sorted(not_targeted or []), "reduced_coverage_targets": [],
-        "integration_candidate_count": 0, "route_inventory": route_inventory,
-        "ui_route_linkage": None, "role_catalog_by_repository": {},
+        "integration_candidate_count": 0, "role_catalog_by_repository": {},
     }
 
 
@@ -201,8 +199,11 @@ def _write_minimal_run(run: Path, **kwargs) -> Path:
     _write(run, "signals/run-summary.json", _signals())
     _write(run, "discovery-report.json", _discovery(
         workspace_root=workspace_root, not_targeted=kwargs.get("not_targeted"),
-        facet_state=kwargs.get("facet_state", "resolved"),
-        route_inventory=kwargs.get("route_inventory")))
+        facet_state=kwargs.get("facet_state", "resolved")))
+    if kwargs.get("route_inventory") is not None:
+        # 57B-84 B2: route_inventory lives in its own routes.emit.assemble
+        # run-level artifact now, not an embedded discovery-report field.
+        _write(run, "routes/route-inventory.json", kwargs["route_inventory"])
     _write(run, "run-provenance.json", _provenance(
         analyzer_root=kwargs.get("analyzer_root", "/analyzer-a"),
         analyzer_version=kwargs.get("analyzer_version", "0.4.0"),

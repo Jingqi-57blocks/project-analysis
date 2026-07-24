@@ -485,26 +485,16 @@ def externalize_discovery_report(report: dict[str, Any],
         for key, value in role_catalog.items()
     }
 
-    inventory = projected.get("route_inventory")
-    if isinstance(inventory, dict):
-        for row in inventory.get("rows", []):
-            if isinstance(row, dict):
-                replace_field(row, "repo_id", "repository_ref")
-        inventory["notes"] = _externalize_notes(inventory.get("notes", []), replacements)
-
-    linkage = projected.get("ui_route_linkage")
-    if isinstance(linkage, dict):
-        linkage["frontends"] = [replacements.get(str(item), str(item))
-                                for item in linkage.get("frontends", [])]
-        calls = linkage.pop("calls_by_frontend", {})
-        linkage["calls_by_frontend_repository"] = {
-            replacements.get(str(key), str(key)): value for key, value in calls.items()
-        }
-        for row in linkage.get("rows", []):
-            if isinstance(row, dict):
-                replace_field(row, "frontend_repo_id", "frontend_repository_ref")
-                replace_field(row, "repo_id", "repository_ref")
-        linkage["notes"] = _externalize_notes(linkage.get("notes", []), replacements)
+    # route_inventory/ui_route_linkage externalization retired here (57B-84
+    # B2): the stage-1 report never carries these fields any more (see
+    # discovery/emit.py's own retirement comment) — RouteInventoryProvider/
+    # UiRouteLinkageProvider write already-externalized repository_ref
+    # identity directly (via context.identities), and routes.emit.assemble
+    # produces routes/route-inventory.json + routes/ui-route-linkage.json
+    # straight from those fragments, with no discovery-report rewrite pass
+    # needed. load_discovery_report's own legacy-field rejection below is
+    # UNCHANGED — it still guards a stale pre-57B-84-B2 run directory whose
+    # discovery-report.json was written before this field moved.
 
     projected["schema_version"] = "2.0.0"
     return projected

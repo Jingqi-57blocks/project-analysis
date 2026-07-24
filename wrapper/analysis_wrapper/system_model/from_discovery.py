@@ -8,6 +8,8 @@ they carry is disclosed in coverage instead). ``table_evidence``,
 ``access_model``, ``integration_evidence``, and ``deployable_units`` all
 come from their own capability provider's artifacts now (57B-80 PR3, 57B-82
 A1, 57B-84), not the discovery report — see ``load``'s ``*_by_repo`` params.
+``route_inventory``/``ui_route_linkage`` (57B-84 B2) likewise come from
+``routes.emit.assemble``'s own run-level docs, not the discovery report.
 
 Emits, per repo: one ``repository`` node (with stack/provenance/access-model
 attributes), ``route`` nodes + ``route-linkage`` edges, ``data-store`` nodes +
@@ -37,7 +39,9 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
          table_evidence_by_repo: dict[str, dict] | None = None,
          access_model_by_repo: dict[str, dict] | None = None,
          integration_evidence_by_repo: dict[str, dict] | None = None,
-         deploy_units_by_repo: dict[str, dict] | None = None) -> dict:
+         deploy_units_by_repo: dict[str, dict] | None = None,
+         route_inventory: dict | None = None,
+         ui_route_linkage: dict | None = None) -> dict:
     """Populate ``builder`` from ``targets.json`` (spec) + ``discovery-report``.
 
     ``table_evidence_by_repo`` (57B-80 PR3), ``access_model_by_repo``, and
@@ -55,6 +59,14 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
     ``block["deployable_units"]`` inline field — see
     ``identity.load_deploy_units_by_repo``. ``_deploy`` below stays
     byte-for-byte unchanged, just fed from elsewhere.
+
+    ``route_inventory``/``ui_route_linkage`` (57B-84 B2) are the
+    ``routes.emit.assemble``-produced run-level docs (``routes/route-
+    inventory.json``/``routes/ui-route-linkage.json``), replacing the
+    retired ``report["route_inventory"]``/``report["ui_route_linkage"]``
+    top-level fields — ``_routes`` below stays byte-for-byte unchanged, just
+    fed from elsewhere. Each is ``None`` (not ``{}``) when genuinely absent,
+    same as the retired stage-1 report fields' own ``None`` case.
 
     Returns per-partition presence flags used by coverage (e.g. whether the
     detailed route artifact existed)."""
@@ -77,9 +89,8 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
         _deploy(builder, repo_identity.reference, heads,
                 deploy_units_by_repo.get(repo_identity.reference, {}))
     _candidates(builder, spec, identities)
-    inventory = report.get("route_inventory")
-    linkage = report.get("ui_route_linkage")
-    routes_present = _routes(builder, heads, inventory, linkage, identities)
+    routes_present = _routes(
+        builder, heads, route_inventory, ui_route_linkage, identities)
     return {"routes_present": routes_present,
             "route_summary_capped": _summary_route_cap(blocks)}
 

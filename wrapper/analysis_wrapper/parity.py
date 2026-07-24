@@ -374,7 +374,12 @@ def _provider_execution_reasons(
 
 
 def _noise_strip_discovery(doc: dict) -> dict:
-    """Deep copy of ``doc`` with only machine-local/tool-identity fields removed."""
+    """Deep copy of ``doc`` with only machine-local/tool-identity fields removed.
+
+    ``route_inventory``'s own tool-identity fields are stripped by
+    ``_noise_strip_route_inventory`` instead (57B-84 B2: that doc is no
+    longer embedded here — it lives in its own ``routes/route-
+    inventory.json`` run-level artifact)."""
     projected = json.loads(json.dumps(doc))
     projected.pop("workspace_root", None)
     for repo in projected.get("repos", []):
@@ -382,11 +387,18 @@ def _noise_strip_discovery(doc: dict) -> dict:
             provenance = repo.get("provenance")
             if isinstance(provenance, dict):
                 provenance.pop("path", None)
-    inventory = projected.get("route_inventory")
-    if isinstance(inventory, dict):
-        inventory.pop("tool_path", None)
-        inventory.pop("tool_version", None)
-        inventory.pop("version_drift", None)
+    return projected
+
+
+def _noise_strip_route_inventory(doc: dict) -> dict:
+    """Deep copy of the standalone ``route-inventory.json`` doc with only
+    its tool-identity fields removed (57B-84 B2: split out of
+    ``_noise_strip_discovery`` when route_inventory moved to its own
+    artifact)."""
+    projected = json.loads(json.dumps(doc))
+    projected.pop("tool_path", None)
+    projected.pop("tool_version", None)
+    projected.pop("version_drift", None)
     return projected
 
 
@@ -405,9 +417,14 @@ def _discovery_facets(doc: dict) -> dict[tuple[str, str], dict]:
     return result
 
 
-def _discovery_evidence_rows(doc: dict) -> set[str]:
+def _discovery_evidence_rows(doc: dict, route_inventory: dict | None = None,
+                            ui_route_linkage: dict | None = None) -> set[str]:
     """Canonical-row set for everything in discovery NOT already covered by
-    ``_discovery_facets`` (technology_facets) or the prose lanes."""
+    ``_discovery_facets`` (technology_facets) or the prose lanes.
+
+    ``route_inventory``/``ui_route_linkage`` (57B-84 B2) are the standalone
+    ``routes.emit.assemble`` docs, passed in separately now that they are no
+    longer embedded fields on ``doc`` itself."""
     rows: set[str] = set()
     for repo in doc.get("repos", []):
         if not isinstance(repo, dict):
@@ -415,11 +432,9 @@ def _discovery_evidence_rows(doc: dict) -> set[str]:
         remainder = {k: v for k, v in repo.items()
                      if k not in {"technology_facets", "notes"}}
         rows.add(json.dumps(remainder, sort_keys=True))
-    inventory = doc.get("route_inventory") or {}
-    for row in inventory.get("rows", []):
+    for row in (route_inventory or {}).get("rows", []):
         rows.add(json.dumps(row, sort_keys=True))
-    linkage = doc.get("ui_route_linkage") or {}
-    for row in linkage.get("rows", []):
+    for row in (ui_route_linkage or {}).get("rows", []):
         rows.add(json.dumps(row, sort_keys=True))
     role_catalog = doc.get("role_catalog_by_repository", {})
     for repository_ref, roles in role_catalog.items():
@@ -544,6 +559,7 @@ def _baseline(
 def _collect_tool_versions(
     callgraph_doc: dict | None, depmap_doc: dict | None,
     discovery_doc: dict | None, provenance_doc: dict | None,
+    route_inventory_doc: dict | None = None,
 ) -> dict[str, set[str]]:
     versions: dict[str, set[str]] = {}
 
@@ -555,7 +571,9 @@ def _collect_tool_versions(
         add(row.get("tool", ""), row.get("tool_version", ""))
     for row in (depmap_doc or {}).get("repos", []):
         add(row.get("tool", ""), row.get("tool_version", ""))
-    inventory = (discovery_doc or {}).get("route_inventory") or {}
+    # 57B-84 B2: route_inventory's tool identity comes from the standalone
+    # routes/route-inventory.json doc now, not an embedded discovery field.
+    inventory = route_inventory_doc or {}
     add(inventory.get("tool", ""), inventory.get("tool_version", ""))
     for row in (provenance_doc or {}).get("tool_versions", []):
         add(row.get("tool", ""), row.get("version", ""))
@@ -593,6 +611,11 @@ def _load_all(run: Path) -> dict[str, dict | None]:
         "depmap": _load_json(run / "imports" / "depmap-coverage.json"),
         "signals": _load_json(run / "signals" / "run-summary.json"),
         "discovery": discovery,
+        # 57B-84 B2: route_inventory/ui_route_linkage moved from top-level
+        # discovery-report.json fields to their own routes.emit.assemble
+        # run-level docs — read from there now, same as callgraph/depmap.
+        "route_inventory": _load_json(run / "routes" / "route-inventory.json"),
+        "ui_route_linkage": _load_json(run / "routes" / "ui-route-linkage.json"),
         "provenance": _load_json(run / "run-provenance.json"),
         "identity": _load_json(run / "identity-map.json"),
         "provider_execution": _load_json(run / "provider-execution.json"),
@@ -643,9 +666,11 @@ def compare(base_run: str | Path, candidate_run: str | Path) -> dict[str, Any]:
     )
     tool_drift = _tool_drift(
         _collect_tool_versions(base_docs["callgraph"], base_docs["depmap"],
-                               base_docs["discovery"], base_docs["provenance"]),
+                               base_docs["discovery"], base_docs["provenance"],
+                               base_docs["route_inventory"]),
         _collect_tool_versions(candidate_docs["callgraph"], candidate_docs["depmap"],
-                               candidate_docs["discovery"], candidate_docs["provenance"]),
+                               candidate_docs["discovery"], candidate_docs["provenance"],
+                               candidate_docs["route_inventory"]),
     )
 
     sections: dict[str, dict[str, Any]] = {}
@@ -681,13 +706,21 @@ def compare(base_run: str | Path, candidate_run: str | Path) -> dict[str, Any]:
     candidate_discovery = (
         _noise_strip_discovery(candidate_docs["discovery"])
         if candidate_docs["discovery"] is not None else None)
+    base_route_inventory = (
+        _noise_strip_route_inventory(base_docs["route_inventory"])
+        if base_docs["route_inventory"] is not None else None)
+    candidate_route_inventory = (
+        _noise_strip_route_inventory(candidate_docs["route_inventory"])
+        if candidate_docs["route_inventory"] is not None else None)
     sections["discovery_facets"] = _section(
         _discovery_facets(base_discovery) if base_discovery is not None else None,
         _discovery_facets(candidate_discovery) if candidate_discovery is not None else None)
     sections["discovery_evidence"] = _section(
-        _rows_to_set_map(_discovery_evidence_rows(base_discovery))
+        _rows_to_set_map(_discovery_evidence_rows(
+            base_discovery, base_route_inventory, base_docs["ui_route_linkage"]))
         if base_discovery is not None else None,
-        _rows_to_set_map(_discovery_evidence_rows(candidate_discovery))
+        _rows_to_set_map(_discovery_evidence_rows(
+            candidate_discovery, candidate_route_inventory, candidate_docs["ui_route_linkage"]))
         if candidate_discovery is not None else None)
     sections["provider_execution"] = _section(
         _provider_execution(base_docs["provider_execution"]),
