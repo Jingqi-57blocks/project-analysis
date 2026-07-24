@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from .contracts import CapabilityProvider, Fingerprint, Profile
 from .providers import (CallgraphGoProvider, CallgraphJsProvider,
-                        DatastoreEvidenceProvider, DepmapGoProvider,
-                        DepmapJsProvider)
+                        DatastoreEvidenceProvider, DeployUnitsProvider,
+                        DepmapGoProvider, DepmapJsProvider)
 from .registry import ProfileRegistry
 
 
@@ -150,6 +150,13 @@ BUNDLED_PROFILES: tuple[Profile, ...] = (
 BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
     CallgraphGoProvider(), CallgraphJsProvider(),
     DatastoreEvidenceProvider(),
+    # DeployUnitsProvider (57B-82 A1) is the first BUNDLED provider with
+    # empty profile_ids: no detected facet predicts a deploy artifact's
+    # presence, so it has nothing to link to. It is still selected on every
+    # target via `universal=True` — registry.py's own carve-out for exactly
+    # this shape (a universal provider can never be "dead" the way an
+    # unlinked, non-universal one would be).
+    DeployUnitsProvider(),
     DepmapGoProvider(), DepmapJsProvider(),
 )
 

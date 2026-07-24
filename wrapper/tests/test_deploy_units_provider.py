@@ -9,16 +9,13 @@ compose service, Go ``package main`` entrypoint, CI deploy step) plus a bare
 fixture with none, to prove ``status="unknown"`` is emitted rather than an
 empty/absent result.
 
-NOTE — no conformance-battery test here (unlike every other bundled provider):
-``DeployUnitsProvider.profile_ids`` is intentionally ``()`` (see the class's
-own docstring in ``profiles/providers.py``), and both
-``profiles.registry.ProfileRegistry`` and
-``tests/provider_conformance.py::run_provider_conformance`` currently require
-a provider to carry at least one linked profile — the former raises at
-construction time, the latter's step 2 asserts a matched profile. Registering
-this provider in ``profiles/bundled.py::BUNDLED_PROVIDERS`` and running it
-through the shared battery are BOTH blocked on that pending decision (flagged
-separately); this file exercises everything that does not require either.
+Also runs the shared conformance battery via ``run_provider_conformance``'s
+zero-profile ``profile=None`` shape (``profiles/registry.py`` and
+``tests/provider_conformance.py`` both gained a carve-out for exactly this —
+a ``universal`` provider with empty ``profile_ids``, since no detected facet
+predicts a deploy artifact's presence): ``test_conformance.py`` already pins
+that MECHANISM generically with a synthetic provider; the test below proves
+the REAL ``DeployUnitsProvider`` passes it too.
 """
 
 from __future__ import annotations
@@ -28,10 +25,12 @@ from pathlib import Path
 
 from analysis_wrapper import identity
 from analysis_wrapper.discovery import deploy_units
+from analysis_wrapper.profiles.bundled import bundled_registry
 from analysis_wrapper.profiles.contracts import RunContext
 from analysis_wrapper.profiles.providers import DeployUnitsProvider
 from analysis_wrapper.profiles.tool_access import ExecutorToolAccess
 from analysis_wrapper.targetspec import RepoTarget, TargetSpec, stable_repo_id
+from provider_conformance import run_provider_conformance
 
 
 def _run_context(spec: TargetSpec, run_dir: Path, identities) -> RunContext:
@@ -44,19 +43,26 @@ def _run_context(spec: TargetSpec, run_dir: Path, identities) -> RunContext:
     )
 
 
-def _mixed_repo(tmp_path: Path) -> Path:
-    """One of each artifact kind ``deploy_units.generate`` detects."""
-    repo = tmp_path / "svc"
-    (repo / "deploy").mkdir(parents=True)
+def _populate_mixed_artifacts(repo: Path) -> None:
+    """One of each artifact kind ``deploy_units.generate`` detects, written
+    into an already-prepared repo directory (the ``repo_setup`` callback
+    shape ``run_provider_conformance`` expects for a zero-profile provider)."""
+    (repo / "deploy").mkdir(parents=True, exist_ok=True)
     (repo / "deploy" / "docker-compose.yml").write_text(
         "services:\n  api:\n    build: .\n  cache:\n    image: redis:7\n", "utf-8")
     (repo / "Dockerfile").write_text("FROM scratch\n", "utf-8")
-    (repo / "cmd" / "svc").mkdir(parents=True)
+    (repo / "cmd" / "svc").mkdir(parents=True, exist_ok=True)
     (repo / "cmd" / "svc" / "main.go").write_text(
         "package main\nfunc main() {}\n", "utf-8")
     (repo / "bitbucket-pipelines.yml").write_text(
         "pipelines:\n  default:\n    - step:\n        script:\n          - deploy\n",
         "utf-8")
+
+
+def _mixed_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "svc"
+    repo.mkdir(parents=True)
+    _populate_mixed_artifacts(repo)
     return repo
 
 
@@ -148,3 +154,22 @@ def test_provider_writes_no_source_ref_with_a_raw_internal_repo_id(tmp_path):
     artifact_key = context.identities.artifact_key_for(target.repo_id)
     assert result.artifact_refs[0].path == f"deploy/{artifact_key}.json"
     assert target.repo_id not in result.artifact_refs[0].path
+
+
+# ---------------------------------------------------------------------------
+# Conformance battery (zero-profile universal shape) + registration.
+# ---------------------------------------------------------------------------
+
+
+def test_deploy_units_provider_conforms_via_zero_profile_battery_shape(tmp_path):
+    run_provider_conformance(
+        None, DeployUnitsProvider(), tmp_path=tmp_path, repo_setup=_populate_mixed_artifacts)
+
+
+def test_bundled_deploy_units_provider_is_registered_zero_profile_universal():
+    registry = bundled_registry()
+    provider = registry.provider("deploy-units")
+    assert isinstance(provider, DeployUnitsProvider)
+    assert provider.profile_ids == ()
+    assert getattr(provider, "universal", False) is True
+    assert provider.capability_id == "deployable-units"

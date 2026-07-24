@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -251,8 +252,9 @@ class ConformanceProvider:
 # ---------------------------------------------------------------------------
 
 
-def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path,
-                             extra_profiles: tuple[Profile, ...] = ()) -> None:
+def run_provider_conformance(profile: "Profile | None", provider, *, tmp_path: Path,
+                             extra_profiles: tuple[Profile, ...] = (),
+                             repo_setup: "Callable[[Path], None] | None" = None) -> None:
     """Run every conformance step for one (profile, provider) pair.
 
     ``extra_profiles`` is for a MULTI-profile provider (one whose
@@ -262,51 +264,96 @@ def run_provider_conformance(profile: Profile, provider, *, tmp_path: Path,
     references (``ProfileRegistry`` rejects a provider that names an unknown
     profile), even though this battery only asserts DETECTION for the
     primary ``profile`` argument.
-    """
-    marker = profile.fingerprints[0].value
-    fingerprint_kind = profile.fingerprints[0].kind
-    repo = make_repo(tmp_path / "target", marker=marker, profile_id=profile.profile_id,
-                     fingerprint_kind=fingerprint_kind)
-    workspace = tmp_path / "target"
-    is_bundled = profile.profile_id in {
-        item.profile_id for item in bundled_registry().profiles}
 
-    # 1. Detection.
-    if is_bundled:
-        report = detection.detect(repo.path)
-        assert any(facet.profile_id == profile.profile_id for facet in report.facets), (
-            f"bundled detect() did not observe {profile.profile_id!r} from its "
-            "own fingerprint marker")
+    ``profile=None`` is for a ZERO-profile ``universal`` provider (57B-82
+    A1's deploy-units provider is the first: no detected facet predicts its
+    capability's presence, so ``provider.profile_ids`` is deliberately empty
+    — see ``profiles.registry.ProfileRegistry``'s own carve-out for exactly
+    this shape). Such a provider has no fingerprint to detect and can never
+    appear in a real ``matched_profiles`` list, so ONLY the facet-matching-
+    specific checks below (fingerprint detection, the
+    matched_profiles-contains-profile assertion) are skipped for it — every
+    other step still runs unchanged. ``repo_setup`` is the zero-profile
+    counterpart of the fingerprint-driven ``make_repo`` call: an optional
+    callback given the prepared (otherwise empty) repo directory to populate
+    with whatever real fixture content that provider needs (e.g.
+    deploy-units' own Dockerfile/compose/CI-file fixture) — ignored when
+    ``profile`` is given. Battery step 9 (universal bare-repo selection,
+    below) is the real selection proof for this shape, exactly as it already
+    is for a universal provider that DOES carry linked profiles.
+    """
+    zero_profile = profile is None
+    if zero_profile:
+        if not getattr(provider, "universal", False) or provider.profile_ids:
+            raise ValueError(
+                "run_provider_conformance(profile=None, ...) is only for a provider "
+                "that is BOTH universal AND has empty profile_ids"
+            )
+        repo_path = tmp_path / "target"
+        repo_path.mkdir(parents=True, exist_ok=True)
+        if repo_setup is not None:
+            repo_setup(repo_path)
+        repo = RepoTarget(repo_id=stable_repo_id(str(repo_path)), path=str(repo_path))
+        workspace = repo_path
     else:
-        assert (Path(repo.path) / marker).is_file(), (
-            "conformance repo is missing the fingerprint marker its own profile names")
-        constructed = TechnologyFacet(
-            profile_id=profile.profile_id, kind=profile.kind,
-            scope_roots=["."], evidence=[marker])
-        assert constructed.profile_id == profile.profile_id, (
-            "a facet built the way discovery would must carry the profile's own id")
+        marker = profile.fingerprints[0].value
+        fingerprint_kind = profile.fingerprints[0].kind
+        repo = make_repo(tmp_path / "target", marker=marker, profile_id=profile.profile_id,
+                         fingerprint_kind=fingerprint_kind)
+        workspace = tmp_path / "target"
+        is_bundled = profile.profile_id in {
+            item.profile_id for item in bundled_registry().profiles}
+
+        # 1. Detection (skipped for a zero-profile provider — nothing to
+        # detect: see the docstring above).
+        if is_bundled:
+            report = detection.detect(repo.path)
+            assert any(facet.profile_id == profile.profile_id for facet in report.facets), (
+                f"bundled detect() did not observe {profile.profile_id!r} from its "
+                "own fingerprint marker")
+        else:
+            assert (Path(repo.path) / marker).is_file(), (
+                "conformance repo is missing the fingerprint marker its own profile names")
+            constructed = TechnologyFacet(
+                profile_id=profile.profile_id, kind=profile.kind,
+                scope_roots=["."], evidence=[marker])
+            assert constructed.profile_id == profile.profile_id, (
+                "a facet built the way discovery would must carry the profile's own id")
 
     identities = make_identities(workspace, [repo])
-    registry = ProfileRegistry((profile, *extra_profiles), (provider,))
+    registry_profiles = tuple(extra_profiles) if zero_profile else (profile, *extra_profiles)
+    registry = ProfileRegistry(registry_profiles, (provider,))
     spec = TargetSpec([repo])
 
-    # 2. Applicability: the provider is selected exactly once, and every
-    # matching facet's profile id is disclosed.
+    # 2. Applicability: the provider is selected exactly once. A provider
+    # with real linked profiles discloses every matching facet's profile id;
+    # a zero-profile universal provider discloses none (it was selected on
+    # universal grounds, not a facet match — the same disclosure battery
+    # step 9 already proves for a bare repo).
     context = make_context(spec, tmp_path, tool_access=_StatusStub(status=Status.COMPLETE),
                            identities=identities)
     results, rows = run_providers(registry, context)
     matches = [row for row in rows if row["provider_id"] == provider.provider_id]
     assert len(matches) == 1, "an applicable provider must be selected exactly once"
     row = matches[0]
-    assert profile.profile_id in row["matched_profiles"]
+    if zero_profile:
+        assert row["matched_profiles"] == []
+        assert row.get("universal") is True
+    else:
+        assert profile.profile_id in row["matched_profiles"]
 
-    # 3. Deterministic registration.
-    assert ProfileRegistry((profile, *extra_profiles), (provider,)).profiles == registry.profiles
-    assert ProfileRegistry((profile, *extra_profiles), (provider,)).providers == registry.providers
+    # 3. Deterministic registration. Duplicate-profile-id / malformed-profile
+    # rejection are generic ProfileRegistry behaviors, unrelated to whether
+    # THIS provider links to any profile — exercised with a throwaway
+    # synthetic profile for the zero-profile case rather than skipped.
+    assert ProfileRegistry(registry_profiles, (provider,)).profiles == registry.profiles
+    assert ProfileRegistry(registry_profiles, (provider,)).providers == registry.providers
+    dup_check_profile = profile if profile is not None else make_profile(
+        profile_id="conformance-zero-profile-dup-check")
     with pytest.raises(ValueError, match="duplicate profile_id"):
-        ProfileRegistry((profile, profile), (provider,))
+        ProfileRegistry((dup_check_profile, dup_check_profile), (provider,))
     with pytest.raises(ValueError, match="explicit Profile"):
-        ProfileRegistry(({"profile_id": profile.profile_id},), (provider,))
+        ProfileRegistry(({"profile_id": dup_check_profile.profile_id},), (provider,))
 
     # 4. Deterministic execution: identical inputs -> identical record rows,
     # and byte-identical written artifacts.

@@ -92,6 +92,22 @@ def test_universal_provider_conforms_and_is_selected_with_zero_matched_facets(tm
     run_provider_conformance(profile, provider, tmp_path=tmp_path)
 
 
+def test_zero_profile_universal_provider_conforms_via_profile_none(tmp_path):
+    """57B-82 A1's zero-profile universal-provider shape, proven generic: a
+    purely synthetic provider with ``profile_ids=()`` and ``universal=True``
+    still passes the full battery through ``profile=None`` — including step
+    9's bare-repo selection proof — exactly as the linked-profile universal
+    case above does. The underlying selection code (``registry.py``'s
+    empty-profile carve-out, ``execution.py``'s loop) has no branch tied to
+    any concrete capability or profile, mirroring how the universal flag
+    itself got a synthetic test in 57B-80 PR2."""
+    provider = ConformanceProvider(
+        provider_id="conformance-provider-zero-profile-universal",
+        capability_id="conformance-capability",
+        profile_ids=(), behavior="facts", universal=True)
+    run_provider_conformance(None, provider, tmp_path=tmp_path)
+
+
 def test_bundled_registry_conforms_structurally():
     """The bundled registry itself is a valid, deterministic, closed catalog
     (57B-81 PR2 populated BUNDLED_PROVIDERS with the four migrated
