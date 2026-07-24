@@ -119,8 +119,30 @@ def _family_groups(repos: list) -> dict[str, list]:
     return groups
 
 
+def _skill_version() -> str:
+    """Single source of the skill version: the VERSION file at the skill root.
+
+    Resolved from this module's own location (…/wrapper/analysis_wrapper/cli.py
+    -> skill root is parents[2]) so it works from any working directory and under
+    any host that invokes the wrapper by absolute path.
+    """
+    try:
+        text = (Path(__file__).resolve().parents[2] / "VERSION").read_text("utf-8")
+        return text.strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
+def _version_string() -> str:
+    from . import __version__ as pkg
+    return (f"Project Analysis skill {_skill_version()} "
+            f"(analysis-wrapper package {pkg})")
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="project-analysis-wrapper")
+    result.add_argument("--version", action="version", version=_version_string(),
+                        help="print the skill version and exit")
     result.add_argument("--targets", help="TargetSpec JSON from discovery "
                                           "(required for run/sweep)")
     result.add_argument("--out",

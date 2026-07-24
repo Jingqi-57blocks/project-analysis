@@ -11,6 +11,19 @@ zero target-specific configuration and produces:
 First-class stack support in v1: **JS/TS and Go**. Other stacks are analyzed with
 explicitly disclosed reduced coverage.
 
+## Supported platforms
+
+- **macOS** and **Linux** — supported and validated.
+- **WSL2** — supported (treated as Linux).
+- **Native Windows** — not supported in v1.
+
+The one hard prerequisite is **Python 3.11+**; everything else is either set up on first
+run or gracefully degraded to disclosed reduced coverage. The machine-readable toolchain
+inventory (ownership, lanes, validated versions, install source, platform support) lives
+in [`tools/manifest.json`](tools/manifest.json), validated against
+[`tools/manifest.schema.json`](tools/manifest.schema.json); the human-readable companion is
+[`tools/README.md`](tools/README.md).
+
 ## Status
 
 **Phase 1 complete.** The static-analysis foundation (call graphs for JS/TS + Go,
