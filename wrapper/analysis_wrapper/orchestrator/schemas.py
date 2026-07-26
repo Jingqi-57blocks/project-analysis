@@ -54,22 +54,65 @@ SIGNAL_STATUSES = {"complete", "partial", "failed", "skipped"}
 # Defined once here and reused by ``validators.py`` for the structural half
 # of its citation check, so the grammar itself never drifts between the two
 # modules — ``validators.py`` alone resolves a ref against a real run dir.
-SOURCE_REF = re.compile(r"^[^@\s]+@[^:\s]+:[^:\s]+(?:/[^:\s]+)*:[0-9]+$")
-SIGNAL_REF = re.compile(r"^signals/[^:\s]+:[0-9]+$")
-METRIC_REF = re.compile(r"^metric:.+$")
+#
+# These MIRROR findings.py's own private grammar exactly (``_SIGNAL``,
+# ``_METRIC``, ``_source_parts``) — verified byte-for-byte by
+# test_orchestrator_schemas.py's drift-lock test, which imports those
+# findings.py privates directly (test-only; production code here never
+# imports from findings.py). Do not "improve" these independently of
+# findings.py without updating that test.
+SIGNAL_REF = re.compile(r"^signals/([^:]+):(\d+)$")
+METRIC_REF = re.compile(r"^(?:metric:|workspace-metrics\.json#metric:)(.+)$")
+
+
+def signal_ref_parts(ref: str) -> tuple[str, str] | None:
+    """``(relative_view_path, line_text)`` — mirrors findings.py's ``_SIGNAL``
+    exactly: the view-path segment allows any character except a colon
+    (including whitespace and additional ``/`` separators)."""
+    match = SIGNAL_REF.fullmatch(ref)
+    return match.groups() if match else None
+
+
+def metric_ref_id(ref: str) -> str | None:
+    """The bare ``metric_ref`` id, accepting either the short ``metric:`` form
+    or the long ``workspace-metrics.json#metric:`` form — mirrors findings.py's
+    ``_METRIC`` exactly."""
+    match = METRIC_REF.fullmatch(ref)
+    return match.group(1) if match else None
+
+
+def source_ref_parts(ref: str) -> tuple[str, str, str, str] | None:
+    """``(repository_ref, revision, relative_path, line_text)`` — mirrors
+    findings.py's ``_source_parts`` exactly (rpartition/partition based, NOT
+    a single regex): the repository ref may itself contain ``@`` (only the
+    LAST ``@`` splits repo from revision+position), and the path may contain
+    colons or whitespace (only the LAST ``:`` before the run splits path from
+    line — everything after it must be all digits)."""
+    repository_ref, marker, tail = ref.rpartition("@")
+    revision, separator, position = tail.partition(":")
+    relative, line_separator, line = position.rpartition(":")
+    if not marker or not separator or not line_separator or not repository_ref \
+            or not revision or not relative or not line.isdigit():
+        return None
+    return repository_ref, revision, relative, line
 
 
 def citation_grammar_kind(ref: str) -> str | None:
-    """``"source" | "signal" | "metric" | None`` (unrecognized grammar)."""
+    """``"source" | "signal" | "metric" | None`` (unrecognized grammar).
+
+    Dispatch priority mirrors findings.py's own ``_validate_ref``: a
+    ``metric:``/``workspace-metrics.json#metric:`` prefix is checked first;
+    a ``signals/`` prefix then COMMITS to signal-ref grammar (it is never
+    retried as a source ref, even if the signal grammar itself fails) —
+    otherwise the ref is checked as a source ref.
+    """
     if not isinstance(ref, str) or not ref:
         return None
     if METRIC_REF.fullmatch(ref):
         return "metric"
-    if SIGNAL_REF.fullmatch(ref):
-        return "signal"
-    if SOURCE_REF.fullmatch(ref):
-        return "source"
-    return None
+    if ref.startswith("signals/"):
+        return "signal" if SIGNAL_REF.fullmatch(ref) else None
+    return "source" if source_ref_parts(ref) is not None else None
 
 
 class _Failures:

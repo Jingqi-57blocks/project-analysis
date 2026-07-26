@@ -25,7 +25,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .. import identity
 from ..overview_audit import _pm_reading_minutes
 from ..targetspec import TargetSpec
-from .schemas import citation_grammar_kind
+from .schemas import citation_grammar_kind, metric_ref_id, signal_ref_parts, source_ref_parts
 
 Failure = dict[str, str]
 
@@ -67,16 +67,6 @@ def _metric_ref_set(run: Path) -> set[str]:
     metrics = _load_json_object(run / "workspace-metrics.json", "workspace-metrics.json")
     return {str(row.get("metric_ref", "")) for row in metrics.get("metrics", [])
             if isinstance(row, dict)}
-
-
-def _source_ref_parts(ref: str) -> tuple[str, str, str, int] | None:
-    repository_ref, marker, tail = ref.rpartition("@")
-    revision, separator, position = tail.partition(":")
-    relative, line_separator, line_text = position.rpartition(":")
-    if not marker or not separator or not line_separator or not repository_ref \
-            or not revision or not relative or not line_text.isdigit():
-        return None
-    return repository_ref, revision, relative, int(line_text)
 
 
 def _safe_relative(value: str) -> PurePosixPath | None:
@@ -152,7 +142,8 @@ def validate_citations(refs: Sequence[str | Mapping[str, Any]],
             continue
 
         if kind == "metric":
-            if ref[len("metric:"):] not in metric_refs:
+            metric_id = metric_ref_id(ref)
+            if metric_id not in metric_refs:
                 failures.append(_failure(
                     "citation-metric-unknown", f"unknown metric ref: {ref!r}", location))
             if quote is not None:
@@ -162,7 +153,7 @@ def validate_citations(refs: Sequence[str | Mapping[str, Any]],
             continue
 
         if kind == "signal":
-            relative, _, line_part = ref[len("signals/"):].rpartition(":")
+            relative, line_part = signal_ref_parts(ref)
             if relative not in allowed_views:
                 failures.append(_failure(
                     "citation-signal-not-indexed",
@@ -184,12 +175,13 @@ def validate_citations(refs: Sequence[str | Mapping[str, Any]],
             continue
 
         # kind == "source"
-        parts = _source_ref_parts(ref)
+        parts = source_ref_parts(ref)
         if parts is None:
             failures.append(_failure(
                 "citation-grammar", f"unrecognized source citation: {ref!r}", location))
             continue
-        repository_ref, revision, relative, line = parts
+        repository_ref, revision, relative, line_text = parts
+        line = int(line_text)
         try:
             target = spec.repo(identities.internal_id_for(repository_ref))
         except KeyError:

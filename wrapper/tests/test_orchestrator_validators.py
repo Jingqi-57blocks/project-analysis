@@ -1,12 +1,13 @@
 """Evidence/prose validator tests (57B-114 M0)."""
 
 import json
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # wrapper/ on path
 
-from analysis_wrapper import identity
+from analysis_wrapper import identity, overview_audit
 from analysis_wrapper.orchestrator import validators
 from analysis_wrapper.targetspec import TargetSpec, stable_repo_id
 
@@ -277,6 +278,18 @@ def test_reading_budget_report_flags_marker_integrity_problems():
     empty_block = "<!-- BEGIN X -->\n<!-- END X -->\n"
     report = validators.reading_budget_report(empty_block, spec)
     assert report["floors"]["marker_problems"]
+
+
+def test_reading_ceiling_stays_lockstep_with_overview_audits_pm_reading_budget():
+    """validators.READING_CEILING_MINUTES duplicates a literal that lives
+    inline in overview_audit.py's "pm-reading-budget" check (that module
+    exposes no named constant for it). Extract the literal from its ACTUAL
+    source rather than hand-copying the number a second time, so a future
+    change to the audit's budget can't silently diverge from this module."""
+    source = Path(overview_audit.__file__).read_text("utf-8")
+    match = re.search(r"minutes <= (\d+(?:\.\d+)?)", source)
+    assert match, "overview_audit.py's pm-reading-budget comparison literal was not found"
+    assert float(match.group(1)) == validators.READING_CEILING_MINUTES
 
 
 def test_reading_budget_report_flags_exceeded_ceiling():

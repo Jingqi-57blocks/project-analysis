@@ -196,7 +196,14 @@ RULE_GATE_TABLE: tuple[RuleGateEntry, ...] = (
     _entry("accuracy",
           'An aggregated "no notable concerns" row must not cover a module that has a '
           "finding.",
-          gate_kind="prose_only", prose_tag="section-generate:overview.md#section-13"),
+          gate_kind="prose_only", prose_tag="section-generate:overview.md#section-13",
+          note="prose_only is the correct call for M0 (rendering §13 today is free-form "
+               "prose). The PLANNED M3 deterministic §13 render (module-changeability "
+               "table generated mechanically from findings.json + module-map.json rather "
+               "than drafted) will subsume this rule BY CONSTRUCTION once it lands — "
+               "recorded here so a future pass upgrades this table entry to a gate "
+               "alongside that work, rather than someone doing the upgrade in isolation "
+               "before the mechanism it depends on exists."),
     _entry("accuracy", "Lens coverage status is computed over REQUIRED signals.",
           gate_kind="prose_only", prose_tag="lens-findings:coverage"),
     _entry("accuracy", "One disposition per external candidate.", gate_kind="prose_only",

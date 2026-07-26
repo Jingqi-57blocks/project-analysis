@@ -32,6 +32,65 @@ def test_citation_grammar_kind_recognizes_all_three_forms():
     assert schemas.citation_grammar_kind("") is None
 
 
+# Drift-lock corpus: (ref, expected_kind_or_None). Every entry below exercises
+# one of the three findings.py divergences a review caught (long-form metric
+# prefix; source refs whose repo contains "@" or whose path contains a colon
+# or a space; signal refs whose view name contains whitespace) plus a set of
+# ordinary valid/invalid refs. The test below asserts schemas.py's verdict
+# against findings.py's OWN parsing functions for every entry, so agreement
+# is proven fresh each run rather than merely re-asserted by a second
+# independent implementation that could quietly drift again later.
+_CITATION_GRAMMAR_CORPUS: list[tuple[str, str | None]] = [
+    # metric — both the short and the long (source-of-truth) forms.
+    ("metric:code.analyzed-scope.total", "metric"),
+    ("workspace-metrics.json#metric:code.analyzed-scope.total", "metric"),
+    ("metric:", None),
+    ("notmetric:code.x", None),
+    # signal — a view path may contain "/" and even whitespace (only ":" is
+    # excluded); missing/non-digit line numbers are rejected.
+    ("signals/x.view.txt:5", "signal"),
+    ("signals/imports/x.view.txt:2", "signal"),
+    ("signals/my view.txt:1", "signal"),
+    ("signals/x.view.txt", None),
+    ("signals/x.view.txt:abc", None),
+    # a "signals/"-prefixed string COMMITS to signal grammar and is never
+    # retried as a source ref, even though it happens to parse as one.
+    ("signals/foo@bar:baz:5", None),
+    # source — repo may contain "@" (only the LAST "@" splits it off); the
+    # path may contain colons and spaces (only the LAST ":" before a
+    # digits-only tail splits path from line).
+    ("api@" + "a" * 40 + ":internal/my file.go:5", "source"),
+    ("api@REV:internal/weird:name.go:9", "source"),
+    ("weird@repo@REV:path/to/file.go:3", "source"),
+    ("api@WORKTREE:src/index.ts:10", "source"),
+    ("api@NON-GIT:src/index.ts:1", "source"),
+    ("api@REV:path/to/file.go", None),           # no line number
+    ("api@REV:path/to/file.go:abc", None),       # non-digit line
+    ("api@:path/to/file.go:5", None),            # empty revision
+    ("path/to/file.go:5", None),                 # no "@" at all
+    ("@REV:path/to/file.go:5", None),            # empty repository_ref
+]
+
+
+def test_citation_grammar_matches_findings_py_exactly_on_a_tricky_corpus():
+    # Test-only: production code in this package never imports findings.py.
+    from analysis_wrapper import findings as findings_module
+
+    for ref, expected in _CITATION_GRAMMAR_CORPUS:
+        assert schemas.citation_grammar_kind(ref) == expected, ref
+
+        metric_match = findings_module._METRIC.fullmatch(ref)
+        if metric_match:
+            findings_kind = "metric"
+        elif ref.startswith("signals/"):
+            findings_kind = "signal" if findings_module._SIGNAL.fullmatch(ref) else None
+        else:
+            findings_kind = "source" if findings_module._source_parts(ref) else None
+
+        assert findings_kind == expected, ref
+        assert schemas.citation_grammar_kind(ref) == findings_kind, ref
+
+
 # --------------------------------------------------------------------------- #
 # lens-findings
 # --------------------------------------------------------------------------- #
