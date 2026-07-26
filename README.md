@@ -25,11 +25,13 @@ expected to work but are best-effort, not validated.
 
 This is the **only hard prerequisite**. The Python environment bootstrap below asks for
 consent before installing anything (see the paragraph after the `bootstrap` command).
-Node and Go tooling for the JS/TS and Go lanes has **no automated installer yet** in
-this release — see [Environment and coverage](#environment-and-coverage) for the manual
-setup steps; an automated, consent-gated setup for those lanes is planned for a later
-release. Until then, skip a lane you don't need and it runs with disclosed reduced
-coverage instead of failing the whole run.
+Node and Go tooling for the JS/TS and Go lanes is provisioned by the `setup` command
+(`<wrapper-executable> setup`, or `doctor` then `setup` for the toolchain your target
+actually needs) — it shows a plan and asks before installing anything, and never
+installs Node, pnpm, or Go themselves. See
+[Environment and coverage](#environment-and-coverage) below for what `setup` does and
+the manual fallback commands it automates. Skip a lane you don't need and it runs with
+disclosed reduced coverage instead of failing the whole run.
 
 - **macOS:** `brew install python@3.11` (or newer), or use `pyenv`/`uv`.
 - **Linux:** use your distribution's package manager (e.g. `apt install python3.11`) or
@@ -164,12 +166,14 @@ $project-analysis Analyze /absolute/path/to/project --language en
 The **first run checks the toolchain**. For the Python packages the wrapper itself
 depends on, it shows you a plan and **asks before installing anything** — nothing is
 installed silently. For the Node/pnpm-based and Go-based analyzer tooling (needed only
-if the target uses those stacks), there is **no installer yet** in this release: the
-run reports whichever of those lanes you haven't set up manually as disclosed reduced
-coverage rather than failing the whole run. See
-[Environment and coverage](#environment-and-coverage) below for the manual one-time
-setup commands for the JS/TS and Go lanes. A consent-gated automated setup for those
-lanes is planned for a later release.
+if the target uses those stacks), run `<wrapper-executable> setup` (or `setup --plan`
+to preview first): it computes which analyzer-managed pieces your target actually needs
+— a pure-JS target never provisions Go, and vice versa — shows the plan (destination,
+install source, network host contacted), and asks before installing anything; pass
+`--yes` for prior authorization (the plan is still printed first). It never installs
+Node, pnpm, or Go themselves — those stay yours to install (see
+[Environment and coverage](#environment-and-coverage) below) — and a lane whose runtime
+is missing is skipped with a clear reason rather than failing the whole command.
 
 ## Where results go
 
@@ -295,41 +299,53 @@ installed. Validated tool versions and invocation details are listed in
 [`tools/manifest.schema.json`](tools/manifest.schema.json)); actual versions and
 resulting coverage are recorded in every run's manifests.
 
-### Manual setup: JS/TS lane (dependency-cruiser + TypeScript)
+### Automated, consent-gated setup: JS/TS and Go lanes
 
-There is no automated installer for this lane yet (planned for a later release): install
-the analyzer-owned, lockfile-frozen copy yourself, with your own Node runtime and pnpm,
-into the **data-root runtime location** (`<data-root>/runtime/<contract>/node_tools`;
-`bin/project-analysis`/bootstrap's own output reports the current `<contract>` value —
-`1` at the time of writing). The tracked `wrapper/node_tools/package.json` +
-`pnpm-lock.yaml` are always the install source; `pnpm install --dir` needs those two
-files alongside wherever it writes `node_modules/`, so copy them there first, then
-install in place:
+`<wrapper-executable> setup` provisions the analyzer-managed pieces of both lanes:
+dependency-cruiser + TypeScript for JS/TS, and the pinned `callgraph` binary for Go.
+It reuses `doctor`'s own target sniff, so a pure-JS target's plan never includes the Go
+lane (and vice versa), and it never installs Node, pnpm, or Go themselves — those stay
+developer-managed. Preview first, then run for real:
 
 ```bash
+<wrapper-executable> setup --workspace /path/to/target --plan   # shows the plan only
+<wrapper-executable> setup --workspace /path/to/target          # asks, then installs
+<wrapper-executable> setup --workspace /path/to/target --yes    # prior authorization
+                                                                  # (the plan is still
+                                                                  # printed first)
+```
+
+Each lane names the network host its install step contacts (PyPI, `registry.npmjs.org`,
+`proxy.golang.org`) and the exact destination under the data root; nothing is fetched or
+written until you consent (or pass `--yes`). If a lane's own developer-managed runtime
+(Node/pnpm for JS/TS, Go for the Go lane) is missing, `setup` reports and skips just
+that lane rather than failing the whole command. Re-running `setup` is safe and is the
+upgrade path — it reconciles drifted versions and never touches an already up-to-date
+tool.
+
+`setup` automates exactly the manual procedure below — use the manual commands only if
+you prefer not to run `setup` (e.g. air-gapped provisioning from a script you audit
+yourself):
+
+```bash
+# JS/TS lane: copy the tracked manifests into the data-root runtime location,
+# then install there (pnpm resolves --modules-dir relative to --dir).
 mkdir -p "<data-root>/runtime/1/node_tools"
 cp wrapper/node_tools/package.json wrapper/node_tools/pnpm-lock.yaml \
    "<data-root>/runtime/1/node_tools/"
 pnpm install --dir "<data-root>/runtime/1/node_tools" --frozen-lockfile --ignore-scripts
-```
 
-This installs dependency-cruiser 18.1.0 + TypeScript 5.9.3 exactly as pinned. A legacy
-install directly into `wrapper/node_tools/node_modules` (pre-relocation) is still
-honored as a fallback if the runtime location above is empty, but new installs should
-target the runtime location above. See `wrapper/README.md` for more detail.
-
-### Manual setup: Go lane (`callgraph`)
-
-Likewise install the pinned `callgraph` binary yourself, with your own Go toolchain,
-into the data-root runtime location:
-
-```bash
+# Go lane: install the pinned callgraph binary into an analyzer-owned GOBIN.
 GOBIN="<data-root>/runtime/1/go_tools/bin" go install golang.org/x/tools/cmd/callgraph@v0.48.0
 ```
 
-A legacy install into `wrapper/go_tools/bin` (pre-relocation) is still honored as a
-fallback if the runtime location above has no binary, but new installs should target the
-runtime location above.
+(`<data-root>/runtime/<contract>/...` — `bin/project-analysis`/bootstrap's own output
+reports the current `<contract>` value, `1` at the time of writing.) This installs
+dependency-cruiser 18.1.0 + TypeScript 5.9.3 exactly as pinned. A legacy install
+directly into `wrapper/node_tools/node_modules` or `wrapper/go_tools/bin`
+(pre-relocation) is still honored as a fallback if the runtime location above is empty,
+but new installs (automated or manual) should target the runtime location above. See
+`wrapper/README.md` for more detail.
 
 ### Running tests
 

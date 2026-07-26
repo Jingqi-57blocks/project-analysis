@@ -406,9 +406,19 @@ idempotent move of that layout's `output/`/`state/`/`exported/` into `<data-root
 (generated runtimes are never migrated — always rebuilt fresh under `<data-root>`).
 **Bootstrap prints the exact wrapper executable path**
 (`wrapper: <path>`) — capture and reuse THAT path for every following invocation
-instead of assuming a fixed location under `<skill-dir>`. Before a run, consult
-`README.md` and report missing developer-managed prerequisites as reduced coverage;
-never invoke a package manager on the developer's behalf. A non-Go analysis does not
+instead of assuming a fixed location under `<skill-dir>`. Before a run, run
+`<wrapper-executable> doctor --workspace <target>` to see what the target actually
+needs, then `<wrapper-executable> setup --workspace <target>` **with the user's
+consent** to provision whichever analyzer-managed JS/TS or Go tooling `doctor` reports
+missing — `setup` shows its plan (what, where, which network host) before touching
+anything, even with `--yes`. Because an agent invokes `setup` non-interactively (no
+TTY), `setup` declines by default and exits non-zero unless `--yes` is passed — after
+the user agrees to the plan, re-run with `--yes` (prior authorization, not silent
+authorization: the plan is still shown first, even in `--json` mode). `setup` NEVER
+installs Node, Go, pnpm, or any other
+developer-managed runtime; a lane whose runtime is absent is skipped and disclosed, not
+attempted. Report missing developer-managed prerequisites as reduced coverage; never
+invoke a package manager on the developer's behalf. A non-Go analysis does not
 require Go.
 **Bootstrap contacts the Python package index (PyPI) to install those dependencies** —
 setup-time network, distinct from analysis: tell the user and get their OK before the

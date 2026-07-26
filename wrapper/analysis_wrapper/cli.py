@@ -341,6 +341,8 @@ def parser() -> argparse.ArgumentParser:
              "without it every lane is reported applicable-unknown)")
     doctor.add_argument("--json", action="store_true",
                         help="machine-readable structured output")
+    from . import setup as setup_mod
+    setup_mod.add_subparser(sub)
     migrate = sub.add_parser(
         "migrate",
         help="one-time move of a legacy --skill-root's output/state/exported "
@@ -1047,6 +1049,14 @@ def _doctor(args: argparse.Namespace) -> int:
     return doctor_mod.run(args.workspace or None, as_json=args.json)
 
 
+def _setup(args: argparse.Namespace) -> int:
+    from . import setup as setup_mod
+    # setup.run() maps every failure mode to its own documented exit code
+    # internally and never raises -- same rationale as _doctor above: this
+    # must not be routed through the blanket exception handler in main().
+    return setup_mod.main_from_args(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -1056,6 +1066,8 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["PROJECT_ANALYSIS_ALLOW_HOSTS"] = args.allow_hosts
         if args.command == "doctor":
             return _doctor(args)
+        if args.command == "setup":
+            return _setup(args)
         if args.command == "new-run":
             return _new_run(args)
         if args.command == "new-drilldown":
