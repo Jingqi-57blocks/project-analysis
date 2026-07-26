@@ -289,7 +289,8 @@ def parser() -> argparse.ArgumentParser:
              "(with --semantic: overrides the default parity-semantic.json path)")
     compare_runs.add_argument(
         "--semantic", action="store_true",
-        help="(dev-only) semantic-equivalence mode: writes parity-semantic.json "
+        help="(dev-only) semantic-equivalence mode: writes parity-semantic.json, "
+             "in the current directory by default (override with --report), "
              "instead of the byte-level report -- tolerant of id/wording churn "
              "a migration is expected to cause, flags substance drift only")
     return result

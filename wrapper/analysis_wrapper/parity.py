@@ -324,23 +324,25 @@ def _system_model_partitions(doc: dict | None) -> dict[str, dict] | None:
 
 
 def _row_repo_key(row: dict, index: int) -> str:
-    """Repo identity for one coverage/signal row, tolerant of pre-57B-88
-    artifacts.
+    """Repo identity for one per-repo row, tolerant of pre-57B-88 artifacts.
 
     57B-88 (commit 17f7bb3) renamed this field from ``repo_id`` to
     ``repository_ref`` in-place, in callgraph-coverage.json,
-    imports/depmap-coverage.json, AND signals/run-summary.json -- a pure
-    rename (the JSON key changes, the value doesn't), never additive: a row
-    written by either era carries exactly one of the two keys, never both.
-    Keying purely by ``row.get("repository_ref", "")`` therefore reads EVERY
-    row of a genuine pre-88 doc as the same empty string, collapsing two
-    different repos' rows sharing the same secondary key component (lang/
-    lane/tool) onto one dict entry and silently dropping one side's facts.
-    Falling back to the legacy field recovers the real identity for exactly
-    that case. The positional discriminator is a last resort for a row
-    carrying neither (not known to occur in practice) -- it guarantees no
-    collapse even then, though it only orders correctly within one doc's own
-    (already sorted) row list, not across independently-numbered docs.
+    imports/depmap-coverage.json, signals/run-summary.json, AND (via
+    ``identity.externalize_discovery_report``'s own repo_id -> repository_ref
+    ``replace_field``, same migration) discovery-report.json's repo rows --
+    a pure rename (the JSON key changes, the value doesn't), never additive:
+    a row written by either era carries exactly one of the two keys, never
+    both. Keying purely by ``row.get("repository_ref", "")`` therefore reads
+    EVERY row of a genuine pre-88 doc as the same empty string, collapsing
+    two different repos' rows sharing the same secondary key component
+    (lang/lane/tool/profile_id) onto one dict entry and silently dropping
+    one side's facts. Falling back to the legacy field recovers the real
+    identity for exactly that case. The positional discriminator is a last
+    resort for a row carrying neither (not known to occur in practice) -- it
+    guarantees no collapse even then, though it only orders correctly within
+    one doc's own (already sorted) row list, not across independently-
+    numbered docs.
     """
     ref = row.get("repository_ref") or row.get("repo_id")
     return ref if ref else f"__row_{index}__"
@@ -485,8 +487,14 @@ def _resolve_route_docs(
 
 def _discovery_facets(doc: dict) -> dict[tuple[str, str], dict]:
     result: dict[tuple[str, str], dict] = {}
-    for repo in doc.get("repos", []):
-        repository_ref = repo.get("repository_ref", "")
+    for index, repo in enumerate(doc.get("repos", [])):
+        # Same 57B-112 §2 class of bug as _lane_coverage/_signals: a pre-88
+        # discovery-report.json repo row carries `repo_id`, not
+        # `repository_ref` (identity.externalize_discovery_report's own
+        # repo_id -> repository_ref rename, same 57B-88 migration) --
+        # keying purely by `repository_ref` reads every row as "", so two
+        # repos sharing a `profile_id` collapse onto one dict key.
+        repository_ref = _row_repo_key(repo, index)
         for facet in repo.get("technology_facets", []):
             key = (repository_ref, facet.get("profile_id", ""))
             result[key] = {
@@ -908,6 +916,27 @@ def has_semantic_differences(report: dict[str, Any]) -> bool:
 # "not present in both runs" (a deterministic-only pair has no narrative
 # reports/module map at all) -- this is an expected shape, not an error, and
 # is never treated as a difference by ``has_semantic_mode_differences``.
+#
+# Two known v1 limitations, disclosed here rather than left implicit:
+#
+# (a) Findings matching (``_match_findings``) keys evidence by (repository_ref,
+#     relative_path) parsed from SOURCE refs only (``_finding_evidence_spans``).
+#     A finding whose evidence is entirely metric refs (``metric:...``) or
+#     signal refs (``signals/...``) carries no (repo, file) span at all and
+#     can therefore never match anything -- it always surfaces as unmatched
+#     on both sides, even when it is genuinely the same finding re-emitted.
+#     A systemic finding that cites mostly signal views (e.g. a duplication
+#     or dependency-risk finding) is the case most likely to hit this. This
+#     is an acceptable v1 gap, not a silent one: a future iteration could key
+#     those findings by (tool, signal-view-path) or (metric_ref) instead.
+#
+# (b) Citation extraction (``_citation_candidates``) only recognizes
+#     source-ref-shaped tokens (``repo@revision:relative/path:line``). A
+#     narrative report's ``signals/...`` or ``metric:...`` citations are NOT
+#     inventoried by the ``citations`` section at all -- they neither count
+#     toward ``*_valid_count``/``*_invalid_count`` nor appear in
+#     added/removed. This mirrors limitation (a): both stem from the same
+#     narrower-than-full-citation-grammar scope chosen for v1.
 # ---------------------------------------------------------------------------
 
 
@@ -938,7 +967,11 @@ def _finding_evidence_spans(finding: dict) -> dict[tuple[str, str], tuple[int, i
     every source-ref-shaped evidence ref this finding cites. Metric/signal
     refs (``metric:...``, ``signals/...``) carry no repo+file identity, so
     they never contribute a span -- consistent with the task's own framing
-    ("same repo + file path with overlapping line ranges")."""
+    ("same repo + file path with overlapping line ranges"). Known v1
+    limitation (see the ``--semantic mode`` section banner above): a finding
+    whose evidence is ENTIRELY metric/signal refs gets an empty span dict and
+    can therefore never match anything, surfacing as unmatched on both sides
+    even when it is genuinely the same finding re-emitted."""
     spans: dict[tuple[str, str], tuple[int, int]] = {}
     for item in finding.get("evidence", []) or []:
         if not isinstance(item, dict):
@@ -1095,6 +1128,11 @@ def _module_map_section(base_run: Path, candidate_run: Path) -> dict | str:
 # re-derived as a second, looser regex would be. Trailing prose punctuation
 # (a sentence-ending period/comma right after an unbacktick'd citation) is
 # stripped before validation so it never masquerades as an invalid line number.
+#
+# Known v1 limitation (see the ``--semantic mode`` section banner above):
+# this regex only recognizes source-ref-shaped tokens. A narrative report's
+# ``signals/...`` or ``metric:...`` citations are invisible to this section
+# entirely -- not counted, not diffed -- not just classified invalid.
 _CITATION_CANDIDATE = re.compile(r"[^\s`\[\]()]+@[^\s`\[\]()]+:[^\s`\[\]()]+")
 _CITATION_TRAILING_PUNCT = ".,;:!?)]}"
 

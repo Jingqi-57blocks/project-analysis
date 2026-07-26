@@ -942,6 +942,57 @@ def test_signals_two_legacy_repos_sharing_tool_do_not_collapse(tmp_path):
     assert "scc / api" in changed_keys and "scc / worker" in changed_keys
 
 
+def _legacy_discovery_repo(repo_id: str, facet_state: str) -> dict:
+    """A pre-57B-88 discovery-report.json repo row: `repo_id`, not
+    `repository_ref` (identity.externalize_discovery_report's own rename,
+    same 57B-88 migration as callgraph/depmap/signals)."""
+    return {
+        "repo_id": repo_id,
+        "provenance": {"is_git": True, "head": "a" * 40, "path": f"/ws/{repo_id}"},
+        "stacks": {"stacks": ["go"], "frameworks": [], "analysis_roots": [], "evidence": []},
+        "technology_facets": [{
+            "profile_id": "language.go", "kind": "language", "scope_roots": ["."],
+            "evidence": ["go.mod"], "confidence": "high", "state": facet_state,
+        }],
+        "unclassified_file_inventory": [], "technology_detection_notes": [],
+        "package_manager": {"name": "go", "lockfile": "", "evidence": ""},
+        "tier2_exclusions": {"dirs": [], "evidence": ""},
+        "module_signals": {"folders": [], "routes": [], "tables": [], "api_configs": [],
+                          "notes": []},
+        "candidate_notes": [], "integration_evidence": {"available": True, "notes": []},
+        "access_model": {"available": True, "notes": []}, "notes": [],
+    }
+
+
+def test_discovery_facets_two_legacy_repos_sharing_profile_do_not_collapse(tmp_path):
+    """Same 57B-112 §2 class of bug as lane_coverage/signals, found while
+    fixing those: discovery-report.json repo rows had the identical pre-88
+    repo_id -> repository_ref rename, so _discovery_facets keying by
+    (repository_ref, profile_id) alone collapsed two repos sharing a
+    profile_id (both "language.go") onto one dict key."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+
+    def _legacy_discovery_doc(api_state: str, worker_state: str) -> dict:
+        return {
+            "project_ref": "proj", "workspace_root": "/ws",
+            "repos": [_legacy_discovery_repo("api", api_state),
+                     _legacy_discovery_repo("worker", worker_state)],
+            "not_targeted": [], "reduced_coverage_targets": [],
+            "integration_candidate_count": 0,
+        }
+
+    _write(a, "discovery-report.json", _legacy_discovery_doc("resolved", "resolved"))
+    _write(b, "discovery-report.json", _legacy_discovery_doc("conflicting", "unresolved"))
+
+    report = parity.compare(a, b)
+
+    section = report["sections"]["discovery_facets"]
+    assert section["added"] == [] and section["removed"] == []
+    assert {row["key"] for row in section["changed"]} == {
+        "api / language.go", "worker / language.go"}
+
+
 def test_summary_total_differences_always_equals_sum_of_by_section(tmp_path):
     """57B-112 §2: summary.total_differences must be COMPUTED FROM
     summary.by_section (never a second, independently-accumulated number) so
