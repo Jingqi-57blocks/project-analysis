@@ -145,6 +145,35 @@ def test_non_git_workspace_container_targets_children_once(tmp_path):
     assert any("workspace container" in line for line in report["not_targeted"])
 
 
+def test_non_git_container_discloses_unrecognized_source_folder(tmp_path):
+    """57B-112 §3: a non-git folder with source files but no recognized
+    manifest (e.g. only Package.swift — no bundled Swift profile) used to be
+    silently neither inventoried nor disclosed; the workspace-container note
+    was the only trace, and it never named the folder. It must now appear
+    in ``not_targeted`` with a factual reason, without becoming a target."""
+    ws = tmp_path / "container"
+    _write(ws / "web" / "package.json", "{}")
+    _write(ws / "web" / "index.js", "export const web = true\n")
+    _write(ws / "unsupported-lib" / "Package.swift",
+           "// swift-tools-version:5.9\n")
+    _write(ws / "unsupported-lib" / "Sources" / "Lib" / "Lib.swift",
+           "public struct Lib {}\n")
+    (ws / "empty-dir").mkdir(parents=True)  # truly empty: no content at all
+
+    spec, report = emit.discover(ws)
+
+    assert {Path(repo.path).name for repo in spec.repos} == {"web"}
+    assert any(
+        "unsupported-lib" in line and "no supported manifest" in line
+        for line in report["not_targeted"]
+    )
+    # A folder already targeted, or one with no discoverable content at all,
+    # is unaffected — no spurious extra row.
+    assert not any("web" in line and "no supported manifest" in line
+                   for line in report["not_targeted"])
+    assert not any("empty-dir" in line for line in report["not_targeted"])
+
+
 def test_direct_non_git_root_subsumes_child_projects(tmp_path):
     ws = tmp_path / "root-project"
     _write(ws / "package.json", "{}")

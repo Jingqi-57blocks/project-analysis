@@ -29,6 +29,47 @@ _CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _WORD = re.compile(r"\b[A-Za-z0-9][A-Za-z0-9'-]*\b")
 _MERMAID_VALIDATOR = Path(__file__).parent / "report_html" / "validate_mermaid.js"
 
+# Machine-artifact directories the wrapper writes into under a run dir
+# (57B-112 §1): the external-identity-boundary check below walks every one of
+# these RECURSIVELY, not just the pre-migration three (signals/callgraph/
+# imports), since a later migration (57B-80/57B-82/57B-84) added datastore/,
+# deploy/, access/, integrations/, and routes/ as further per-repo evidence
+# homes — each one just as capable of accidentally embedding an internal
+# repository id in a filename or file body as the original three. Recursive
+# so nested fragment dirs (``.fragments/`` under callgraph/imports/routes,
+# see those packages' own emit.py) are covered too, not just each root's
+# immediate children. Deliberately a closed, current allowlist rather than a
+# blanket walk of the whole run dir: it excludes dot-prefixed analyzer-owned
+# working dirs that sit alongside these (e.g. ``.depmap-config/``) the same
+# way ``signals/raw/`` is excluded below — neither is a shipped/consumed
+# artifact, so leakage there is out of this check's scope.
+ARTIFACT_ROOTS = ("signals", "callgraph", "imports", "routes",
+                  "datastore", "deploy", "access", "integrations")
+
+
+def _artifact_files(run: Path) -> list[Path]:
+    """Every file under ``run``'s ``ARTIFACT_ROOTS``, recursively.
+
+    ``signals/raw/`` is the one exclusion: a self-gitignored, owner-only
+    containment zone that is never model-read or shipped anywhere (see
+    ``executor._containment_dir``), so it is out of scope for a check about
+    evidence that IS read/shipped. Deterministic order: roots are walked in
+    ``ARTIFACT_ROOTS`` order, each root's files sorted by path.
+    """
+    raw_dir = run / "signals" / "raw"
+    files: list[Path] = []
+    for name in ARTIFACT_ROOTS:
+        root = run / name
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.is_relative_to(raw_dir):
+                continue
+            files.append(path)
+    return files
+
 
 def _load(path: Path) -> dict:
     value = json.loads(path.read_text("utf-8"))
@@ -400,21 +441,15 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         for item in external_identities:
             if item.internal_id != item.reference and item.internal_id in text:
                 leakage.append(f"{rel}: {item.internal_id}")
-    for directory, suffixes in ((run / "signals", (".manifest.json", ".view.txt")),
-                                (run / "callgraph", (".jsonl",)),
-                                (run / "imports", (".depcruise.json", ".golist.json"))):
-        if not directory.is_dir():
-            continue
-        for path in directory.iterdir():
-            if any(path.name.endswith(suffix) for suffix in suffixes):
-                text = path.read_text("utf-8", errors="replace")
-                for item in external_identities:
-                    if item.internal_id != item.artifact_key \
-                            and item.internal_id in path.name:
-                        leakage.append(f"{path.relative_to(run)}: filename")
-                    if item.internal_id != item.reference \
-                            and item.internal_id in text:
-                        leakage.append(f"{path.relative_to(run)}: content")
+    for path in _artifact_files(run):
+        text = path.read_text("utf-8", errors="replace")
+        for item in external_identities:
+            if item.internal_id != item.artifact_key \
+                    and item.internal_id in path.name:
+                leakage.append(f"{path.relative_to(run)}: filename")
+            if item.internal_id != item.reference \
+                    and item.internal_id in text:
+                leakage.append(f"{path.relative_to(run)}: content")
     for path in sorted(run.glob("*.md")):
         text = path.read_text("utf-8", errors="replace")
         for item in external_identities:

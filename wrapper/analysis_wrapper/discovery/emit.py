@@ -63,15 +63,29 @@ def _has_direct_project_manifest(path: Path) -> bool:
     return any((path / name).is_file() for name in _DIRECT_PROJECT_MANIFESTS)
 
 
-def _non_git_projects(root: Path, repo_paths: list[str]) -> tuple[list[Path], list[Path]]:
-    """Return canonical non-git projects and contained child projects.
+def _non_git_projects(
+    root: Path, repo_paths: list[str],
+) -> tuple[list[Path], list[Path], list[Path]]:
+    """Return canonical non-git projects, contained child projects, and
+    unrecognized-but-non-empty child folders.
 
     A direct root project owns its source tree, so stack-bearing child projects
     are disclosed rather than executed again.  Without a root manifest the
     workspace is a container and direct child projects become targets.
+
+    The third list (57B-112 §3) is neither of those: a child folder with no
+    bundled language profile detected (``stacks.detect`` would report it
+    empty), yet not empty either — a bounded walk finds files no language
+    profile's source-extension fingerprint claims (e.g. a Swift-only package:
+    no bundled Swift profile, so ``Package.swift``/``*.swift`` never match
+    anything). Extending targeting to cover it is out of scope; the caller
+    (``discover``) only discloses it in ``not_targeted`` instead of leaving it
+    completely unmentioned (previously its only trace was the generic
+    workspace-container note, which never named it).
     """
     git_roots = {Path(path).expanduser().resolve() for path in repo_paths}
     child_projects: list[Path] = []
+    unrecognized: list[Path] = []
     try:
         children = sorted(
             p for p in root.iterdir()
@@ -84,14 +98,22 @@ def _non_git_projects(root: Path, repo_paths: list[str]) -> tuple[list[Path], li
         resolved = path.resolve()
         if resolved in git_roots:
             continue
-        if stacks.detect(resolved).stacks:
+        # Same detector ``stacks.detect().stacks`` wraps (language facets
+        # only — see ``stacks.py``); called directly so the SAME pass also
+        # yields ``unclassified_inventory`` (the bounded extension sniff
+        # ``profiles/detection.py`` already computes for every detect() call)
+        # for the disclosure case below, at no extra cost.
+        detected = profile_detection.detect(resolved)
+        if any(facet.kind == "language" for facet in detected.facets):
             child_projects.append(resolved)
+        elif detected.unclassified_inventory:
+            unrecognized.append(resolved)
 
     resolved_root = root.resolve()
     if _has_direct_project_manifest(resolved_root):
         selected = [] if resolved_root in git_roots else [resolved_root]
-        return selected, child_projects
-    return child_projects, []
+        return selected, child_projects, unrecognized
+    return child_projects, [], unrecognized
 
 
 def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
@@ -209,7 +231,7 @@ def discover(workspace_root: str | Path,
         return False
 
     git_paths = [hit.path for hit in inv.repos]
-    raw_non_git, contained_non_git = _non_git_projects(
+    raw_non_git, contained_non_git, unrecognized_non_git = _non_git_projects(
         Path(inv.workspace_root), git_paths)
     non_git_paths: list[Path] = []
     for path in raw_non_git:
@@ -219,6 +241,18 @@ def discover(workspace_root: str | Path,
             disclosed.append(f"{path} (excluded by operator flag)")
             continue
         non_git_paths.append(path)
+
+    # 57B-112 §3: never targeted (extending targeting is out of scope here),
+    # but no longer silently invisible either — a factual not_targeted row
+    # replaces what used to be nothing but the generic workspace-container
+    # note (which never named the specific folder).
+    for path in unrecognized_non_git:
+        if self_excluded(path):
+            continue
+        if path.name in excluded:
+            disclosed.append(f"{path} (excluded by operator flag)")
+            continue
+        disclosed.append(f"{path} (source files present, no supported manifest)")
 
     for hit in inv.repos:
         if self_excluded(hit.path):
