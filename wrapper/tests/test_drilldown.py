@@ -1,4 +1,13 @@
-"""57B-17: drill-down lifecycle — resolution, staleness, stages, linkage."""
+"""57B-17: drill-down lifecycle — resolution, staleness, stages, linkage.
+
+57B-97: `new-drilldown` is gated OFF at the CLI (`cli.main`) for v1 — it
+refuses immediately, before touching any run directory (see
+`test_cli_drilldown_gate.py` for that refusal contract). The resolution/
+staleness/mint logic in `cli._new_drilldown` itself is untouched and stays
+fully wired for a future re-enable, so this file keeps exercising it
+directly (bypassing `main`'s gate) rather than losing coverage of the
+underlying mechanism.
+"""
 
 import json
 import subprocess
@@ -6,16 +15,30 @@ from pathlib import Path
 
 import pytest
 
-from analysis_wrapper import lifecycle
+from analysis_wrapper import cli, lifecycle
 from analysis_wrapper.cli import main
 from analysis_wrapper.lifecycle import DRILLDOWN_STAGES, Pointers, RunState
 
 
+def _drilldown(argv):
+    """Invoke the underlying new-drilldown implementation directly,
+    bypassing the v1 CLI-level refusal gate in ``cli.main`` (see module
+    docstring). ``argv`` excludes the leading ``"new-drilldown"`` token."""
+    args = cli.parser().parse_args(["new-drilldown", *argv])
+    return cli._new_drilldown(args)
+
+
 def _overview(tmp_path, target, capsys, *, complete=True):
-    """Mint a real overview run via the CLI; optionally mark it complete."""
+    """Mint a real overview run via the CLI; optionally mark it complete.
+
+    Pins ``--language zh-CN`` explicitly (57B-97: the default is no longer a
+    hardcoded constant but auto-detected from the host locale) so this
+    fixture's language stays deterministic regardless of the test host's
+    environment.
+    """
     skill_root = tmp_path / "skill"
     assert main(["new-run", "--workspace", str(Path(target.path).parent),
-                 "--skill-root", str(skill_root)]) == 0
+                 "--skill-root", str(skill_root), "--language", "zh-CN"]) == 0
     run_dir = Path(capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1])
     if complete:
         for stage in ("signals", "findings", "map", "overview"):
@@ -26,7 +49,7 @@ def _overview(tmp_path, target, capsys, *, complete=True):
 
 def test_refuses_without_from_run_or_current(tmp_path, target, capsys):
     skill_root, run_dir = _overview(tmp_path, target, capsys)
-    code = main(["new-drilldown", "--skill-root", str(skill_root), "--module", "leave"])
+    code = _drilldown(["--skill-root", str(skill_root), "--module", "leave"])
     err = capsys.readouterr().err
     assert code == 2
     assert "no run has been ACCEPTED" in err
@@ -35,8 +58,8 @@ def test_refuses_without_from_run_or_current(tmp_path, target, capsys):
 
 def test_from_run_mints_linked_drilldown(tmp_path, target, capsys):
     skill_root, run_dir = _overview(tmp_path, target, capsys)
-    code = main(["new-drilldown", "--skill-root", str(skill_root),
-                 "--module", "leave", "--from-run", run_dir.name])
+    code = _drilldown(["--skill-root", str(skill_root),
+                       "--module", "leave", "--from-run", run_dir.name])
     assert code == 0
     out = capsys.readouterr().out
     drill_dir = Path(out.splitlines()[0].split("run: ", 1)[1])
@@ -48,22 +71,22 @@ def test_from_run_mints_linked_drilldown(tmp_path, target, capsys):
     assert state.analysis_identity["source_overview_run"] == run_dir.name
     link = (drill_dir / "source_overview_run").read_text().splitlines()
     assert link[0] == run_dir.name
-    assert state.language == "zh-CN"  # inherited from the source run default
+    assert state.language == "zh-CN"  # inherited from the source run (pinned above)
 
 
 def test_current_pointer_resolution_after_accept(tmp_path, target, capsys):
     skill_root, run_dir = _overview(tmp_path, target, capsys)
     assert main(["accept", "--run", str(run_dir)]) == 0
     capsys.readouterr()
-    code = main(["new-drilldown", "--skill-root", str(skill_root), "--module", "leave"])
+    code = _drilldown(["--skill-root", str(skill_root), "--module", "leave"])
     assert code == 0
     assert "source: " + run_dir.name in capsys.readouterr().out
 
 
 def test_incomplete_source_refused(tmp_path, target, capsys):
     skill_root, run_dir = _overview(tmp_path, target, capsys, complete=False)
-    code = main(["new-drilldown", "--skill-root", str(skill_root),
-                 "--module", "leave", "--from-run", run_dir.name])
+    code = _drilldown(["--skill-root", str(skill_root),
+                       "--module", "leave", "--from-run", run_dir.name])
     assert code == 2
     assert "incomplete" in capsys.readouterr().err
 
@@ -75,8 +98,8 @@ def test_stale_source_refused_naming_repos(tmp_path, target, synthetic_repo, cap
                     "-c", "user.name=t", "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(synthetic_repo), "-c", "user.email=t@t",
                     "-c", "user.name=t", "commit", "-qm", "drift"], check=True)
-    code = main(["new-drilldown", "--skill-root", str(skill_root),
-                 "--module", "leave", "--from-run", run_dir.name])
+    code = _drilldown(["--skill-root", str(skill_root),
+                       "--module", "leave", "--from-run", run_dir.name])
     err = capsys.readouterr().err
     assert code == 5
     assert "STALE" in err and "->" in err
@@ -93,9 +116,10 @@ def test_invalid_language_is_refused_before_any_drilldown_dir_is_created(
     drill_root = run_dir.parent.parent / "drilldown"
     existing = set(drill_root.iterdir()) if drill_root.is_dir() else set()
     with pytest.raises(SystemExit) as excinfo:
-        main(["new-drilldown", "--skill-root", str(skill_root),
-              "--module", "leave", "--from-run", run_dir.name,
-              "--language", "fr-FR"])
+        cli.parser().parse_args(
+            ["new-drilldown", "--skill-root", str(skill_root),
+             "--module", "leave", "--from-run", run_dir.name,
+             "--language", "fr-FR"])
     assert excinfo.value.code == 2
     after = set(drill_root.iterdir()) if drill_root.is_dir() else set()
     assert after == existing  # no new run directory was created
@@ -103,8 +127,8 @@ def test_invalid_language_is_refused_before_any_drilldown_dir_is_created(
 
 def test_drilldown_rollback_uses_its_own_stage_order(tmp_path, target, capsys):
     skill_root, run_dir = _overview(tmp_path, target, capsys)
-    assert main(["new-drilldown", "--skill-root", str(skill_root),
-                 "--module", "leave", "--from-run", run_dir.name]) == 0
+    assert _drilldown(["--skill-root", str(skill_root),
+                       "--module", "leave", "--from-run", run_dir.name]) == 0
     drill_dir = Path(capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1])
     for stage in ("prd", "health"):
         assert main(["mark-stage", "--run", str(drill_dir), "--stage", stage]) == 0

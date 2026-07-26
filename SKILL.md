@@ -21,22 +21,38 @@ first-class confidence.
 ## Invocation
 
 ```
-/project-analysis [path] [--language zh-CN|en] [--run-id <label>]
-/project-analysis module <module-id> [--from-run <run-id>] [--language zh-CN|en]
+/project-analysis [path] [--language zh-CN|en] [--run-id <label>] [--export html]
 ```
 
 (The command is `/project-analysis`.)
 
+**v1 ships overview + diagnosis only.** The `/project-analysis module <module-id>` form
+described in earlier revisions of this file is **NOT available in v1** — do not offer
+or invoke it; if a user asks for a module drill-down, say so plainly and point at the
+overview's per-module sections instead (they exist precisely so the reader can decide
+where to look without a drill-down). The wrapper's `new-drilldown` subcommand refuses
+immediately with a documented exit code (see "Module drill-down" below, kept for a
+future release) — never try to work around that refusal.
+
+- **Zero-arg happy path:** `/project-analysis` with no arguments analyzes the current
+  workspace, in the auto-detected language, behind exactly one confirmation (see "First
+  run" below). Never demand `--run-id`, pointers, or any other flag from a casual
+  invocation — every flag above is optional.
 - `path` defaults to the current working directory; it is the **target workspace root**
   under which repositories are discovered.
-- One language per run, default `zh-CN` (owner decision 2026-07-16; `--language en`
-  opts out). The run language must be a **delivered language** — one whose label
-  catalog is both key-complete AND free of non-allowlisted values that are
-  byte-identical to English (see `wrapper/analysis_wrapper/locale.py`'s
+- One language per run. The default is **auto-detected from the host locale**
+  (`$LC_ALL` → `$LC_MESSAGES` → `$LANG`, whichever is set first), falling back to
+  English when none is set, none parses to an actual language, or the detected
+  language is not a delivered language (see `locale.detect_default_language` in
+  `wrapper/analysis_wrapper/locale.py`) — `--language en` / `--language zh-CN` always
+  overrides the detected default. The run language must be a **delivered language** —
+  one whose label catalog is both key-complete AND free of non-allowlisted values that
+  are byte-identical to English (see `wrapper/analysis_wrapper/locale.py`'s
   `missing_keys`/`mirrored_keys`/`is_delivered`; today: `en`, `zh-CN`) — a
   non-delivered language is refused at run creation rather than silently
   rendering partial or untranslated English. Reports are fully rendered in the
-  run language natively; post-hoc translation is a separate, future feature and
+  run language natively, and **you converse with the user in the run language too** —
+  not only the written reports; post-hoc translation is a separate, future feature and
   is never how a run's primary language is delivered. Real UI labels, code
   identifiers, error strings, endpoints, and citations are ALWAYS quoted verbatim
   from source — never translated, in ANY run language. Intermediate artifacts
@@ -48,13 +64,9 @@ first-class confidence.
   requirement below. Separately, it WARNS (non-blocking, does not fail the run)
   on a stray-English-prose heuristic in narrative reports — a low-false-positive
   signal meant to be verified by hand, not a verified gate.
-- `/project-analysis module` resolves its source overview as: `--from-run <run-id>` if
-  given → otherwise the project's `current` pointer → otherwise **refuse**, listing the
-  project's completed runs. A run other than `current` may be accepted later ONLY if it
-  still passes the same match check as drill-down reuse (HEADs, clean state, tool
-  versions, analysis identity); if the repos have moved on, advise a new overview
-  instead. Inspection-only runs (dirty worktree or non-git) can NEVER be accepted —
-  not at completion and not later.
+- `--export html` opts into the offline HTML export as part of this run (see step 8 of
+  the workflow below). Without it, only the Markdown reports are produced; the
+  standalone `export` command remains available afterward at any time.
 
 ## Three directory worlds — never mix them
 
@@ -272,10 +284,52 @@ guarantee, not merely a documented intent.
 
 ## Overview workflow (fixed order)
 
-0. **Preflight.** If `lenses/` is missing or empty, STOP after inventory and report that
-   the lens definitions are not installed — never improvise an ad-hoc analysis in their
-   place. A partially available toolchain is fine (disclosed per lens); absent lens
-   definitions are not.
+**Progress reporting.** Report each stage transition as you reach it — discovery →
+signals → findings → map → overview — a one-line status update per stage (right when
+you run the `mark-stage` call, or when `prepare-overview` reports a stage checkpoint
+done) is enough; do not go silent for the several minutes a stage can take. This reuses
+the run's own stage bookkeeping already described in "Run lifecycle commands" above
+(`run-state.json`'s stages) — no separate progress subsystem is introduced.
+
+0. **Preflight.**
+   a. **Toolchain + run-parameter confirmation — ONE consolidated approval.** Run
+      `<wrapper-executable> doctor --workspace <target> --json` to see what the target
+      needs. If its `setup_needed` field is true, run
+      `<wrapper-executable> setup --plan --workspace <target> --json` to compute the
+      install plan (this alone never installs anything or touches the network — see
+      "Running the wrapper" below). Then present **exactly one** confirmation to the
+      user, covering BOTH halves together — never split across two prompts, never ask
+      twice:
+        - the setup plan, if any: what would be installed, where (destination under the
+          data root), and which network host(s) each lane's install step would contact;
+        - the run parameters: the workspace, the repos/languages discovered, the run
+          language (state the auto-detected value plainly, per "Invocation" above, so
+          the user sees it before a long run), whether the HTML export was requested
+          (default: no — see step 8), and the approximate 10-15 minute duration.
+      Only after the user approves this one confirmation do you run `setup --yes`
+      (non-TTY callers — this agent — are declined by default even once a plan has been
+      shown, so `--yes` is required, but ONLY after consent — it is prior authorization,
+      never a substitute for asking). If `doctor` already reports `setup_needed: false`,
+      there is nothing to install: say so plainly instead of asking about setup, and
+      still confirm the run parameters in that same single message. **Never install
+      silently, and never skip the confirmation** — including for the zero-arg happy
+      path (`/project-analysis` with no arguments): the confirmation still happens,
+      just with nothing extra to decide (auto-detected workspace, auto-detected
+      language, no setup needed). This agent-side sequence is UX layered on top of the
+      actual guarantee: the wrapper's own hard runtime/compat guard
+      (`compat.guard_entry`) refuses any real analysis command outright when the
+      installed runtime has drifted from what the code expects, on every single
+      invocation, regardless of what these steps do or skip.
+   b. **Consent-declined path.** If the user declines the setup plan, do not abort the
+      run: proceed with whatever coverage the already-present tooling allows, disclosing
+      the gap in the report header and the lens coverage table exactly like any other
+      missing-tool case (see "Core principles" #4) — unless the decline leaves core
+      execution impossible (no usable Python venv at all), in which case say so and
+      stop.
+   c. **Lens definitions.** If `lenses/` is missing or empty, STOP after inventory and
+      report that the lens definitions are not installed — never improvise an ad-hoc
+      analysis in their place. A partially available toolchain is fine (disclosed per
+      lens); absent lens definitions are not.
 1. **Inventory + provenance.** Discover repos (`.git` directories AND `.git` files —
    worktrees/submodules), evidence-backed technology facets (language, ecosystem,
    framework, and unresolved repository traits), analysis roots, and package managers
@@ -353,15 +407,28 @@ guarantee, not merely a documented intent.
    acceptance (sets the
    `current` pointer on the user's yes). Skip the offer
    for inspection-only runs.
-8. **Export the HTML report (default).** After the markdown reports are written, run
-   `project-analysis-wrapper export --run <run-dir>` (format defaults to `html`) to
-   render the offline, self-contained HTML report into
-   `<data-root>/exported/{project}-analysis/{run-id}/html/` (regenerable).
-   Run scoping prevents a later analysis from overwriting an earlier export. This is
-   the default. Skip it only when the user opted out with `--no-export` / `--export none`
-   — the markdown reports are always produced regardless. The export is deterministic,
+8. **Export the HTML report — opt-in.** The Markdown reports from step 6 are always
+   produced; the HTML export is not automatic. Run
+   `project-analysis-wrapper export --run <run-dir>` (format defaults to `html`) ONLY
+   when the user asked for it — via `--export html` on invocation (see "Invocation"
+   above, and the single confirmation in step 0a, which states whether export was
+   requested) or by a request in chat after the fact. It renders the offline,
+   self-contained HTML report into
+   `<data-root>/exported/{project}-analysis/{run-id}/html/` and can be (re-)run any
+   time afterward, whether or not it ran during this workflow — run scoping prevents a
+   later analysis from overwriting an earlier export. The export is deterministic,
    fully offline (no network, no LLM), and adds no analysis passes; `export --format`
    with no value lists the available formats.
+9. **Report completion: where the outputs are.** Once `overview` is marked done, tell
+   the user the exact resolved paths — never a relative path, never the pre-relocation
+   in-code layout — using the run's own `<data-root>/output/<project-key>/overview/<run-id>/`:
+   - `overview.md` — flag this one **"start here."**
+   - `technical-overview.md`
+   - `project-map.md`
+   - the HTML export's `index.html` under
+     `<data-root>/exported/{project}-analysis/{run-id}/html/` and how to open it (a
+     local file in a browser) — only if it was produced (this run or a prior `export`
+     call); otherwise mention it is available on request via `export`, per step 8.
 
 Target wall-clock is 10–15 minutes; quality is the gate, not the clock.
 
@@ -372,7 +439,17 @@ entry files, for their verbatim UI labels — never broad source reads. If it ru
 budget, the affected section is reported `partial`/`unknown`, never backfilled with broad
 reads; a fresh run should stay within ~20% of the current baseline wall-clock.
 
-## Module drill-down
+## Module drill-down — NOT AVAILABLE IN v1
+
+**v1 ships overview + diagnosis only.** Everything below describes the drill-down
+mechanism as designed and as it will work in a future release — the code, templates,
+and lifecycle stages it refers to all still exist and are unmodified, but the wrapper's
+`new-drilldown` subcommand refuses immediately (before touching any run directory) with
+a documented, distinct exit code. Do not invoke it, do not attempt to reproduce its
+output by hand, and do not tell a user it is available. Existing drill-down runs
+produced before this gate (or by direct wrapper calls bypassing the CLI) are preserved
+on disk untouched — this section's content is retained so re-enabling the feature later
+is a documentation and one-line-guard change, not a rebuild.
 
 Mint the drill-down run with the wrapper (it enforces resolution, staleness, and
 linkage — never create the directory by hand):
