@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import __version__, gitinfo, locale
+from . import __version__, compat, gitinfo, locale
 from .executor import replace_artifact_text
 from .exclusions import is_excluded_relative
 from .targetspec import RepoTarget, TargetSpec
@@ -174,6 +174,7 @@ def create_document(
     model: str = "",
     effort: str = "",
     analyzed_at: str | None = None,
+    degraded_runtime_notice: str = "",
 ) -> dict[str, Any]:
     require_delivered_language(language)
     return {
@@ -199,6 +200,14 @@ def create_document(
         },
         "preparation": None,
         "tool_versions": [],
+        # 57B-95 item 4: stamp the code/artifact-contract/runtime-contract
+        # identity a LATER run/tool needs to make a compat decision straight
+        # from the artifact, without re-deriving it from the environment.
+        # Additive-only (no SCHEMA_VERSION bump): an older reader simply
+        # ignores this key, and a run minted before this stamping existed is
+        # still loadable — ``compat.run_schema_family`` treats an absent
+        # block as the pre-3.0.0 family, same as every other pre-stamp run.
+        "compat": compat.compat_stamp(degraded_runtime_notice=degraded_runtime_notice),
     }
 
 
@@ -225,6 +234,8 @@ def load(run_dir: str | Path) -> dict[str, Any]:
         raise ValueError("run-provenance.json preparation must be null or an object")
     if not isinstance(value.get("tool_versions"), list):
         raise ValueError("run-provenance.json tool_versions must be a list")
+    if value.get("compat") is not None and not isinstance(value.get("compat"), dict):
+        raise ValueError("run-provenance.json compat must be null/absent or an object")
     return value
 
 

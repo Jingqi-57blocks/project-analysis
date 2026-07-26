@@ -223,6 +223,26 @@ under `<data-root>/output/`, resolved automatically — no flag needed):
 - `accept --run <run-dir>` — sets `current`; run ONLY on the user's explicit
   acceptance. Refuses inspection-only or incomplete runs.
 
+**Upgrade safety (see `docs/COMPATIBILITY.md`):** every command that executes analysis
+or creates/advances/mutates a run (`new-run`, `new-drilldown`, `prepare-overview`,
+`discover`, `callgraph`, `dependency-map`, `system-model`, `finalize-findings`,
+`finalize-module-map`, `audit-overview`, `mark-stage`, `rollback`, `accept`, `run`,
+`sweep`) refuses to proceed against an unreconciled runtime (installed
+venv/`node_tools`/Go-tool versions drifted from the current code's
+`tools/manifest.json` pins) — the message names `setup` as the fix. The
+diagnosis-and-remedy path always keeps working: `doctor` to see the drift, `setup` to
+reconcile it, and `status` / `export` / `compare-runs` / `migrate` / `list` (and
+`--version`, which exits before this check even runs) to keep using existing results
+while you fix it. Old completed reports always stay readable as files, never
+rewritten; an incompatible incomplete run refuses to resume (mint a new overview
+instead) — v1 detects and guides, it never auto-migrates a schema. Separately from the
+runtime check above, every command that ADVANCES an *existing* run (`mark-stage`,
+`rollback`, `prepare-overview`, `finalize-findings`, `finalize-module-map`,
+`audit-overview`, `system-model`, `callgraph`, `dependency-map`) is refused outright
+when that run's own stamped artifact-schema family disagrees with this code's — this
+is the actual enforcement point for the "never mix two schemas in one run directory"
+guarantee, not merely a documented intent.
+
 ## Overview workflow (fixed order)
 
 0. **Preflight.** If `lenses/` is missing or empty, STOP after inventory and report that

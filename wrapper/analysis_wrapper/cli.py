@@ -9,7 +9,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import paths
+from . import compat, paths
 from .executor import (SignalResult, WrapperSafetyError,
                        prepare_output_directory, run_tool,
                        use_existing_run_directory)
@@ -18,6 +18,18 @@ from .registry import (PROVIDER_OWNED_SIGNAL_TOOLS, git_history, jscpd_multi,
 from .sanitize import sanitize_text
 from .status import Status, aggregate, wrapper_exit_code
 from .targetspec import TargetSpec
+
+# 57B-95 review FIX 1: every subcommand that takes an EXISTING run via
+# `--run` and advances/mutates it further (as opposed to `status`/`accept`,
+# which take `--run` too but never write into the run directory itself --
+# see the call site in `main()`). Kept as one explicit list rather than N
+# scattered call sites so the choke point in `main()` covers all of them and
+# a future command is one line to add here, not one easy-to-forget call
+# inline in its own handler.
+_RUN_ARG_ADVANCE_COMMANDS = frozenset({
+    "mark-stage", "rollback", "system-model", "prepare-overview",
+    "finalize-module-map", "finalize-findings", "audit-overview",
+})
 
 
 def _record_summary(out: Path, results: list[SignalResult]) -> None:
@@ -442,6 +454,7 @@ def _new_run(args: argparse.Namespace) -> int:
             model=args.model,
             effort=args.effort,
             analyzed_at=state.analyzed_at,
+            degraded_runtime_notice=getattr(args, "degraded_runtime_notice", ""),
         ),
     )
     state.save(run_dir)
@@ -548,6 +561,7 @@ def _new_drilldown(args: argparse.Namespace) -> int:
             model=generation.get("model", ""),
             effort=generation.get("effort", ""),
             analyzed_at=state.analyzed_at,
+            degraded_runtime_notice=getattr(args, "degraded_runtime_notice", ""),
         ),
     )
     (run_dir / "source_overview_run").write_text(
@@ -1064,6 +1078,32 @@ def main(argv: list[str] | None = None) -> int:
             # Registry guards read this when deciding whether a dependency
             # host outside the default registries is explicitly approved.
             os.environ["PROJECT_ANALYSIS_ALLOW_HOSTS"] = args.allow_hosts
+        # 57B-95: refuse a real analysis/resume command outright when the
+        # installed runtime has drifted from this code's manifest pins;
+        # read-only/informational commands (doctor, migrate, ...) stay exempt
+        # so a user can always diagnose and fix the problem. The returned
+        # notice is non-empty only when ACCEPT_DEGRADED_RUNTIME_ENV actually
+        # suppressed a detected drift this invocation; threading it onto
+        # `args` lets a run-minting command (new-run/new-drilldown) stamp it
+        # into the fresh run's own provenance (FIX 5).
+        args.degraded_runtime_notice = compat.guard_entry(args.command)
+        # 57B-95 review FIX 1: `guard_entry` above only ever checks the
+        # installed RUNTIME against this code's manifest pins -- it has no
+        # notion of which run directory a gated command is about to advance,
+        # so it can never catch "resuming an old-schema run under new code
+        # would mix two artifact contracts in one run directory". Every
+        # command here that reads an EXISTING run's artifacts and writes
+        # MORE into that same run directory is covered by `compat.guard_run`
+        # at this single choke point (derived from the code: every one of
+        # these dispatches to a handler that loads `args.run` and then
+        # mutates something under it -- see each handler's own docstring).
+        # `status`/`accept` also take `--run` but must NEVER be gated here:
+        # `status` only reads; `accept` only ever applies to an ALREADY
+        # complete run (lifecycle.Pointers.accept enforces this) and writes
+        # only an external pointer file, never into the run directory
+        # itself -- completed runs stay unconditionally readable (FIX 4).
+        if args.command in _RUN_ARG_ADVANCE_COMMANDS:
+            compat.guard_run(args.run)
         if args.command == "doctor":
             return _doctor(args)
         if args.command == "setup":
@@ -1115,6 +1155,13 @@ def main(argv: list[str] | None = None) -> int:
             marker = ("callgraph-coverage.json" if args.command == "callgraph"
                       else "imports/depmap-coverage.json")
             out = use_existing_run_directory(args.out, spec.repos, stage_marker=marker)
+            # 57B-95 review FIX 1: unlike plain `run`/`sweep` (which always
+            # demand a FRESH --out via prepare_output_directory above, so an
+            # existing/incompatible run can never be reached that way), the
+            # post-discovery `callgraph`/`dependency-map` subcommands layer
+            # into an EXISTING run dir here -- the same schema-mixing hazard
+            # `guard_run` exists to catch for --run-based commands below.
+            compat.guard_run(out)
             args.scan_date = args.scan_date or date.today().isoformat()
             return (_callgraph if args.command == "callgraph" else _depmap)(
                 args, spec, out)
@@ -1132,6 +1179,17 @@ def main(argv: list[str] | None = None) -> int:
     except WrapperSafetyError as exc:
         # Safety refusals are not input mistakes: distinct message + exit code.
         print(f"wrapper safety refusal: {exc}", file=sys.stderr)
+        return 4
+    except compat.RuntimeCompatRefusal as exc:
+        print(f"wrapper runtime incompatible: {exc}", file=sys.stderr)
+        return 4
+    except compat.CompatRefusal as exc:
+        # 57B-95 review FIX 1: `compat.guard_run` (wired above for every
+        # command that advances an EXISTING run) raises this distinct
+        # exception type -- it must never fall through to the generic
+        # input-error handler below, which would give it the wrong message
+        # and blur it together with an ordinary usage mistake.
+        print(f"wrapper compat refusal: {exc}", file=sys.stderr)
         return 4
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         print(f"wrapper input error: {exc}", file=sys.stderr)
