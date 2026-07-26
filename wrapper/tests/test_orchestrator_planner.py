@@ -143,10 +143,10 @@ def test_plan_judgment_creates_the_expected_task_count_and_shard_fanout(tmp_path
     planned = planner.plan_judgment(run)
 
     lens_tasks = [t for t in planned if t.task_type == "lens-findings"]
-    boundary_tasks = [t for t in planned if t.task_type == "boundary-resolution"]
-    assert len(boundary_tasks) == 1
-    assert boundary_tasks[0].task_id == "boundary-resolution"
-    assert boundary_tasks[0].shard == ""
+    formation_tasks = [t for t in planned if t.task_type == "formation-proposal"]
+    assert len(formation_tasks) == 1
+    assert formation_tasks[0].task_id == "formation"
+    assert formation_tasks[0].shard == ""
 
     # 4 repo-sharded lenses x 2 repos + 5 workspace-sharded lenses = 13.
     assert len(lens_tasks) == 4 * 2 + 5
@@ -177,13 +177,24 @@ def test_plan_judgment_registers_every_task_in_the_engine_ledger(tmp_path):
     assert all(state == "pending" for state in states.values())
 
 
-def test_boundary_resolution_has_no_depends_on_and_runs_independently(tmp_path):
+def test_formation_task_has_no_depends_on_and_runs_independently(tmp_path):
     run, _ = _build_run(tmp_path)
     planner.plan_judgment(run)
     engine = Engine(run)
     # Independent of every lens task -- it must be ready immediately,
     # alongside every (unclaimed) lens task, with nothing claimed yet.
-    assert "boundary-resolution" in engine.ready_task_ids()
+    assert "formation" in engine.ready_task_ids()
+
+
+def test_formation_task_is_formation_proposal_not_boundary_resolution(tmp_path):
+    """The exact live-run gap this fix addresses: boundary-resolution's M0
+    schema validates only a bare `dispositions` list, which cannot by
+    itself produce module-map.json's required `modules` rows."""
+    run, _ = _build_run(tmp_path)
+    planned = planner.plan_judgment(run)
+    task_types = {task.task_type for task in planned}
+    assert "formation-proposal" in task_types
+    assert "boundary-resolution" not in task_types
 
 
 def test_repo_sharded_lens_task_only_sees_its_own_repos_signal_views(tmp_path):
@@ -216,6 +227,76 @@ def test_repo_sharded_lens_task_only_sees_its_own_repos_signal_views(tmp_path):
     assert api_meta["candidate_count"] == 1
     web_candidates = json.loads(web_inputs["module-candidates.json"])
     assert {row["candidate_id"] for row in web_candidates} == {"mc-web-folder"}
+
+
+# --------------------------------------------------------------------------- #
+# view inputs are named by their own canonical citable path -- a live run
+# surfaced executors citing the packet's own input NAME verbatim (they cite
+# what they see as the section header), so a `view:<tool>:<repo>:<file>`
+# naming leaked straight into citations like
+# `view:lizard:wcp-auth:lizard-wcp-auth.view.txt:13`, which fails
+# citation_grammar_kind (does not start with exactly "signals/").
+# --------------------------------------------------------------------------- #
+
+def test_view_inputs_are_named_by_their_exact_signals_path(tmp_path):
+    run, _ = _build_run(tmp_path)
+    lens_templates = tpl.load_lens_templates()
+    from analysis_wrapper.orchestrator.planner import _load_json, _lens_inputs
+    synthesis_doc = _load_json(run / "synthesis-input.json")
+    module_candidates_doc = _load_json(run / "module-candidates.json")
+    run_summary = _load_json(run / "signals" / "run-summary.json")
+
+    api_inputs = _lens_inputs(run, lens_templates["complexity"], synthesis_doc,
+                              module_candidates_doc, run_summary, "api")
+    assert "signals/lizard-api.view.txt" in api_inputs
+    assert api_inputs["signals/lizard-api.view.txt"] == (
+        (run / "signals" / "lizard-api.view.txt").read_text("utf-8"))
+    # no input name uses the old "view:<tool>:<repo>:<file>" scheme.
+    assert not any(name.startswith("view:") for name in api_inputs)
+    # every signal-view input name matches _shared.md's own citation grammar
+    # prefix exactly -- schemas.SIGNAL_REF is `signals/([^:]+):(\d+)`, so the
+    # bare input name (no line number yet) must start with "signals/" and
+    # contain no further colon.
+    view_input_names = [name for name in api_inputs if name.startswith("signals/")]
+    assert view_input_names  # at least one view made it through
+    assert all(":" not in name[len("signals/"):] for name in view_input_names)
+
+
+def test_view_filenames_never_collide_across_distinct_tool_repo_rows(tmp_path):
+    """Verifies the assumption the naming fix above relies on: a view
+    filename already embeds tool + repo (executor.py's run_tool names each
+    view "<tool>-<repo-artifact-key>.view.txt"), so two DIFFERENT
+    (tool, repository_ref) rows can never collapse onto the same
+    "signals/<file>" input name and silently overwrite each other."""
+    run, _ = _build_run(tmp_path)
+    from analysis_wrapper.orchestrator.planner import _load_json
+    run_summary = _load_json(run / "signals" / "run-summary.json")
+    rows = run_summary["signals"]
+    seen_views: dict[str, tuple] = {}
+    for row in rows:
+        view = row.get("view")
+        if not view:
+            continue
+        key = (row.get("tool"), row.get("repository_ref"))
+        assert view not in seen_views or seen_views[view] == key, (
+            f"view {view!r} shared by two different (tool, repo) rows: "
+            f"{seen_views.get(view)} and {key}")
+        seen_views[view] = key
+    assert len(seen_views) == len({row.get("view") for row in rows if row.get("view")})
+
+    # And the planner's own dict construction never drops one: every
+    # complete/partial view row for a lens with signals=[] (open-lens, "every
+    # tool") lands in the inputs dict, one per row, none overwritten.
+    lens_templates = tpl.load_lens_templates()
+    from analysis_wrapper.orchestrator.planner import _lens_inputs
+    synthesis_doc = _load_json(run / "synthesis-input.json")
+    module_candidates_doc = _load_json(run / "module-candidates.json")
+    inputs = _lens_inputs(run, lens_templates["open-lens"], synthesis_doc,
+                         module_candidates_doc, run_summary, None)
+    expected_views = {f"signals/{row['view']}" for row in rows
+                      if row.get("status") in {"complete", "partial"} and row.get("view")}
+    actual_views = {name for name in inputs if name.startswith("signals/")}
+    assert actual_views == expected_views
 
 
 def test_duplication_workspace_task_includes_the_cross_repo_view(tmp_path):
@@ -428,18 +509,17 @@ def test_a_tiny_context_budget_forces_composer_sharding(tmp_path):
 # two-phase dedup planning
 # --------------------------------------------------------------------------- #
 
-# boundary-resolution has no depends_on -- it is ALWAYS ready alongside
+# The formation task has no depends_on -- it is ALWAYS ready alongside
 # every lens task from the moment plan_judgment registers it, so a plain
 # ``engine.claim(1)`` (sorted task_id order) can offer it ahead of whatever
-# lens task a test cares about ("boundary-resolution" < "lens-..."
-# alphabetically). The helpers below always claim a whole READY BATCH at
-# once and dispatch each claimed item by its own task_type/task_id, so no
-# test ever depends on the engine's claim ordering.
+# lens task a test cares about ("formation" < "lens-..." alphabetically).
+# The helpers below always claim a whole READY BATCH at once and dispatch
+# each claimed item by its own task_type/task_id, so no test ever depends
+# on the engine's claim ordering.
 
-_BOUNDARY_PLACEHOLDER_OUTPUT = {"dispositions": [
-    {"candidate_id": "mc-placeholder", "disposition": "unresolved", "module_ids": [],
-     "reason": "placeholder -- these planner tests do not exercise boundary-resolution's "
-               "own content"},
+_FORMATION_PLACEHOLDER_OUTPUT = {"modules": [
+    {"module_id": "placeholder", "name": "Placeholder", "classification": "unresolved",
+     "confidence": "low", "aliases": []},
 ]}
 
 
@@ -474,9 +554,8 @@ def _submit(engine, item, output, *, status="ok"):
 
 def _validate_all_lens_tasks(run, planned):
     """Claim and validate every ready task in one batch (every lens task plus
-    boundary-resolution are mutually independent, so all become ready at
-    once): real content for each lens task, a placeholder for
-    boundary-resolution."""
+    the formation task are mutually independent, so all become ready at
+    once): real content for each lens task, a placeholder for formation."""
     engine = Engine(run)
     claimed = engine.claim(len(engine.ready_task_ids()), executor_kind="manual", model="test")
     assert {item.packet.task_id for item in claimed} == set(
@@ -486,7 +565,7 @@ def _validate_all_lens_tasks(run, planned):
             outcome = _submit(engine, item, _lens_output(item.packet.task_id))
             assert outcome["status"] == "validated", outcome
         else:
-            _submit(engine, item, _BOUNDARY_PLACEHOLDER_OUTPUT)
+            _submit(engine, item, _FORMATION_PLACEHOLDER_OUTPUT)
     return engine
 
 
@@ -512,7 +591,7 @@ def test_plan_dedup_refuses_while_a_lens_task_is_still_pending(tmp_path):
         if item.packet.task_type == "lens-findings":
             _submit(engine, item, _lens_output(item.packet.task_id))
         else:
-            _submit(engine, item, _BOUNDARY_PLACEHOLDER_OUTPUT)
+            _submit(engine, item, _FORMATION_PLACEHOLDER_OUTPUT)
     with pytest.raises(planner.PlannerError, match="still pending"):
         planner.plan_dedup(run)
 
@@ -550,7 +629,7 @@ def test_plan_dedup_survives_a_permanently_failed_lens_shard(tmp_path):
         elif item.packet.task_type == "lens-findings":
             _submit(engine, item, _lens_output(item.packet.task_id))
         else:
-            _submit(engine, item, _BOUNDARY_PLACEHOLDER_OUTPUT)
+            _submit(engine, item, _FORMATION_PLACEHOLDER_OUTPUT)
 
     # doomed's first attempt failed (malformed) but is not yet exhausted; it
     # is the ONLY thing ready now (everything else already validated) --
@@ -581,7 +660,7 @@ def test_plan_dedup_rejects_colliding_finding_ids_across_lens_outputs(tmp_path):
             outcome = _submit(engine, item, output)
             assert outcome["status"] == "validated"
         else:
-            _submit(engine, item, _BOUNDARY_PLACEHOLDER_OUTPUT)
+            _submit(engine, item, _FORMATION_PLACEHOLDER_OUTPUT)
     with pytest.raises(planner.PlannerError, match="globally unique"):
         planner.plan_dedup(run)
 
@@ -596,8 +675,8 @@ def test_plan_dedup_is_idempotent(tmp_path):
     assert second.created is False
 
 
-def test_boundary_resolution_instructions_carry_synthesis_md_granularity_rules(tmp_path):
-    instructions = planner._boundary_resolution_instructions()
+def test_formation_instructions_carry_synthesis_md_granularity_rules(tmp_path):
+    instructions = planner._formation_instructions()
     assert "Form modules from candidates" in instructions
     assert "not by itself a business module" in instructions  # granularity contract bullet
 

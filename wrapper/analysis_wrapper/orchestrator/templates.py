@@ -44,12 +44,39 @@ LENS_OUTPUT_SCHEMA_ID = "lens-findings.v1"
 
 # Bounded, factual -- states the return contract only; the actual analysis
 # rules live entirely in _shared.md + the lens body appended after this.
+# The coverage-shape/citation-grammar paragraphs below were added after a
+# live run's first generation: 16 of 16 lens results violated exactly these
+# points (a prose coverage status, extra coverage keys, or a ref that named
+# a candidate_id / an input's own file name instead of a citable location)
+# even though _shared.md already documents the same rules in prose --
+# stating them again here, concretely and with one literal example each, in
+# the FIRST thing a lens task reads is a deliberate, evidence-driven
+# reinforcement, not a duplicate.
 LENS_OUTPUT_CONTRACT_PREAMBLE = (
     "Return a single JSON object matching the lens-findings output schema: "
     '{"findings": [...], "coverage": [...]}. Every finding uses the exact '
     "atomic shape given below, including the required changeability_question "
     "field. Return ONLY this JSON object -- no prose outside it, no code "
-    "fence unless it wraps exactly this JSON."
+    "fence unless it wraps exactly this JSON.\n"
+    "\n"
+    "Coverage row shape is EXACT -- one object per signal you were asked to "
+    'read: {"signal": "<name>", "status": "complete" | "partial" | "failed" '
+    '| "skipped", "note": "<string, may be empty>"}. No other keys. status '
+    "is one of exactly those four words -- never a prose sentence describing "
+    "the status, never any other value.\n"
+    "\n"
+    "Citations (every evidence[].refs entry) use exactly one of three "
+    "grammars, one example each:\n"
+    "  - source: repo@revision:path:line\n"
+    "    example: api@4f1c9a2b3d5e6f708192a3b4c5d6e7f809192a3b:internal/handler.go:42\n"
+    "  - signal: signals/<view-file>:line\n"
+    "    example: signals/lizard-api.view.txt:13\n"
+    "  - metric: metric:<metric_ref>\n"
+    "    example: metric:code.analyzed-scope.total\n"
+    "A ref is NEVER a candidate_id (module-candidates.json's own ids, e.g. "
+    '"mc-1a2b3c4d") and NEVER an input\'s own file or section name (e.g. '
+    '"module-candidates.json", "graph-nodes.json") -- those identify WHICH '
+    "input you read, not a citable location inside it."
 )
 
 
@@ -62,7 +89,7 @@ def content_digest(*parts: str) -> str:
     """A stable sha256 over an ordered sequence of text parts, NUL-joined so
     e.g. ``("ab", "c")`` and ``("a", "bc")`` never collide. Shared by every
     orchestrator module that needs a "did this source text change" digest
-    (lens templates here; the boundary-resolution/dedup-rank instruction
+    (lens templates here; the formation-proposal/dedup-rank instruction
     text in ``planner.py``) so the same digest recipe is used everywhere."""
     return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
 

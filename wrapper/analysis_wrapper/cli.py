@@ -426,7 +426,7 @@ def parser() -> argparse.ArgumentParser:
         help="(orchestrator, 57B-116) compose + register the judgment DAG for a "
              "prepared run: one lens-findings task per repo-sharded lens x repo "
              "(plus one per workspace-sharded lens), and the independent "
-             "boundary-resolution task")
+             "formation-proposal task")
     plan_judgment_cmd.add_argument("--run", required=True, help="run directory")
     plan_judgment_cmd.add_argument(
         "--context-budget", type=int, default=96000, dest="context_budget",
@@ -451,6 +451,17 @@ def parser() -> argparse.ArgumentParser:
     assemble_findings_cmd.add_argument("--run", required=True, help="run directory")
     assemble_findings_cmd.add_argument(
         "--out", required=True, help="path to write the assembled findings JSON document")
+    write_module_map_cmd = sub.add_parser(
+        "write-module-map",
+        help="(orchestrator, 57B-116) materialize module-map.json from the "
+             "run's single validated formation-proposal task -- mechanical "
+             "only (the task already decided modules/dispositions/rules); "
+             "finalize-module-map (unchanged) validates/expands it afterward")
+    write_module_map_cmd.add_argument("--run", required=True, help="run directory")
+    write_module_map_cmd.add_argument(
+        "--out", default="",
+        help="override output path (default: <run>/module-map.json, the "
+             "canonical location finalize-module-map reads)")
     return result
 
 
@@ -1299,6 +1310,18 @@ def _assemble_findings_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _write_module_map_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import formation
+    run = Path(args.run).expanduser().resolve()
+    try:
+        out_path = formation.write(run, out=args.out or None)
+    except formation.FormationWriterError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    print(f"wrote {out_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -1342,6 +1365,8 @@ def main(argv: list[str] | None = None) -> int:
             return _plan_dedup_cmd(args)
         if args.command == "assemble-findings":
             return _assemble_findings_cmd(args)
+        if args.command == "write-module-map":
+            return _write_module_map_cmd(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)
