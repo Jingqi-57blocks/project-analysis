@@ -35,7 +35,7 @@ import json
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .. import identity
 from . import templates as tpl
@@ -123,13 +123,14 @@ class PlannedTask:
 # (repo@<head|WORKTREE|NON-GIT>:path:line). See templates.py's per-lens
 # frontmatter comments for the shard/signals half of this same reasoning;
 # this table documents the INPUT-SELECTION half. Every extra section here is
-# passed through VERBATIM (synthesis-input.json already bounds each one)
-# EXCEPT dead-code's route evidence, handled specially below (trimmed per
-# repo, since dead-code is the only repo-sharded lens needing route context).
+# passed through via _SECTION_SPLITTERS below (array + small meta sibling,
+# NOT verbatim -- see that table's own docstring for why) EXCEPT dead-code's
+# route evidence, handled specially in _lens_inputs (trimmed per repo, since
+# dead-code is the only repo-sharded lens needing route context).
 _EXTRA_SECTIONS: dict[str, tuple[str, ...]] = {
     "structure-inventory": ("graph",),               # "route handlers outside the routing tree"
     "complexity": (),
-    "dead-code": (),                                   # special-cased: _dead_code_route_evidence
+    "dead-code": (),                                   # special-cased: _dead_code_route_nodes/_rows
     "duplication": (),
     "dependencies-cycles": ("graph", "route_inventory", "ui_route_linkage"),  # cross-stack contracts
     "hotspots-change-friction": (),
@@ -163,39 +164,136 @@ def _matching_signal_rows(run_summary: Mapping[str, Any], signals: tuple[str, ..
         str(row.get("tool", "")), str(row.get("repository_ref", "")), str(row.get("view", ""))))
 
 
-def _trim_candidates(module_candidates_doc: Mapping[str, Any],
-                     repository_ref: str | None) -> dict:
+# --------------------------------------------------------------------------- #
+# input serialization: the composer can only shard a JSON ARRAY or
+# line-oriented TEXT (composer.py's own documented limit) -- a JSON OBJECT
+# wrapping the real list (e.g. {"candidates": [...]}) is neither, so the
+# packet fails closed the moment that object becomes a packet's largest
+# input. This bit a real run: lens-dependencies-cycles and lens-open-lens
+# both hit "input 'module-candidates.json' is ... neither a JSON array nor
+# line-oriented text" on a real prepared WCP run, at both the default 96k
+# and a raised 180k budget. Every list-carrying input below is therefore
+# split into (a) the bare array itself, sharded like any other array input,
+# and (b) a small sibling "*-meta.json" input carrying whatever non-list
+# bookkeeping the original section also had -- never silently dropped.
+# --------------------------------------------------------------------------- #
+
+def _split_module_candidates(module_candidates_doc: Mapping[str, Any],
+                             repository_ref: str | None) -> tuple[list, dict]:
     candidates = list(module_candidates_doc.get("candidates", []))
     if repository_ref is not None:
         candidates = [row for row in candidates if row.get("repository_ref") == repository_ref]
-    return {
+    meta = {
         "schema_version": module_candidates_doc.get("schema_version", ""),
         "project_ref": module_candidates_doc.get("project_ref", ""),
         "candidate_count": len(candidates),
-        "candidates": candidates,
+        "limitations": module_candidates_doc.get("limitations", []),
     }
+    return candidates, meta
 
 
-def _trim_repositories(synthesis_doc: Mapping[str, Any], repository_ref: str | None) -> dict:
+def _trim_repositories(synthesis_doc: Mapping[str, Any], repository_ref: str | None) -> list:
     items = list(synthesis_doc.get("repositories", {}).get("items", []))
     if repository_ref is not None:
         items = [row for row in items if row.get("repository_ref") == repository_ref]
-    return {"items": items}
+    return items
 
 
-def _dead_code_route_evidence(synthesis_doc: Mapping[str, Any], repository_ref: str) -> dict:
-    """dead-code.md's own "module signals (routes -- an orphan that IS a
-    route target is not dead)" bullet needs route evidence; this repo-sharded
-    lens gets a small, purpose-built, per-repo-trimmed input rather than the
-    whole (workspace-wide) graph/route_inventory sections."""
+def _dead_code_route_nodes(synthesis_doc: Mapping[str, Any], repository_ref: str) -> list:
     graph = synthesis_doc.get("graph") or {}
     route_bucket = graph.get("nodes", {}).get("route", {})
-    route_items = [row for row in route_bucket.get("items", [])
-                   if row.get("repository_ref") == repository_ref]
+    return [row for row in route_bucket.get("items", [])
+           if row.get("repository_ref") == repository_ref]
+
+
+def _dead_code_route_inventory_rows(synthesis_doc: Mapping[str, Any],
+                                    repository_ref: str) -> list:
     inventory_doc = synthesis_doc.get("route_inventory") or {}
-    inventory_items = [row for row in inventory_doc.get("rows", {}).get("items", [])
-                       if row.get("repository_ref") == repository_ref]
-    return {"graph_route_nodes": route_items, "route_inventory_rows": inventory_items}
+    return [row for row in inventory_doc.get("rows", {}).get("items", [])
+           if row.get("repository_ref") == repository_ref]
+
+
+def _split_graph(graph: Mapping[str, Any]) -> tuple[list, dict]:
+    """``graph.nodes`` is a dict of kind -> bounded {"items": [...]} buckets
+    (repository/module/route/data-store/external-boundary/deployable-unit);
+    flattened into ONE array (each row tagged with its own "kind", which the
+    per-kind grouping had left implicit) so it can be sharded like any other
+    JSON-array input. ``highest_degree_nodes`` stays inside meta: it is
+    capped at 100 rows (synthesis_input.py's ``_HUB_LIMIT``), far smaller
+    than the combined node list (up to 6 kinds x 200 rows each), so it is
+    not a realistic sharding risk on its own -- not blindly restructured.
+    ``coverage`` also keeps a per-partition, per-repo count breakdown nested
+    inside meta (up to ~200 rows per partition) -- left alone for the same
+    reason: aggregate COUNT rows only (no evidence/attrs payload per row
+    the way a node carries), so its worst case stays well under a node
+    list's, even at comparable row counts."""
+    nodes_by_kind = graph.get("nodes", {}) or {}
+    flattened = []
+    nodes_summary = {}
+    for kind in sorted(nodes_by_kind):
+        bucket = nodes_by_kind[kind] or {}
+        for row in bucket.get("items", []):
+            flattened.append({**row, "kind": kind})
+        nodes_summary[kind] = {key: bucket.get(key) for key in
+                               ("total_count", "included_count", "truncated")}
+    meta = {
+        "stats": graph.get("stats", {}),
+        "coverage": graph.get("coverage", {}),
+        "edges_by_type_and_status": graph.get("edges_by_type_and_status", {}),
+        "nodes_summary": nodes_summary,
+        "highest_degree_nodes": graph.get("highest_degree_nodes", {}),
+    }
+    return flattened, meta
+
+
+def _split_route_inventory(route_inventory: Mapping[str, Any]) -> tuple[list, dict]:
+    rows = route_inventory.get("rows", {}) or {}
+    meta = {key: rows.get(key) for key in ("total_count", "included_count", "truncated")}
+    meta["notes"] = route_inventory.get("notes", [])
+    return list(rows.get("items", [])), meta
+
+
+def _split_ui_route_linkage(ui_route_linkage: Mapping[str, Any]) -> tuple[list, dict]:
+    rows = ui_route_linkage.get("rows", {}) or {}
+    meta = {
+        "frontends": ui_route_linkage.get("frontends", []),
+        "calls_by_frontend_repository": ui_route_linkage.get("calls_by_frontend_repository", {}),
+        "notes": ui_route_linkage.get("notes", []),
+    }
+    meta.update({key: rows.get(key) for key in ("total_count", "included_count", "truncated")})
+    return list(rows.get("items", [])), meta
+
+
+def _split_bounded_list(section: Mapping[str, Any]) -> tuple[list, dict]:
+    """A plain ``_bounded(...)``-shaped section (integration_candidates,
+    role_catalog_by_repository): ``{"total_count", "included_count",
+    "truncated", "items": [...]}`` directly at the top level -- split its
+    items out from the small counts."""
+    meta = {key: section.get(key) for key in ("total_count", "included_count", "truncated")}
+    return list(section.get("items", [])), meta
+
+
+def _split_capabilities(capabilities_doc: Mapping[str, Any]) -> tuple[list, dict]:
+    meta = {key: value for key, value in capabilities_doc.items() if key != "capabilities"}
+    return list(capabilities_doc.get("capabilities", [])), meta
+
+
+# (array_input_name, meta_input_name, split_fn) per EXTRA synthesis-input.json
+# section a lens may consume (see _EXTRA_SECTIONS below). Every section here
+# has one dominant natural array worth hoisting out; a section not listed
+# here (none currently) would stay a single whole-object input instead.
+_SECTION_SPLITTERS: dict[str, tuple[str, str, Callable[[Mapping[str, Any]], tuple[list, dict]]]] = {
+    "graph": ("graph-nodes.json", "graph-meta.json", _split_graph),
+    "route_inventory": ("route-inventory.json", "route-inventory-meta.json",
+                        _split_route_inventory),
+    "ui_route_linkage": ("ui-route-linkage.json", "ui-route-linkage-meta.json",
+                        _split_ui_route_linkage),
+    "integration_candidates": ("integration-candidates.json",
+                              "integration-candidates-meta.json", _split_bounded_list),
+    "role_catalog_by_repository": ("role-catalog-by-repository.json",
+                                   "role-catalog-by-repository-meta.json", _split_bounded_list),
+    "capabilities": ("capabilities.json", "capabilities-meta.json", _split_capabilities),
+}
 
 
 def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[str, Any],
@@ -213,19 +311,26 @@ def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[s
         name = f"view:{row.get('tool', '')}:{row.get('repository_ref', '')}:{row['view']}"
         inputs[name] = content
 
-    inputs["module-candidates.json"] = json.dumps(
-        _trim_candidates(module_candidates_doc, repository_ref), sort_keys=True)
+    candidates, candidates_meta = _split_module_candidates(module_candidates_doc, repository_ref)
+    inputs["module-candidates.json"] = json.dumps(candidates, sort_keys=True)
+    inputs["module-candidates-meta.json"] = json.dumps(candidates_meta, sort_keys=True)
     inputs["repositories.json"] = json.dumps(
         _trim_repositories(synthesis_doc, repository_ref), sort_keys=True)
 
     if template.lens_id == "dead-code" and repository_ref is not None:
-        inputs["route-evidence.json"] = json.dumps(
-            _dead_code_route_evidence(synthesis_doc, repository_ref), sort_keys=True)
+        inputs["dead-code-graph-route-nodes.json"] = json.dumps(
+            _dead_code_route_nodes(synthesis_doc, repository_ref), sort_keys=True)
+        inputs["dead-code-route-inventory-rows.json"] = json.dumps(
+            _dead_code_route_inventory_rows(synthesis_doc, repository_ref), sort_keys=True)
     else:
         for key in _EXTRA_SECTIONS.get(template.lens_id, ()):
             section = synthesis_doc.get(key)
-            if section is not None:
-                inputs[f"{key}.json"] = json.dumps(section, sort_keys=True)
+            if section is None:
+                continue
+            array_name, meta_name, split = _SECTION_SPLITTERS[key]
+            array, meta = split(section)
+            inputs[array_name] = json.dumps(array, sort_keys=True)
+            inputs[meta_name] = json.dumps(meta, sort_keys=True)
     return inputs
 
 
@@ -356,9 +461,14 @@ def plan_judgment(run_dir: str | Path, *,
                 created=False))
 
     # boundary-resolution: one global, INDEPENDENT task (no depends_on) --
-    # runs in parallel with every lens task above.
+    # runs in parallel with every lens task above. It carries the FULL
+    # candidate universe (repository_ref=None -> no per-repo trim) -- the
+    # single biggest input in the whole DAG, so it gets the same
+    # array/meta split every lens task's own candidates input gets above.
+    all_candidates, all_candidates_meta = _split_module_candidates(module_candidates_doc, None)
     boundary_inputs = {
-        "module-candidates.json": json.dumps(module_candidates_doc, sort_keys=True),
+        "module-candidates.json": json.dumps(all_candidates, sort_keys=True),
+        "module-candidates-meta.json": json.dumps(all_candidates_meta, sort_keys=True),
     }
     cohesion_path = run / "cohesion-bundle.json"
     if cohesion_path.is_file():
