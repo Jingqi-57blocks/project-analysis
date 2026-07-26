@@ -42,13 +42,20 @@ first-class confidence.
   instead. Inspection-only runs (dirty worktree or non-git) can NEVER be accepted —
   not at completion and not later.
 
-## Two directory worlds — never mix them
+## Three directory worlds — never mix them
 
-- **`<skill-dir>`** — this skill's own base directory. The wrapper resolves it
-  automatically from its own location (no environment variable required); a host may also
-  announce it as "Base directory for this skill" or expose `${CLAUDE_SKILL_DIR}`, but those
-  are optional conveniences, never a dependency. The wrapper, templates, `state/`, and
-  `output/` all live HERE.
+- **`<skill-dir>`** — this skill's own CODE tree: the wrapper source, lenses, and
+  templates. The wrapper resolves it automatically from its own location (no
+  environment variable required); a host may also announce it as "Base directory for
+  this skill" or expose `${CLAUDE_SKILL_DIR}`, but those are optional conveniences,
+  never a dependency. Installing, upgrading, or reinstalling the skill only ever
+  replaces this tree — it never holds persistent data.
+- **`<data-root>`** — where every persistent artifact lives: `state/`, `output/`,
+  `exported/`, and the generated runtimes (Python venv, Node/Go tool installs). The
+  wrapper resolves this itself, in order: `$PROJECT_ANALYSIS_HOME` (explicit override)
+  → macOS `~/Library/Application Support/project-analysis` → Linux/WSL2
+  `${XDG_DATA_HOME:-~/.local/share}/project-analysis`. Reinstalling or upgrading
+  `<skill-dir>` never touches `<data-root>`.
 - **`<workspace>`** — the target being analyzed. Treat it as read-only: NEVER create
   `state/`, `output/`, virtualenvs, or any other analyzer artifact inside the target; the
   wrapper enforces this for its own outputs, and you must uphold it for report files
@@ -57,7 +64,8 @@ first-class confidence.
   gitignored paths (caches, `node_modules`) are not detectable, so never direct any
   write there and never claim filesystem-level immutability in reports.
 
-All skill-local paths in this file are relative to `<skill-dir>`.
+All skill-local (code) paths in this file are relative to `<skill-dir>`; all persistent
+(data) paths are relative to `<data-root>`.
 
 **Private fixtures:** `<skill-dir>` may contain private development or acceptance
 fixtures about specific projects. NEVER read such fixtures during a run; they are not
@@ -134,7 +142,7 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
 ## Runs, pointers, and immutability
 
 - Every overview run writes an **immutable snapshot** under
-  `output/<project-key>/overview/<run-id>/`. Never edit a completed run.
+  `<data-root>/output/<project-key>/overview/<run-id>/`. Never edit a completed run.
 - **`<run-id>`** = optional readable label (from `--run-id`) or UTC start timestamp,
   plus the short input digest: `<label>-<6-hex digest>` when supplied, otherwise
   `YYYYMMDDThhmmssZ-<6-hex digest of ordered repo HEADs, dirty markers, and language>`.
@@ -142,7 +150,7 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
   Timestamp and digest are labels, not a uniqueness guarantee: uniqueness comes from the
   rule that an existing run directory is NEVER reused — if the computed name already
   exists, append the first free `-2`, `-3`, … suffix.
-- Two pointers per project in `state/<project-key>/pointers.json`:
+- Two pointers per project in `<data-root>/state/<project-key>/pointers.json`:
   `latest_completed` (set automatically when any overview finishes) and `current` (set
   only on explicit user acceptance). `latest_completed` is for inspection only — it is
   NEVER an implicit drill-down source. When an overview completes cleanly, offer
@@ -166,16 +174,17 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
 
 Every stage of a run is a **resumable checkpoint** recorded in the run
 directory's `run-state.json` (stages: discovery → signals → findings → map →
-overview). Drive it with the wrapper CLI (all paths absolute, skill-dir
-anchored):
+overview). Drive it with the wrapper CLI (all paths absolute; the run itself lives
+under `<data-root>/output/`, resolved automatically — no flag needed):
 
-- `new-run --workspace <target> --skill-root <skill-dir> [--language ...]
-  [--model <actual-id>] [--effort <actual-level>] [--run-id <label>]
-  [--exclude ...]` — mints the run directory, runs discovery into it
+- `new-run --workspace <target> [--language ...] [--model <actual-id>]
+  [--effort <actual-level>] [--run-id <label>] [--exclude ...]` — mints the run
+  directory under `<data-root>/output/`, runs discovery into it
   (stage 1 done), writes `targets.json`, `discovery-report.json`, and the canonical
   `identity-map.json`, then reports `inspection_only` and the next stage.
   Hosts that cannot expose model or effort omit those flags; provenance records the
-  value as `unknown`, never as a guessed default.
+  value as `unknown`, never as a guessed default. (`--skill-root` is still accepted for
+  older invocations but is a no-op here — it never determines where data lives; omit it.)
 - `status --run <run-dir>` — prints the resume point and staleness (exit 5 +
   a per-repo `old -> new` list when the workspace moved). **Fresh + incomplete
   → resume from the printed next stage instead of starting over; stale → mint
@@ -274,9 +283,9 @@ anchored):
    `current` pointer on the user's yes). Skip the offer
    for inspection-only runs.
 8. **Export the HTML report (default).** After the markdown reports are written, run
-   `project-analysis-wrapper export --run <run-dir> --skill-root <skill-root>` (format
-   defaults to `html`) to render the offline, self-contained HTML report into
-   `<skill-root>/exported/{project}-analysis/{run-id}/html/` (gitignored, regenerable).
+   `project-analysis-wrapper export --run <run-dir>` (format defaults to `html`) to
+   render the offline, self-contained HTML report into
+   `<data-root>/exported/{project}-analysis/{run-id}/html/` (regenerable).
    Run scoping prevents a later analysis from overwriting an earlier export. This is
    the default. Skip it only when the user opted out with `--no-export` / `--export none`
    — the markdown reports are always produced regardless. The export is deterministic,
@@ -298,14 +307,14 @@ Mint the drill-down run with the wrapper (it enforces resolution, staleness, and
 linkage — never create the directory by hand):
 
 ```
-"${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-analysis-wrapper" new-drilldown \
-    --skill-root "${CLAUDE_SKILL_DIR}" --module <module-id> [--from-run <run-id>]
+<wrapper-executable> new-drilldown --module <module-id> [--from-run <run-id>]
 ```
 
-Resolution is `--from-run` → `current` pointer → refusal listing completed runs;
-a stale source (any repo moved/dirtied since the overview) exits 5 naming the
+(`<wrapper-executable>` is the path bootstrap printed — see "Running the wrapper"
+below.) Resolution is `--from-run` → `current` pointer → refusal listing completed
+runs; a stale source (any repo moved/dirtied since the overview) exits 5 naming the
 drift — run a new overview instead. The minted run lives in
-`output/<project-key>/drilldown/<run-id>/` with a `source_overview_run` link and
+`<data-root>/output/<project-key>/drilldown/<run-id>/` with a `source_overview_run` link and
 stages `resolve → prd → health` (same `mark-stage`/`rollback`/audit-before-mark
 discipline as overviews). Then produce two documents from the templates:
 - `prd.md` (`templates/module-prd.md`) — PM-facing; sections included **where
@@ -318,20 +327,29 @@ discipline as overviews). Then produce two documents from the templates:
 
 ## Confirmed facts
 
-`state/<project-key>/confirmed_facts.md` records ONLY corrections the user explicitly
+`<data-root>/state/<project-key>/confirmed_facts.md` records ONLY corrections the user explicitly
 confirmed in chat. Each record: scope, source, date, status
 (`active | superseded | conflicts_with_observation`). When a confirmed fact contradicts
 observed code, surface the conflict in the report — never silently prefer either side.
 
-## Layout (all under `<skill-dir>`)
+## Layout
+
+Code, under `<skill-dir>`:
 
 ```
 SKILL.md            this file
 lenses/             lens prompt definitions (analysis dimensions)
 templates/          overview (PM primary), technical-overview, project-map, module-prd, module-health
 wrapper/            Python tool-execution wrapper (see wrapper/README.md)
-state/<project-key>/     pointers.json, confirmed_facts.md   (runtime, per target)
-output/<project-key>/    overview/<run-id>/, drilldown/<run-id>/   (runtime, per target)
+```
+
+Data, under `<data-root>` (resolution: see "Three directory worlds" above):
+
+```
+state/<project-key>/     pointers.json, confirmed_facts.md   (per target)
+output/<project-key>/    overview/<run-id>/, drilldown/<run-id>/   (per target)
+exported/<project-key>-analysis/<run-id>/<format>/   (regenerable)
+runtime/1/               venv/, node_tools/, go_tools/   (generated; rebuilt fresh, never migrated)
 ```
 
 `<project-key>` is the portable filename form of the real workspace name. Ordinary
@@ -348,34 +366,45 @@ renames/merges recorded as aliases.
 from any working directory**: it self-locates the skill (no environment variable needed),
 checks the one hard prerequisite — Python 3.11+, with an actionable message otherwise —
 and dispatches to the wrapper. `${CLAUDE_SKILL_DIR}` is an optional host convenience, never
-required; every skill-local path below is relative to the self-resolved `<skill-dir>`.
+required; every skill-local (code) path below is relative to the self-resolved
+`<skill-dir>`, and every persistent (data) path is relative to `<data-root>` (see
+"Three directory worlds").
 
 One-time per machine, from `<skill-dir>/wrapper`:
-`python3 -m analysis_wrapper.bootstrap` (creates the gitignored `wrapper/.venv` and
-installs only the project-local Python runtime — nothing global, no dev dependencies).
-It NEVER installs Node, Go, system packages, or external analysis binaries. Before a
-run, consult `README.md` and report missing developer-managed prerequisites as reduced
-coverage; never invoke a package manager on the developer's behalf. A non-Go analysis
-does not require Go.
+`python3 -m analysis_wrapper.bootstrap` creates the virtual environment under
+`<data-root>/runtime/1/venv` by default (override with `--venv <path>`; it never lives
+inside `<skill-dir>`, so reinstalling/upgrading the skill never disturbs an
+already-bootstrapped environment) and installs only the project-local Python runtime —
+nothing global, no dev dependencies. It NEVER installs Node, Go, system packages, or
+external analysis binaries. Migrating from a pre-relocation `--skill-root` layout?
+`<wrapper-executable> migrate --legacy-skill-root <old-skill-root>` is a one-time,
+idempotent move of that layout's `output/`/`state/`/`exported/` into `<data-root>`
+(generated runtimes are never migrated — always rebuilt fresh under `<data-root>`).
+**Bootstrap prints the exact wrapper executable path**
+(`wrapper: <path>`) — capture and reuse THAT path for every following invocation
+instead of assuming a fixed location under `<skill-dir>`. Before a run, consult
+`README.md` and report missing developer-managed prerequisites as reduced coverage;
+never invoke a package manager on the developer's behalf. A non-Go analysis does not
+require Go.
 **Bootstrap contacts the Python package index (PyPI) to install those dependencies** —
 setup-time network, distinct from analysis: tell the user and get their OK before the
 first bootstrap on a machine. Analysis itself touches no network unless
 `--include-network` is separately authorized. Then:
 
 ```
-"<skill-dir>/wrapper/.venv/bin/project-analysis-wrapper" \
+<wrapper-executable> \
     --since <YYYY-MM-DD> prepare-overview \
-    --run "<skill-dir>/output/<project-key>/overview/<run-id>"
+    --run "<data-root>/output/<project-key>/overview/<run-id>"
 ```
 
-`<skill-dir>` is the self-resolved skill base directory (the wrapper locates it from its
-own path; `${CLAUDE_SKILL_DIR}` may substitute for it but is not required). Always use that
-absolute base — never a relative path: relative paths resolve against the target workspace
-and would write analyzer artifacts into it.
+`<wrapper-executable>` is the path bootstrap printed. `<data-root>` is resolved by the
+wrapper itself — never construct it by hand or use a relative path: a relative path
+would resolve against the current working directory, not the target workspace, and
+could misdirect analyzer artifacts.
 
 - The run directory is minted by `new-run`; `prepare-overview` owns every deterministic
   subdirectory beneath it and refuses partial or relocated checkpoints. It must live
-  under `<skill-dir>/output/`, never inside the target workspace.
+  under `<data-root>/output/`, never inside the target workspace.
 - Network-capable tools (vulnerability scan, outdated-dependency check) run only with
   `--include-network`, which requires the user's explicit authorization for the run.
   Dependency hosts outside the default registries additionally require

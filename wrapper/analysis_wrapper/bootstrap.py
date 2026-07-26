@@ -15,9 +15,24 @@ import venv
 from pathlib import Path
 from typing import Callable, Sequence
 
+from . import paths
 
 WRAPPER_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_VENV = WRAPPER_ROOT / ".venv"
+
+
+def default_venv() -> Path:
+    """The venv's default location: GENERATED RUNTIME, not code — it lives
+    under the data root (rebuilt fresh there, never inside the checkout) so a
+    skill upgrade/reinstall never disturbs an already-bootstrapped environment.
+
+    Deliberately a function, not a module-level constant: ``paths.venv_dir()``
+    resolves (and validates) the data root, which can raise ``ValueError`` on a
+    misconfigured machine. Evaluating it at import time would make merely
+    importing this module fail — including ``--help`` and this module's own
+    friendly error handling. Call this only from inside ``parser()`` /
+    ``main()``, never from a module-level expression.
+    """
+    return paths.venv_dir()
 
 
 def environment_python(environment: Path) -> Path:
@@ -91,11 +106,20 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         description="install Project Analysis Python dependencies into an isolated venv"
     )
+    # ``default=None`` deliberately, not ``default_venv()``: argparse resolves
+    # `--help` (and exits) INSIDE ``parse_args()``, before any code after this
+    # call runs — but building the parser itself still runs unconditionally.
+    # Computing the real default here would call ``paths.venv_dir()`` (which
+    # can raise on a misconfigured machine) merely to print `--help`, defeating
+    # the whole point of making this lazy. ``main()`` resolves the real default
+    # only once it actually needs it (i.e. only when NOT just printing help).
     result.add_argument(
         "--venv",
         type=Path,
-        default=DEFAULT_VENV,
-        help=f"virtual environment path (default: {DEFAULT_VENV})",
+        default=None,
+        help="virtual environment path (default: <data-root>/runtime/"
+             f"{paths.RUNTIME_CONTRACT}/venv, resolved via $PROJECT_ANALYSIS_HOME "
+             "— see paths.py)",
     )
     result.add_argument(
         "--dev",
@@ -108,8 +132,13 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        python = bootstrap(args.venv, include_dev=args.dev)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        # ``default_venv()`` (only reached when --venv was not given) can raise
+        # ValueError on a misconfigured data root — folded into the same
+        # friendly-error path as every other bootstrap failure, never a raw
+        # traceback.
+        venv = args.venv if args.venv is not None else default_venv()
+        python = bootstrap(venv, include_dev=args.dev)
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"bootstrap failed: {exc}", file=sys.stderr)
         return 1
 

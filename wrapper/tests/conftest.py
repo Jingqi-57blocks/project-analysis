@@ -12,6 +12,34 @@ from analysis_wrapper.targetspec import (
 from analysis_wrapper import gitinfo
 
 
+@pytest.fixture(autouse=True)
+def _isolated_data_root(tmp_path_factory, monkeypatch):
+    """57B-89 Phase 2: persistent data (state/output/exported) and generated
+    runtimes no longer follow ``--skill-root`` — they resolve through
+    ``analysis_wrapper.paths.data_root()``, which honors
+    ``$PROJECT_ANALYSIS_HOME``. Pin every test to its own throwaway directory
+    so no test run ever touches a developer's real data root, regardless of
+    whether that individual test still passes (now ignored-for-data)
+    ``--skill-root`` arguments. This genuinely redirects EVERY derived path
+    (venv, node_tools, go_tools, output/state/exported), not just
+    ``data_root()`` itself, because those resolvers are lazy functions, never
+    import-time-frozen constants -- see
+    ``test_data_root.py::test_changing_project_analysis_home_moves_every_derived_path``,
+    which asserts this directly.
+
+    Deliberately ``tmp_path_factory``, not the per-test ``tmp_path``: tests
+    that also use the ``synthetic_repo``/``target`` fixtures build their
+    analysis WORKSPACE under that same per-test ``tmp_path``, so nesting the
+    data root under it would make the data root resolve INSIDE the analysis
+    target -- exactly what ``paths.validate_data_root(..., target=...)`` (and
+    ``new-run``'s use of it) now correctly refuses (57B-89 Phase 2 review fix,
+    FIX 2). ``tmp_path_factory.mktemp()`` allocates a sibling directory
+    under pytest's shared base tmp dir instead, well outside any single
+    test's own workspace tree."""
+    home = tmp_path_factory.mktemp("pa-data-home")
+    monkeypatch.setenv("PROJECT_ANALYSIS_HOME", str(home))
+
+
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
         ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", *args],

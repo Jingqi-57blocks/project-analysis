@@ -9,6 +9,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
+from . import paths
 from .executor import (SignalResult, WrapperSafetyError,
                        prepare_output_directory, run_tool,
                        use_existing_run_directory)
@@ -206,11 +207,17 @@ def parser() -> argparse.ArgumentParser:
                            "self-excluded from discovery (default: resolved "
                            "from the installed package; needs no operator input)")
     new_run = sub.add_parser(
-        "new-run", help="mint a run dir under <skill-root>/output and run "
-                        "discovery into it (stage 1 done)")
+        "new-run", help="mint a run dir under the data root's output/ tree "
+                        "(see `project-analysis-wrapper migrate` for legacy "
+                        "--skill-root layouts) and run discovery into it "
+                        "(stage 1 done)")
     new_run.add_argument("--workspace", required=True)
-    new_run.add_argument("--skill-root", required=True,
-                         help="skill base directory (owns state/ and output/)")
+    new_run.add_argument(
+        "--skill-root", default="",
+        help="deprecated, ignored for data placement: run output/state/exported "
+             "always live under the data root (see PROJECT_ANALYSIS_HOME / "
+             "paths.data_root(), resolved automatically). Kept only for CLI "
+             "back-compat with older invocations; no longer required.")
     new_run.add_argument("--language", default="zh-CN", choices=["en", "zh-CN"])
     new_run.add_argument(
         "--model", default="",
@@ -234,7 +241,11 @@ def parser() -> argparse.ArgumentParser:
     drill = sub.add_parser(
         "new-drilldown", help="mint a drill-down run from a completed overview "
                               "run (--from-run → current pointer → refuse)")
-    drill.add_argument("--skill-root", required=True)
+    drill.add_argument(
+        "--skill-root", default="",
+        help="deprecated for data placement (see `new-run --skill-root`); when "
+             "given, used ONLY as an override for the analyzer's own code-root "
+             "identity, never for where output/state/exported live")
     drill.add_argument("--module", required=True, help="module-id from the map")
     drill.add_argument("--from-run", default="",
                        help="explicit source overview run id")
@@ -275,14 +286,16 @@ def parser() -> argparse.ArgumentParser:
         "export",
         help="export a completed run in a chosen format (deterministic; no "
              "network, no LLM). Default format: html. Written to "
-             "<skill-root>/exported/{project}-analysis/{run-id}/{format}/ "
-             "(gitignored).")
+             "<data-root>/exported/{project}-analysis/{run-id}/{format}/.")
     exp.add_argument("--run", required=True, help="completed run directory")
     exp.add_argument("--format", nargs="?", const="__list__", default="html",
                      help="output format (default: html); pass --format with no "
                           "value to list available formats")
-    exp.add_argument("--skill-root", default="",
-                     help="skill root (default: auto-detected from the run path)")
+    exp.add_argument(
+        "--skill-root", default="",
+        help="deprecated, ignored: the export destination is always under the "
+             "data root (see PROJECT_ANALYSIS_HOME / paths.data_root()); kept "
+             "only for CLI back-compat. Use --out for an explicit override.")
     exp.add_argument("--out", default="",
                      help="explicit output dir (overrides the exported/ location)")
     mark = sub.add_parser("mark-stage", help="record a stage checkpoint as done")
@@ -308,6 +321,15 @@ def parser() -> argparse.ArgumentParser:
     compare_runs.add_argument(
         "--report", default="",
         help="optional path to write the full JSON parity report")
+    migrate = sub.add_parser(
+        "migrate",
+        help="one-time move of a legacy --skill-root's output/state/exported "
+             "into the current data root (idempotent; never merges namespaces; "
+             "never touches generated runtimes — those are always rebuilt fresh)")
+    migrate.add_argument(
+        "--legacy-skill-root", required=True,
+        help="the OLD skill-root directory whose output/state/exported "
+             "subdirectories should be migrated")
     return result
 
 
@@ -328,9 +350,26 @@ def _discover(args: argparse.Namespace) -> int:
 
 
 def _state_dir_for(run_dir: Path) -> Path:
-    """Map a readable project output key to its matching state directory."""
+    """Map a readable project output key to its matching state directory.
+
+    Precedence (57B-89 Phase 2 review fix -- unifies the two state-root
+    resolutions that used to disagree post-relocation): prefer the CURRENT
+    data root (``paths.state_root()``) -- this is where ``new-drilldown``
+    reads the ``current`` pointer from directly, and where every NEW write
+    must land. The legacy location (derived from ``run_dir``'s own ancestor
+    tree, matching a pre-relocation ``--skill-root`` layout) is honored only
+    while the current project state dir has not been created yet AND the
+    legacy one already exists -- i.e. only for the first read after a
+    relocation, so an already-recorded acceptance does not silently look like
+    "no run ACCEPTED". As soon as anything writes through this helper the
+    current dir exists, and every later call (read or write) resolves to it.
+    """
     project_dir = run_dir.parent.parent
-    return project_dir.parent.parent / "state" / project_dir.name
+    legacy = project_dir.parent.parent / "state" / project_dir.name
+    current = paths.state_root() / project_dir.name
+    if legacy != current and legacy.is_dir() and not current.is_dir():
+        return legacy
+    return current
 
 
 def _new_run(args: argparse.Namespace) -> int:
@@ -348,7 +387,12 @@ def _new_run(args: argparse.Namespace) -> int:
         workspace_root=report["workspace_root"],
         project_id=report["project_id"],
     )
-    output_root = Path(args.skill_root).expanduser().resolve() / "output"
+    # Fail closed BEFORE anything is written if the data root would land
+    # inside the analyzed workspace (57B-89 Phase 2 review fix): the target
+    # tree must stay read-only, never host wrapper output/state/exported.
+    workspace_root = Path(report["workspace_root"]).expanduser().resolve()
+    paths.data_root(target=workspace_root)
+    output_root = paths.output_root()
     project_key = identity.claim_project_namespace(output_root, identities)
     overview_root = output_root / project_key / "overview"
     run_id = lifecycle.mint_run_id(
@@ -387,10 +431,15 @@ def _new_run(args: argparse.Namespace) -> int:
 
 def _new_drilldown(args: argparse.Namespace) -> int:
     from . import lifecycle, run_provenance
-    root = Path(args.skill_root).expanduser().resolve()
-    projects = sorted(p for p in (root / "output").iterdir()
+    # `--skill-root`, when given, is a CODE-root override only (analyzer
+    # identity fallback below) — it never determines where output/state live;
+    # those always resolve through the data root (57B-89 Phase 2).
+    code_root = (Path(args.skill_root).expanduser().resolve() if args.skill_root
+                else paths.skill_root())
+    output_root = paths.output_root()
+    projects = sorted(p for p in output_root.iterdir()
                       if p.is_dir() and not p.name.startswith(".")) \
-        if (root / "output").is_dir() else []
+        if output_root.is_dir() else []
     if args.project:
         projects = [p for p in projects if p.name == args.project]
     if len(projects) != 1:
@@ -413,7 +462,8 @@ def _new_drilldown(args: argparse.Namespace) -> int:
     # Resolution: --from-run → current pointer → refuse (never implicit).
     source_id = args.from_run
     if not source_id:
-        source_id = lifecycle.Pointers(root / "state" / project_dir.name).read().get("current")
+        source_id = lifecycle.Pointers(
+            paths.state_root() / project_dir.name).read().get("current")
     if not source_id:
         print("drill-down refused: no --from-run given and no run has been "
               "ACCEPTED as `current`. Completed overview runs: "
@@ -444,6 +494,15 @@ def _new_drilldown(args: argparse.Namespace) -> int:
             print(f"  {line}", file=sys.stderr)
         return 5
 
+    # Fail closed BEFORE anything is written if the data root would land
+    # inside the source run's own workspace (57B-89 Phase 2 review fix):
+    # new-drilldown does not take --workspace, but the source run's own
+    # targets.json names it.
+    if source_spec.repos:
+        workspace_root = Path(os.path.commonpath(
+            [str(Path(r.path).expanduser().resolve()) for r in source_spec.repos]))
+        paths.data_root(target=workspace_root)
+
     drill_root = project_dir / "drilldown"
     heads = [f"{r['repo_id']}:{r['head']}:{r['dirty_detail']}" for r in source.provenance]
     run_id = lifecycle.mint_run_id(
@@ -462,7 +521,7 @@ def _new_drilldown(args: argparse.Namespace) -> int:
         run_dir,
         run_provenance.create_document(
             source_spec,
-            analyzer_root=analyzer.get("root") or root,
+            analyzer_root=analyzer.get("root") or code_root,
             language=state.language,
             model=generation.get("model", ""),
             effort=generation.get("effort", ""),
@@ -804,17 +863,6 @@ def _audit_overview(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "passed" else 3
 
 
-def _find_skill_root(run: Path) -> Path:
-    """Locate the skill root above a run dir (the dir holding SKILL.md).
-
-    Falls back to the ``<skill-root>/output/<project>/<stage>/<run>`` layout.
-    """
-    for parent in [run, *run.parents]:
-        if (parent / "SKILL.md").is_file():
-            return parent
-    return run.parents[3] if len(run.parents) >= 4 else run.parent
-
-
 def _export(args: argparse.Namespace) -> int:
     from . import export as export_pkg
     if args.format == "__list__":
@@ -827,9 +875,11 @@ def _export(args: argparse.Namespace) -> int:
             result = export_pkg.export(
                 run, args.format, out_dir=Path(args.out).expanduser().resolve())
         else:
-            skill_root = (Path(args.skill_root).expanduser().resolve()
-                          if args.skill_root else _find_skill_root(run))
-            result = export_pkg.export(run, args.format, skill_root=skill_root)
+            # `--skill-root` (if the caller still passes it) is intentionally
+            # ignored here — exported/ always lives under the data root
+            # (57B-89 Phase 2), never wherever the code checkout happens to be.
+            result = export_pkg.export(
+                run, args.format, data_root=paths.data_root())
     except export_pkg.ExporterUnavailable as exc:
         print(f"export unavailable: {exc}", file=sys.stderr)
         return 3
@@ -889,6 +939,27 @@ def _lifecycle_cmd(args: argparse.Namespace) -> int:
         print(f"current -> {state.run_id}")
         return 0
     raise AssertionError(args.command)
+
+
+def _migrate(args: argparse.Namespace) -> int:
+    report = paths.migrate_legacy(args.legacy_skill_root)
+    # Non-zero on failure (57B-89 Phase 2 review fix) so scripted migration
+    # can detect it instead of reading 0 unconditionally.
+    exit_code = 0
+    try:
+        print(f"data root: {paths.data_root()}")
+    except (OSError, ValueError) as exc:
+        print(f"data root: unavailable ({exc})", file=sys.stderr)
+        exit_code = 1
+    for name in report["moved"]:
+        print(f"moved: {name}")
+    for name in report["skipped_absent"]:
+        print(f"nothing to migrate: {name}")
+    for warning in report["warnings"]:
+        print(f"WARNING: {warning}", file=sys.stderr)
+        if "could not prepare the data root" in warning:
+            exit_code = 1
+    return exit_code
 
 
 def _compare_runs(args: argparse.Namespace) -> int:
@@ -973,6 +1044,8 @@ def main(argv: list[str] | None = None) -> int:
             return _export(args)
         if args.command == "compare-runs":
             return _compare_runs(args)
+        if args.command == "migrate":
+            return _migrate(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)

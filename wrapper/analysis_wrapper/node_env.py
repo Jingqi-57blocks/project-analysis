@@ -1,9 +1,16 @@
 """Analyzer-owned pinned Node packages (dependency-cruiser + typescript).
 
-The environment lives under ``wrapper/node_tools`` and is installed with pnpm
-from a committed lockfile by the developer. We NEVER
-install into, or resolve a binary from, a target repository, and NEVER use a
-globally-installed dependency-cruiser: only this pinned, lockfile-frozen copy.
+The tracked ``wrapper/node_tools/package.json`` + lockfile (code) stay the install
+SOURCE; the developer installs with pnpm using their own Node runtime, and (57B-89
+Phase 2) the generated ``node_modules/`` this module resolves is GENERATED RUNTIME —
+it lives under the data root (``paths.node_tools_runtime()``), never inside the
+checkout, so a skill upgrade/reinstall never disturbs an already-installed env.
+``default_node_tools_dir()`` falls back to the legacy in-code
+``wrapper/node_tools/node_modules`` when ONLY that location is populated (a
+pre-relocation install); a later installer phase populates the runtime location
+going forward. We NEVER install into, or resolve a binary from, a target
+repository, and NEVER use a globally-installed dependency-cruiser: only this
+pinned, lockfile-frozen copy.
 
 The registry's dependency-cruiser definition points at ``depcruise_binary()``;
 when the env is absent the executor fails closed (SKIPPED "not installed"), and a
@@ -19,16 +26,48 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from . import paths
+
 WRAPPER_ROOT = Path(__file__).resolve().parents[1]
-NODE_TOOLS_DIR = WRAPPER_ROOT / "node_tools"
 NODE_HELPERS_DIR = WRAPPER_ROOT / "node_helpers"
+# The legacy, pre-relocation in-code install location. Still honored as a
+# fallback when it alone is populated -- see ``default_node_tools_dir()``.
+LEGACY_NODE_TOOLS_DIR = WRAPPER_ROOT / "node_tools"
 
 
-def bin_dir(node_tools: Path = NODE_TOOLS_DIR) -> Path:
+def default_node_tools_dir() -> Path:
+    """Resolve the analyzer-owned Node install dir: prefer the (57B-89 Phase 2)
+    runtime location; fall back to the legacy in-code wrapper/node_tools ONLY
+    when it is already populated there and the runtime location is not.
+
+    This fallback exists for pre-relocation installs: a machine that ran
+    ``pnpm install`` into wrapper/node_tools before the runtime-root move must
+    not lose the JS/TS lane. A later installer phase populates the runtime
+    location going forward; once that lands, fresh installs prefer it and this
+    branch simply stops firing. Not installed anywhere: this returns the
+    (preferred) runtime location so "not installed" messages name the NEW path
+    developers should install into, not the deprecated one.
+
+    Deliberately a function, not a module-level constant: it calls
+    ``paths.node_tools_runtime()``, which resolves (and validates) the data
+    root and can raise ValueError on a misconfigured machine; evaluating that
+    at import time would make importing this module fail. Call this (or let
+    the ``node_tools=None`` default below call it) only at call time, never
+    from a module-level expression.
+    """
+    preferred = paths.node_tools_runtime()
+    if not (preferred / "node_modules").is_dir() and (
+            LEGACY_NODE_TOOLS_DIR / "node_modules").is_dir():
+        return LEGACY_NODE_TOOLS_DIR
+    return preferred
+
+
+def bin_dir(node_tools: Path | None = None) -> Path:
+    node_tools = node_tools if node_tools is not None else default_node_tools_dir()
     return node_tools / "node_modules" / ".bin"
 
 
-def expected_depcruise_binary(node_tools: Path = NODE_TOOLS_DIR) -> Path:
+def expected_depcruise_binary(node_tools: Path | None = None) -> Path:
     """The path the env binary WOULD live at — whether or not it is installed.
 
     The registry uses this as the ToolDef binary so the executor's own
@@ -37,14 +76,15 @@ def expected_depcruise_binary(node_tools: Path = NODE_TOOLS_DIR) -> Path:
     return bin_dir(node_tools) / "depcruise"
 
 
-def depcruise_binary(node_tools: Path = NODE_TOOLS_DIR) -> Path | None:
+def depcruise_binary(node_tools: Path | None = None) -> Path | None:
     candidate = expected_depcruise_binary(node_tools)
     return candidate if candidate.is_file() else None
 
 
-def typescript_lib(node_tools: Path = NODE_TOOLS_DIR) -> Path:
+def typescript_lib(node_tools: Path | None = None) -> Path:
     """The analyzer-owned TypeScript package dir — passed to the Node helper so it
     requires OUR compiler API, never one resolved from a target."""
+    node_tools = node_tools if node_tools is not None else default_node_tools_dir()
     return node_tools / "node_modules" / "typescript"
 
 
@@ -90,13 +130,14 @@ def _parse_info(text: str) -> NodeToolInfo:
 _probe_cache: dict[str, NodeToolInfo] = {}
 
 
-def probe(node_tools: Path = NODE_TOOLS_DIR,
+def probe(node_tools: Path | None = None,
           run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
           use_cache: bool = True) -> NodeToolInfo:
     """Report the env's transpiler capability via ``depcruise --info``.
 
     Cached per node_tools path because construction and the TS guard may both
     ask. Pass ``use_cache=False`` (and a custom ``run``) in tests."""
+    node_tools = node_tools if node_tools is not None else default_node_tools_dir()
     key = str(node_tools)
     if use_cache and key in _probe_cache:
         return _probe_cache[key]

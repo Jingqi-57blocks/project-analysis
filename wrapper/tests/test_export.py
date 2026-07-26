@@ -49,7 +49,7 @@ def test_export_output_dir_rejects_path_traversal(tmp_path, project_ref, run_id)
 def test_export_writes_to_exported_location(tmp_path):
     run = make_run(tmp_path)
     skill_root = tmp_path / "skill"
-    result = export_pkg.export(run, "html", skill_root=skill_root)
+    result = export_pkg.export(run, "html", data_root=skill_root)
     # DEMO-1 has no hash suffix, so the name is preserved verbatim.
     assert result.out_dir == (
         skill_root / "exported" / "DEMO-1-analysis"
@@ -66,7 +66,7 @@ def test_export_preserves_collision_free_run_namespace(tmp_path):
     run.parent.mkdir(parents=True)
     source.rename(run)
 
-    result = export_pkg.export(run, "html", skill_root=tmp_path / "skill")
+    result = export_pkg.export(run, "html", data_root=tmp_path / "skill")
 
     assert result.out_dir == (
         tmp_path / "skill" / "exported" / "client-b%2Fapp-analysis"
@@ -76,7 +76,7 @@ def test_export_preserves_collision_free_run_namespace(tmp_path):
 
 def test_export_defaults_to_html(tmp_path):
     run = make_run(tmp_path)
-    result = export_pkg.export(run, skill_root=tmp_path / "skill")  # no fmt given
+    result = export_pkg.export(run, data_root=tmp_path / "skill")  # no fmt given
     assert result.format == "html"
 
 
@@ -89,8 +89,8 @@ def test_exports_from_two_runs_do_not_overwrite_each_other(tmp_path):
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
     skill_root = tmp_path / "skill"
-    result_a = export_pkg.export(run_a, "html", skill_root=skill_root)
-    result_b = export_pkg.export(run_b, "html", skill_root=skill_root)
+    result_a = export_pkg.export(run_a, "html", data_root=skill_root)
+    result_b = export_pkg.export(run_b, "html", data_root=skill_root)
     assert result_a.out_dir != result_b.out_dir
     assert result_a.out_dir.name == result_b.out_dir.name == "html"
     assert result_a.out_dir.parent.name == "20260101T000000Z-demo"
@@ -102,7 +102,7 @@ def test_exports_from_two_runs_do_not_overwrite_each_other(tmp_path):
 def test_export_unknown_format_raises(tmp_path):
     run = make_run(tmp_path)
     with pytest.raises(ValueError):
-        export_pkg.export(run, "pdf", skill_root=tmp_path / "skill")
+        export_pkg.export(run, "pdf", data_root=tmp_path / "skill")
 
 
 def test_export_unavailable_fails_closed(tmp_path, monkeypatch):
@@ -113,13 +113,13 @@ def test_export_unavailable_fails_closed(tmp_path, monkeypatch):
         lambda: (False, "markdown-it-py not installed"),
     )
     with pytest.raises(ExporterUnavailable):
-        export_pkg.export(run, "html", skill_root=tmp_path / "skill")
+        export_pkg.export(run, "html", data_root=tmp_path / "skill")
 
 
-def test_export_needs_out_dir_or_skill_root(tmp_path):
+def test_export_needs_out_dir_or_data_root(tmp_path):
     run = make_run(tmp_path)
     with pytest.raises(ValueError):
-        export_pkg.export(run, "html")  # neither out_dir nor skill_root
+        export_pkg.export(run, "html")  # neither out_dir nor data_root
 
 
 def test_export_html_matches_direct_generate(tmp_path):

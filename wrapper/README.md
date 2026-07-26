@@ -91,16 +91,39 @@ of it is a tested, thin analyzer-owned layer (`git_history/worker.py`,
 
 ## Analyzer-owned Node toolchain, ast-grep, and SQLGlot
 
-For JS/TS analysis, developers prepare the pinned, lockfile-frozen packages under
-`node_tools/` with their own Node runtime and pnpm. From the skill root:
+For JS/TS analysis, developers prepare the pinned, lockfile-frozen packages with
+their own Node runtime and pnpm. The tracked `wrapper/node_tools/package.json` +
+`pnpm-lock.yaml` (code) are always the install SOURCE; the generated
+`node_modules/` (57B-89 Phase 2) is GENERATED RUNTIME and belongs under the data
+root, not the checkout, so a skill upgrade/reinstall never disturbs an
+already-installed env. `pnpm install --dir` needs the two tracked manifests
+alongside wherever it writes `node_modules/`, and pnpm resolves `--modules-dir`
+relative to `--dir` (pointing it at an unrelated absolute path produces a
+mirrored/symlinked tree, not a clean install) — so the accurate way to land
+`node_modules/` at the runtime location is to copy the two tracked manifests
+there first, then install in place:
 
 ```bash
-pnpm install --dir wrapper/node_tools --frozen-lockfile --ignore-scripts
+# <data-root> is the value `project-analysis-wrapper --version` or any wrapper
+# invocation's error output reports; see paths.py / SKILL.md's "three
+# directory worlds" for how it resolves ($PROJECT_ANALYSIS_HOME, else the
+# platform default).
+mkdir -p "<data-root>/runtime/1/node_tools"
+cp wrapper/node_tools/package.json wrapper/node_tools/pnpm-lock.yaml \
+   "<data-root>/runtime/1/node_tools/"
+pnpm install --dir "<data-root>/runtime/1/node_tools" --frozen-lockfile --ignore-scripts
 ```
 
+A legacy install directly into `wrapper/node_tools/node_modules` (pre-relocation)
+is still honored automatically as a fallback if the runtime location above is
+empty — see `node_env.default_node_tools_dir()` — but new installs should target
+the runtime location; the fallback exists only so an already-bootstrapped
+machine does not lose the JS/TS lane before a dedicated installer phase lands.
+
 This installs
-**dependency-cruiser 18.1.0 + typescript 5.9.3**, committed `package.json` +
-`pnpm-lock.yaml`, `node_modules/` gitignored. The dependency-cruiser signal uses
+**dependency-cruiser 18.1.0 + typescript 5.9.3**; the `package.json` +
+`pnpm-lock.yaml` stay tracked (source) at `wrapper/node_tools/`, `node_modules/`
+is generated (and gitignored) at the runtime location above. The dependency-cruiser signal uses
 only this env binary (`node_env.py`), never a global or target-resolved one; if
 the env lacks `.tsx` support a TypeScript target's dependency signal is recorded
 `unavailable` (fail-closed). Project Analysis never installs Node or runs this command
@@ -138,11 +161,19 @@ status `inferred` or `unknown`, never claiming completeness). `SQLGlot 30.12.0`
 on failure.
 
 For Go call graphs, developers provide Go and install the documented analyzer binary
-themselves when that lane is needed. From the skill root:
+themselves when that lane is needed. The binary is GENERATED RUNTIME (57B-89
+Phase 2): install it under the data root, not the checkout, so a skill
+upgrade/reinstall never disturbs an already-installed binary:
 
 ```bash
-GOBIN="$PWD/wrapper/go_tools/bin" go install golang.org/x/tools/cmd/callgraph@v0.48.0
+GOBIN="<data-root>/runtime/1/go_tools/bin" go install golang.org/x/tools/cmd/callgraph@v0.48.0
 ```
+
+A legacy install into `wrapper/go_tools/bin` (pre-relocation) is still honored
+automatically as a fallback if the runtime location above has no binary — see
+`go_tools.default_bin_dir()` — but new installs should target the runtime
+location; the fallback exists only so an already-bootstrapped machine does not
+lose the Go lane before a dedicated installer phase lands.
 
 The offline Go lane records GOOS/GOARCH/CGO_ENABLED and build-tag scope in every
 manifest; a cold cache / missing dep / load failure fails loudly. Developers warm the

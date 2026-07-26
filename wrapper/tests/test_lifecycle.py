@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from analysis_wrapper import lifecycle
+from analysis_wrapper import lifecycle, paths
 from analysis_wrapper.cli import main
 from analysis_wrapper.lifecycle import Pointers, RunState, mint_run_id
 from analysis_wrapper.targetspec import TargetSpec
@@ -147,6 +147,43 @@ def test_new_run_default_language_is_zh_cn(tmp_path, synthetic_repo, capsys):
     assert mapping.project.internal_id not in Path(run_dir).parts
 
 
+def test_new_run_works_without_skill_root(tmp_path, synthetic_repo, capsys):
+    """57B-89 Phase 2: ``--skill-root`` is no longer required for new-run —
+    data always resolves through the data root."""
+    code = main(["new-run", "--workspace", str(synthetic_repo.parent)])
+    assert code == 0
+    run_dir = Path(capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1])
+    assert run_dir.is_relative_to(paths.output_root())
+
+
+def test_new_run_ignores_skill_root_for_data_placement(tmp_path, synthetic_repo, capsys):
+    """A caller still passing ``--skill-root`` (back-compat) must not redirect
+    where the run is written — only $PROJECT_ANALYSIS_HOME does that."""
+    misleading = tmp_path / "not-the-data-root"
+    code = main(["new-run", "--workspace", str(synthetic_repo.parent),
+                 "--skill-root", str(misleading)])
+    assert code == 0
+    run_dir = Path(capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1])
+    assert run_dir.is_relative_to(paths.output_root())
+    assert not run_dir.is_relative_to(misleading)
+    assert not misleading.exists()
+
+
+def test_new_run_refuses_data_root_inside_workspace(
+        tmp_path, synthetic_repo, monkeypatch, capsys):
+    """57B-89 Phase 2 review fix: ``new-run`` must fail closed, before writing
+    anything, when ``$PROJECT_ANALYSIS_HOME`` resolves inside the analyzed
+    workspace — the target tree must stay read-only."""
+    workspace = synthetic_repo.parent
+    inside = workspace / "would-be-data-root"
+    monkeypatch.setenv("PROJECT_ANALYSIS_HOME", str(inside))
+    code = main(["new-run", "--workspace", str(workspace)])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "analysis target" in err
+    assert not inside.exists()
+
+
 def test_new_run_records_host_supplied_model_and_effort(tmp_path, synthetic_repo, capsys):
     from analysis_wrapper import run_provenance
     code = main([
@@ -190,9 +227,11 @@ def test_cli_full_lifecycle_flow(tmp_path, target, synthetic_repo, capsys):
     assert "latest_completed" in out
 
     assert main(["accept", "--run", run_dir]) == 0
-    from pathlib import Path
     import json
-    state_dirs = list((skill_root / "state").iterdir())
+    # `--skill-root` no longer anchors data (57B-89 Phase 2): pointers live
+    # under the data root regardless of the (now ignored-for-data) skill_root
+    # passed above.
+    state_dirs = list(paths.state_root().iterdir())
     pointers = json.loads((state_dirs[0] / "pointers.json").read_text())
     assert pointers["current"] and pointers["current"] == pointers["latest_completed"]
 
