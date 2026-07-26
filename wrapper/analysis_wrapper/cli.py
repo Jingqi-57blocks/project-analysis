@@ -441,6 +441,16 @@ def parser() -> argparse.ArgumentParser:
     plan_dedup_cmd.add_argument(
         "--context-budget", type=int, default=96000, dest="context_budget",
         help="per-packet context budget in estimated tokens (default: 96000)")
+    assemble_findings_cmd = sub.add_parser(
+        "assemble-findings",
+        help="(orchestrator, 57B-116) deterministically merge the run's "
+             "validated lens-findings pool via its validated dedup-rank "
+             "output's merge_map/rank into findings.json-shaped rows -- pure "
+             "mechanical application, no judgment; still candidate-keyed "
+             "(rekey-findings runs after this)")
+    assemble_findings_cmd.add_argument("--run", required=True, help="run directory")
+    assemble_findings_cmd.add_argument(
+        "--out", required=True, help="path to write the assembled findings JSON document")
     return result
 
 
@@ -1274,6 +1284,21 @@ def _plan_dedup_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _assemble_findings_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import assemble
+    run = Path(args.run).expanduser().resolve()
+    try:
+        result = assemble.assemble(run)
+    except assemble.AssembleError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    out_path = Path(args.out).expanduser().resolve()
+    out_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", "utf-8")
+    print(f"assembled {len(result['findings'])} finding(s)")
+    print(f"wrote {out_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -1315,6 +1340,8 @@ def main(argv: list[str] | None = None) -> int:
             return _plan_judgment_cmd(args)
         if args.command == "plan-dedup":
             return _plan_dedup_cmd(args)
+        if args.command == "assemble-findings":
+            return _assemble_findings_cmd(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)
