@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import __version__, gitinfo
+from . import __version__, gitinfo, locale
 from .executor import replace_artifact_text
 from .exclusions import is_excluded_relative
 from .targetspec import RepoTarget, TargetSpec
@@ -141,6 +141,31 @@ def analyzer_observation(analyzer_root: str | Path) -> dict[str, Any]:
     }
 
 
+def require_delivered_language(language: str) -> str:
+    """Refuse a run language whose label catalog is not key-complete (57B-111).
+
+    A first run in a target language must deliver every reading-facing string
+    natively; a partially-translated catalog would silently leak English
+    labels into an otherwise-foreign-language report with nothing failing.
+    Post-hoc translation is a separate, future feature and must never be how a
+    run's primary language is delivered, so an incomplete catalog is refused
+    here, at the moment the language is bound to a run, rather than being
+    discovered later by a reader.
+    """
+    if not locale.is_delivered(language):
+        delivered = ", ".join(locale.delivered_languages()) or "(none)"
+        missing = locale.missing_keys(language)
+        sample = ", ".join(missing[:5])
+        raise ValueError(
+            f"language {language!r} is not a delivered language (its label "
+            f"catalog is missing {len(missing)} key(s) against the English "
+            f"reference, e.g. {sample}). Delivered languages: {delivered}. "
+            f"Post-hoc translation is not a substitute for a complete catalog; "
+            f"start the run in a delivered language instead."
+        )
+    return language
+
+
 def create_document(
     spec: TargetSpec,
     *,
@@ -150,6 +175,7 @@ def create_document(
     effort: str = "",
     analyzed_at: str | None = None,
 ) -> dict[str, Any]:
+    require_delivered_language(language)
     return {
         "schema_version": SCHEMA_VERSION,
         "analyzed_at": analyzed_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),

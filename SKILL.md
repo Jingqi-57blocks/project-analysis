@@ -30,10 +30,24 @@ first-class confidence.
 - `path` defaults to the current working directory; it is the **target workspace root**
   under which repositories are discovered.
 - One language per run, default `zh-CN` (owner decision 2026-07-16; `--language en`
-  opts out). Reports are written in the run language, but real UI labels, code
-  identifiers, and error strings are ALWAYS quoted verbatim from source — never
-  translated. Intermediate artifacts (lens findings, signals) may remain English;
-  the RUN language governs the delivered reports.
+  opts out). The run language must be a **delivered language** — one whose label
+  catalog is both key-complete AND free of non-allowlisted values that are
+  byte-identical to English (see `wrapper/analysis_wrapper/locale.py`'s
+  `missing_keys`/`mirrored_keys`/`is_delivered`; today: `en`, `zh-CN`) — a
+  non-delivered language is refused at run creation rather than silently
+  rendering partial or untranslated English. Reports are fully rendered in the
+  run language natively; post-hoc translation is a separate, future feature and
+  is never how a run's primary language is delivered. Real UI labels, code
+  identifiers, error strings, endpoints, and citations are ALWAYS quoted verbatim
+  from source — never translated, in ANY run language. Intermediate artifacts
+  (lens findings, signals) may remain English; the RUN language governs the
+  delivered reports. The overview audit (`audit-overview`) HARD FAILS the run on:
+  (1) label-catalog completeness — any key that fell back to English, or any
+  non-allowlisted key whose catalog value is an uncaught copy of English; and
+  (2) a missing standing scope disclaimer — see the exact marker-phrase
+  requirement below. Separately, it WARNS (non-blocking, does not fail the run)
+  on a stray-English-prose heuristic in narrative reports — a low-false-positive
+  signal meant to be verified by hand, not a verified gate.
 - `/project-analysis module` resolves its source overview as: `--from-run <run-id>` if
   given → otherwise the project's `current` pointer → otherwise **refuse**, listing the
   project's completed runs. A run other than `current` may be accepted later ONLY if it
@@ -76,6 +90,16 @@ skill assets, and using them would contaminate analysis of unrelated targets.
 The English text below is canonical. For a `zh-CN` run, include a faithful translation
 making exactly the same scope claims — no additions, no softening. (UI labels, code
 identifiers, and citations stay verbatim regardless of run language.)
+
+**Contractual marker phrase:** the overview audit (`audit-overview`) HARD FAILS if a
+delivered language's translation does not contain its declared exact marker phrase,
+verbatim and contiguous, in every narrative report. For `zh-CN` that phrase is
+`代码仓库证据` — your translation of the disclaimer MUST include this exact substring
+(any faithful rendering that also contains this precise phrase satisfies the gate; a
+paraphrase that omits it, e.g. substituting a synonym for 仓库 or 证据, will fail even
+though it is otherwise faithful). Any future delivered language must likewise declare,
+and satisfy, its own exact marker phrase (see `overview_audit.py`'s
+`_DISCLAIMER_MARKERS`).
 
 > This report is derived from **repository evidence only** — code, configuration, and
 > git history in the analyzed snapshot (clean commit, dirty worktree, or non-git folder,

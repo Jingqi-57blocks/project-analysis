@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from analysis_wrapper import lifecycle
 from analysis_wrapper.cli import main
 from analysis_wrapper.lifecycle import DRILLDOWN_STAGES, Pointers, RunState
@@ -78,6 +80,25 @@ def test_stale_source_refused_naming_repos(tmp_path, target, synthetic_repo, cap
     err = capsys.readouterr().err
     assert code == 5
     assert "STALE" in err and "->" in err
+
+
+def test_invalid_language_is_refused_before_any_drilldown_dir_is_created(
+        tmp_path, target, capsys):
+    """57B-111 review fix: an invalid --language must be rejected by argparse
+    (the same `choices` contract as `new-run`) BEFORE any mkdir/write, so a
+    bad value never leaves behind an orphan run directory whose provenance
+    would later fail to load.
+    """
+    skill_root, run_dir = _overview(tmp_path, target, capsys)
+    drill_root = run_dir.parent.parent / "drilldown"
+    existing = set(drill_root.iterdir()) if drill_root.is_dir() else set()
+    with pytest.raises(SystemExit) as excinfo:
+        main(["new-drilldown", "--skill-root", str(skill_root),
+              "--module", "leave", "--from-run", run_dir.name,
+              "--language", "fr-FR"])
+    assert excinfo.value.code == 2
+    after = set(drill_root.iterdir()) if drill_root.is_dir() else set()
+    assert after == existing  # no new run directory was created
 
 
 def test_drilldown_rollback_uses_its_own_stage_order(tmp_path, target, capsys):
