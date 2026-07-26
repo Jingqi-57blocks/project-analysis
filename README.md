@@ -107,21 +107,25 @@ bootstrapped venv for you regardless of where the data root resolves to on your 
 bin/project-analysis --help
 ```
 
-Then register the checkout with your client(s):
+Then register the checkout with your client(s). Register it as
+**`project-analysis-local`**, not `project-analysis`:
 
 ```bash
 # Codex
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
-ln -s "$PWD" "${CODEX_HOME:-$HOME/.codex}/skills/project-analysis"
+ln -s "$PWD" "${CODEX_HOME:-$HOME/.codex}/skills/project-analysis-local"
 
 # Claude Code
 mkdir -p "$HOME/.claude/skills"
-ln -s "$PWD" "$HOME/.claude/skills/project-analysis"
+ln -s "$PWD" "$HOME/.claude/skills/project-analysis-local"
 
 # Cursor
 mkdir -p "$HOME/.cursor/skills"
-ln -s "$PWD" "$HOME/.cursor/skills/project-analysis"
+ln -s "$PWD" "$HOME/.cursor/skills/project-analysis-local"
 ```
+
+The `-local` suffix keeps a checkout and an installed copy from colliding, and is the
+name you invoke it by.
 
 **Do not use `ln -sf`.** If a destination already exists, inspect it and decide manually
 whether it should be removed or retained — `-f` silently clobbers whatever is there.
@@ -238,8 +242,9 @@ so you don't lose run history by upgrading or reinstalling. If you actually want
 delete your analysis history, do so explicitly:
 
 - **git-clone channel:** delete the checkout and its symlink(s), e.g.
-  `rm "$HOME/.claude/skills/project-analysis"` (repeat for each client you registered),
-  then remove the cloned directory itself.
+  `rm "$HOME/.claude/skills/project-analysis-local"` (repeat for each client you
+  registered; also check `~/.agents/skills/` if you registered there), then remove the
+  cloned directory itself. Removing a symlink never touches the checkout it points at.
 - **`npx skills` channel:** `npx skills remove project-analysis -g` (or without `-g` for
   a project-local install; add `--agent <agent>` to target one agent, `-y` to skip
   prompts).
