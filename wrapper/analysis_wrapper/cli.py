@@ -306,6 +306,24 @@ def parser() -> argparse.ArgumentParser:
         help="validate atomic findings against source/signal/metric refs and "
              "render the protected technical and PM findings blocks")
     finalize_findings.add_argument("--run", required=True, help="overview run directory")
+    finalize_findings.add_argument(
+        "--report-failures", default="", metavar="PATH",
+        help="(57B-116) write {finding_id: [failures]} JSON to PATH instead "
+             "of raising on the first invalid finding, and skip rendering "
+             "the protected findings blocks; omit for the original "
+             "all-or-nothing validate+render behavior, unchanged")
+    rekey_findings = sub.add_parser(
+        "rekey-findings",
+        help="(orchestrator, 57B-116) re-key a pre-finalization findings "
+             "document's affected_modules from candidate IDs to finalized "
+             "module IDs via module-map.json's expanded candidate_dispositions "
+             "(a pure lookup); findings landing only on excluded/unresolved "
+             "candidates are set aside in a 'tail' list instead of guessed")
+    rekey_findings.add_argument("--run", required=True, help="overview run directory")
+    rekey_findings.add_argument("--in", required=True, dest="findings_in",
+                                help="path to the findings JSON document to re-key")
+    rekey_findings.add_argument("--out", required=True,
+                                help="path to write the {rekeyed, tail} JSON result")
     audit_overview = sub.add_parser(
         "audit-overview",
         help="audit final structured artifacts and reports before marking the "
@@ -697,7 +715,7 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     Existing canonical stage outputs are validated and reused; missing stages
     run exactly once.  Producer paths never depend on model effort.
     """
-    from . import (capabilities, coverage_render, lifecycle, module_map,
+    from . import (capabilities, cohesion, coverage_render, lifecycle, module_map,
                    overview_audit, run_provenance, synthesis_input,
                    workspace_metrics)
     from .callgraph import emit as cg_emit
@@ -831,6 +849,12 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     dump(model, run)
     model_doc = model.to_dict()
     module_map.write_candidates(run, model_doc)
+    # Cohesion measurements (57B-116, M2) read module-candidates.json (just
+    # written above) plus the model/signals already on disk by this point in
+    # the stage plan — every one of its inputs is already available here, and
+    # nothing later in this function depends on its output, so it slots in
+    # right after the candidate universe it measures over.
+    cohesion_path = cohesion.write(run, model_doc)
     capabilities_path = capabilities.write(run)
     coverage_path = coverage_render.write(run)
     metrics_path = workspace_metrics.write(run)
@@ -838,6 +862,7 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     audit_path = overview_audit.write(run)
     audit = _load_object(audit_path)
     capability_doc = _load_object(capabilities_path)
+    print(f"wrote {cohesion_path}")
     print(f"wrote {capabilities_path}")
     print(f"wrote {coverage_path}")
     print(f"wrote {metrics_path}")
@@ -877,11 +902,34 @@ def _finalize_findings(args: argparse.Namespace) -> int:
     run = Path(args.run).expanduser().resolve()
     if (run / "run-state.json").is_file():
         _assert_fresh_run(run)
+    if getattr(args, "report_failures", ""):
+        # Incremental failure-surface mode (57B-116): additive-only branch —
+        # the flag's absence falls straight through to the original
+        # validate+render path below, untouched.
+        failures = findings.validate_report_failures(run)
+        out_path = Path(args.report_failures).expanduser().resolve()
+        out_path.write_text(json.dumps(failures, indent=2, sort_keys=True) + "\n", "utf-8")
+        print(f"findings: {len(failures)} finding(s) with failures")
+        print(f"wrote {out_path}")
+        return 0 if not failures else 3
     technical, pm = findings.write(args.run)
     count = len(findings.validate(args.run).get("findings", []))
     print(f"findings: {count} validated atomic finding(s)")
     print(f"wrote {technical}")
     print(f"wrote {pm}")
+    return 0
+
+
+def _rekey_findings(args: argparse.Namespace) -> int:
+    from .orchestrator import rekey
+    run = Path(args.run).expanduser().resolve()
+    findings_path = Path(args.findings_in).expanduser().resolve()
+    findings_doc = json.loads(findings_path.read_text("utf-8"))
+    result = rekey.rekey(run, findings_doc)
+    out_path = Path(args.out).expanduser().resolve()
+    out_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", "utf-8")
+    print(f"rekeyed: {len(result['rekeyed'])}, tail: {len(result['tail'])}")
+    print(f"wrote {out_path}")
     return 0
 
 
@@ -1194,6 +1242,8 @@ def main(argv: list[str] | None = None) -> int:
             return _finalize_module_map(args)
         if args.command == "finalize-findings":
             return _finalize_findings(args)
+        if args.command == "rekey-findings":
+            return _rekey_findings(args)
         if args.command == "audit-overview":
             return _audit_overview(args)
         if args.command == "export":
