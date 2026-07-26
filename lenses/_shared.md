@@ -25,6 +25,11 @@ priority:            critical | high | medium | low   (impact, likelihood/exposu
 confidence:          high | medium | low   (orthogonal to priority)
 limitations:         what this finding cannot see
 suggested_direction: a direction, not a prescription
+changeability_question: boundary-clarity | change-spread | rule-locality |
+                     hidden-coupling | duplication-evolution |
+                     verification-difficulty | none   (which of the six
+                     changeability questions this finding evidences; `none`
+                     when it sits outside all six)
 ```
 
 ## Citations

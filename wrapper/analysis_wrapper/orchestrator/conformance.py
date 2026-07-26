@@ -80,6 +80,7 @@ FIXTURES: tuple[Fixture, ...] = (
                 "confidence": "medium",
                 "limitations": "Static import evidence only; no runtime call data.",
                 "suggested_direction": "Introduce an explicit interface between the two modules.",
+                "changeability_question": "boundary-clarity",
             }],
             "coverage": [{"signal": "imports.view.txt", "status": "complete", "note": ""}],
         },

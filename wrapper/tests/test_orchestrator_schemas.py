@@ -110,6 +110,7 @@ def _valid_finding(**overrides):
         "priority": "medium", "confidence": "medium",
         "limitations": "Static evidence does not establish runtime frequency.",
         "suggested_direction": "Clarify the boundary before changing it.",
+        "changeability_question": "boundary-clarity",
     }
     row.update(overrides)
     return row
@@ -162,6 +163,23 @@ def test_lens_findings_rejects_bad_coverage_status():
         "lens-findings",
         _lens_output(coverage=[{"signal": "structure", "status": "unknown", "note": ""}]))
     assert "coverage-status" in _checks(failures)
+
+
+def test_lens_findings_accepts_every_changeability_question_value():
+    for value in schemas.CHANGEABILITY_QUESTIONS:
+        finding = _valid_finding(changeability_question=value)
+        assert schemas.validate_output("lens-findings", _lens_output(findings=[finding])) == []
+
+
+def test_lens_findings_rejects_missing_or_unknown_changeability_question():
+    finding = dict(_valid_finding())
+    del finding["changeability_question"]
+    failures = schemas.validate_output("lens-findings", _lens_output(findings=[finding]))
+    assert "finding-changeability-question" in _checks(failures)
+
+    finding = _valid_finding(changeability_question="not-a-real-question")
+    failures = schemas.validate_output("lens-findings", _lens_output(findings=[finding]))
+    assert "finding-changeability-question" in _checks(failures)
 
 
 # --------------------------------------------------------------------------- #

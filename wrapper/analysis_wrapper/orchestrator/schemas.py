@@ -48,6 +48,16 @@ STATIC_EVIDENCE_BASES = EVIDENCE_BASES - {"runtime-observation", "user-confirmed
 PRIORITIES = {"critical", "high", "medium", "low"}
 CONFIDENCES = {"high", "medium", "low"}
 SIGNAL_STATUSES = {"complete", "partial", "failed", "skipped"}
+# The six changeability questions synthesis.md's overview diagnosis (section
+# 11) and module-changeability table (section 13) are built from, plus
+# `none` for a finding that sits outside all six (57B-116, M2). Order/names
+# mirror synthesis.md's "## The six changeability questions" list exactly:
+# boundary clarity, change spread, rule locality, hidden coupling,
+# duplication & evolution debt, verification difficulty.
+CHANGEABILITY_QUESTIONS = {
+    "boundary-clarity", "change-spread", "rule-locality", "hidden-coupling",
+    "duplication-evolution", "verification-difficulty", "none",
+}
 
 # The three citation grammars used throughout Project Analysis evidence:
 # ``repo@revision:path:line``, ``signals/<view>:<line>``, ``metric:<ref>``.
@@ -196,6 +206,11 @@ def _validate_finding(row: Any, location: str, failures: _Failures) -> None:
     failures.require(row.get("confidence") in CONFIDENCES, "finding-confidence",
                       "confidence must be one of " + ", ".join(sorted(CONFIDENCES)),
                       f"{location}.confidence")
+    failures.require(row.get("changeability_question") in CHANGEABILITY_QUESTIONS,
+                      "finding-changeability-question",
+                      "changeability_question must be one of "
+                      + ", ".join(sorted(CHANGEABILITY_QUESTIONS)),
+                      f"{location}.changeability_question")
     evidence = row.get("evidence")
     if not failures.require(isinstance(evidence, list) and bool(evidence),
                              "finding-evidence", "evidence must be a non-empty list",
