@@ -211,12 +211,15 @@ def test_every_subcommand_is_classified():
     # (57B-95 review FIX 6): the reverse direction matters too -- a STALE
     # classified-but-unregistered entry (a command renamed/removed from
     # cli.parser() without its old classification being cleaned up) was never
-    # caught by the ``missing`` check above. ``list``/``help`` are the only
-    # documented exception: they are pre-classified ahead of a later phase
-    # that will actually register them (see their own comments in
-    # ``COMMAND_CLASSIFICATION``), so this is a small, explicit allowlist,
-    # not a loophole for a real stale entry to hide behind.
-    not_yet_registered = {"list", "help"}
+    # caught by the ``missing`` check above. ``help`` is the only remaining
+    # documented exception: it is argparse's built-in ``-h``/``--help``, not
+    # a registered ``sub.add_parser`` subcommand, so it is pre-classified
+    # ahead of ever actually being registered (see its own comment in
+    # ``COMMAND_CLASSIFICATION``). ``list`` was registered as a real
+    # subcommand in 57B-109 and is now covered by the ``missing``/normal path
+    # instead. This is a small, explicit allowlist, not a loophole for a
+    # real stale entry to hide behind.
+    not_yet_registered = {"help"}
     stale = classified - registered - not_yet_registered
     assert not stale, (
         f"compat.COMMAND_CLASSIFICATION classifies {sorted(stale)} but "

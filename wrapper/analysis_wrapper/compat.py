@@ -443,7 +443,7 @@ COMMAND_CLASSIFICATION: dict[str, bool] = {
     "doctor": False,        # diagnoses the very drift this guard reports -- must stay reachable
     "setup": False,         # THE remedy this guard's own refusal message points at; gating it would make drift unrecoverable
     "migrate": False,       # one-time data-root relocation, not an analysis run
-    "list": False,          # informational; not a registered subcommand yet but kept classified so it is exempt the moment one lands
+    "list": False,          # informational, read-only run inventory (57B-109) -- never gated
     "help": False,          # informational; ditto
     "status": False,        # read-only inspection of an existing run's stage/staleness (never mutates)
     "export": False,        # renders an EXISTING (possibly completed) run's artifacts to files -- the compat matrix promises a completed run's reports stay `readable`

@@ -152,6 +152,40 @@ def _version_string() -> str:
             f"(analysis-wrapper package {pkg})")
 
 
+_SCOPE_REPO_HELP = (
+    "restrict discovery to specific repositories (comma-separated and/or "
+    "repeatable; each value matches a repo's basename or its workspace-"
+    "relative path, e.g. 'api' or 'services/api' to disambiguate same-"
+    "named repos). Combines with --exclude: --repo narrows the candidate "
+    "set first, then --exclude can still remove members from it. A --repo "
+    "value that matches nothing in the workspace is a hard error, never a "
+    "silent no-op. Every repo it excludes is disclosed in the discovery "
+    "report (not_targeted + scope_narrowing)."
+)
+_SCOPE_ONLY_HELP = (
+    "restrict discovery to one workspace-relative subdirectory (e.g. "
+    "'services/api'); repos outside it are disclosed as scoped out "
+    "(not_targeted + scope_narrowing), never silently analyzed anyway. "
+    "Applied before --repo/--exclude."
+)
+
+
+def _add_scope_args(target: argparse.ArgumentParser) -> None:
+    target.add_argument("--repo", action="append", default=None, help=_SCOPE_REPO_HELP)
+    target.add_argument("--only", default="", help=_SCOPE_ONLY_HELP)
+
+
+def _parse_repo_filter(values: list[str] | None) -> list[str]:
+    """``--repo`` is repeatable AND each occurrence may itself be comma-
+    separated (matches this CLI's existing ``--exclude`` convention)."""
+    if not values:
+        return []
+    result: list[str] = []
+    for value in values:
+        result.extend(item.strip() for item in value.split(",") if item.strip())
+    return result
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="project-analysis-wrapper")
     result.add_argument("--version", action="version", version=_version_string(),
@@ -218,6 +252,7 @@ def parser() -> argparse.ArgumentParser:
                       help="override the analyzer's own checkout root that is "
                            "self-excluded from discovery (default: resolved "
                            "from the installed package; needs no operator input)")
+    _add_scope_args(disc)
     new_run = sub.add_parser(
         "new-run", help="mint a run dir under the data root's output/ tree "
                         "(see `project-analysis-wrapper migrate` for legacy "
@@ -250,6 +285,7 @@ def parser() -> argparse.ArgumentParser:
     new_run.add_argument("--analyzer-root", default="",
                          help="override the self-excluded analyzer checkout "
                               "root (default: resolved from the package)")
+    _add_scope_args(new_run)
     drill = sub.add_parser(
         "new-drilldown", help="mint a drill-down run from a completed overview "
                               "run (--from-run → current pointer → refuse)")
@@ -353,6 +389,22 @@ def parser() -> argparse.ArgumentParser:
              "without it every lane is reported applicable-unknown)")
     doctor.add_argument("--json", action="store_true",
                         help="machine-readable structured output")
+    list_cmd = sub.add_parser(
+        "list",
+        help="read-only inventory of prior runs under the data root's output/ "
+             "tree, grouped by project: run id, date, language, kind "
+             "(overview/drilldown), status (complete/inspection-only/"
+             "incomplete with resume point), resolved location, and which "
+             "run is `current`/`latest_completed`. Never creates the data "
+             "root or writes anything; a corrupt/partial run directory is "
+             "reported unreadable, not crashed on. Exit codes: 0 always "
+             "(including 'no runs yet'), 1 internal failure.")
+    list_cmd.add_argument(
+        "--project", default="",
+        help="restrict to one project key (as shown in the report itself); "
+             "default: every project")
+    list_cmd.add_argument("--json", action="store_true",
+                          help="machine-readable structured output")
     from . import setup as setup_mod
     setup_mod.add_subparser(sub)
     migrate = sub.add_parser(
@@ -372,12 +424,19 @@ def _discover(args: argparse.Namespace) -> int:
     exclude = [x.strip() for x in args.exclude.split(",") if x.strip()]
     spec, report = emit.discover(
         args.workspace, exclude_names=exclude,
-        analyzer_root=args.analyzer_root or None)
+        analyzer_root=args.analyzer_root or None,
+        include_repos=_parse_repo_filter(args.repo),
+        only_path=args.only or None)
     targets_path, report_path = emit.write_stage1(args.out, spec, report)
     print(f"{len(spec.repos)} target repo(s), "
           f"{len(spec.integration_candidates)} integration candidate(s)")
     for line in report["not_targeted"]:
         print(f"not targeted: {line}")
+    scope = report["scope_narrowing"]
+    if scope["only_path"] or scope["repo_filter"]:
+        print(f"scope narrowing: only={scope['only_path']!r} "
+              f"repo_filter={scope['repo_filter']!r} "
+              f"({len(scope['excluded'])} repo(s) excluded by scope)")
     print(f"wrote {targets_path}")
     print(f"wrote {report_path}")
     return 0
@@ -415,7 +474,9 @@ def _new_run(args: argparse.Namespace) -> int:
     exclude = [x.strip() for x in args.exclude.split(",") if x.strip()]
     spec, report = emit.discover(
         args.workspace, exclude_names=exclude,
-        analyzer_root=args.analyzer_root or None)
+        analyzer_root=args.analyzer_root or None,
+        include_repos=_parse_repo_filter(args.repo),
+        only_path=args.only or None)
     identities = identity.build(
         spec,
         workspace_root=report["workspace_root"],
@@ -460,6 +521,11 @@ def _new_run(args: argparse.Namespace) -> int:
     state.save(run_dir)
     print(f"run: {run_dir}")
     print(f"inspection_only: {state.inspection_only}")
+    scope = report["scope_narrowing"]
+    if scope["only_path"] or scope["repo_filter"]:
+        print(f"scope narrowing: only={scope['only_path']!r} "
+              f"repo_filter={scope['repo_filter']!r} "
+              f"({len(scope['excluded'])} repo(s) excluded by scope)")
     print(f"next stage: {state.next_stage()}")
     return 0
 
@@ -1053,6 +1119,14 @@ def _compare_runs(args: argparse.Namespace) -> int:
     return 3 if parity.has_semantic_differences(report) else 0
 
 
+def _list_runs(args: argparse.Namespace) -> int:
+    from . import list_runs
+    # list_runs.run() maps every failure mode to its own documented exit code
+    # internally and never raises -- same rationale as _doctor/_setup below:
+    # this must not be routed through the blanket exception handler in main().
+    return list_runs.run(args.project or None, as_json=args.json)
+
+
 def _doctor(args: argparse.Namespace) -> int:
     from . import doctor as doctor_mod
     # doctor.run() maps every failure mode to its own documented exit code
@@ -1106,6 +1180,8 @@ def main(argv: list[str] | None = None) -> int:
             compat.guard_run(args.run)
         if args.command == "doctor":
             return _doctor(args)
+        if args.command == "list":
+            return _list_runs(args)
         if args.command == "setup":
             return _setup(args)
         if args.command == "new-run":
