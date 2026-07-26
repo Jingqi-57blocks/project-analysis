@@ -421,6 +421,26 @@ def parser() -> argparse.ArgumentParser:
     conformance.add_argument("--concurrency", type=int, default=1)
     conformance.add_argument("--base-url", default="")
     conformance.add_argument("--api-key-env", default="")
+    plan_judgment_cmd = sub.add_parser(
+        "plan-judgment",
+        help="(orchestrator, 57B-116) compose + register the judgment DAG for a "
+             "prepared run: one lens-findings task per repo-sharded lens x repo "
+             "(plus one per workspace-sharded lens), and the independent "
+             "boundary-resolution task")
+    plan_judgment_cmd.add_argument("--run", required=True, help="run directory")
+    plan_judgment_cmd.add_argument(
+        "--context-budget", type=int, default=96000, dest="context_budget",
+        help="per-packet context budget in estimated tokens (default: 96000)")
+    plan_dedup_cmd = sub.add_parser(
+        "plan-dedup",
+        help="(orchestrator, 57B-116) compose + register the single global "
+             "dedup-rank task from every VALIDATED lens-findings output already "
+             "in the run's ledger -- run this after plan-judgment's lens tasks "
+             "have validated")
+    plan_dedup_cmd.add_argument("--run", required=True, help="run directory")
+    plan_dedup_cmd.add_argument(
+        "--context-budget", type=int, default=96000, dest="context_budget",
+        help="per-packet context budget in estimated tokens (default: 96000)")
     return result
 
 
@@ -1221,6 +1241,39 @@ def _executor_conformance_cmd(args: argparse.Namespace) -> int:
     return 0 if report["passed"] else 3
 
 
+def _plan_judgment_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import planner
+    run = Path(args.run).expanduser().resolve()
+    try:
+        planned = planner.plan_judgment(run, context_budget_tokens=args.context_budget)
+    except planner.PlannerError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    for task in planned:
+        detail = f", lens={task.lens_id}, shard={task.shard}" if task.lens_id else ""
+        shard_note = f", {len(task.packet_ids)} packet(s)" if len(task.packet_ids) > 1 else ""
+        status = "" if task.created else " (already planned, no-op)"
+        print(f"{task.task_id} ({task.task_type}{detail}): "
+              f"~{task.estimated_tokens} tokens{shard_note}{status}")
+    print(f"planned {len(planned)} task(s), "
+          f"{sum(1 for task in planned if task.created)} newly created")
+    return 0
+
+
+def _plan_dedup_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import planner
+    run = Path(args.run).expanduser().resolve()
+    try:
+        task = planner.plan_dedup(run, context_budget_tokens=args.context_budget)
+    except planner.PlannerError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    status = "" if task.created else " (already planned, no-op)"
+    print(f"{task.task_id}: ~{task.estimated_tokens} tokens, "
+          f"{len(task.packet_ids)} packet(s){status}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -1258,6 +1311,10 @@ def main(argv: list[str] | None = None) -> int:
             return _run_executor_cmd(args)
         if args.command == "executor-conformance":
             return _executor_conformance_cmd(args)
+        if args.command == "plan-judgment":
+            return _plan_judgment_cmd(args)
+        if args.command == "plan-dedup":
+            return _plan_dedup_cmd(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)

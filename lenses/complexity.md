@@ -1,3 +1,15 @@
+---
+shard: repo
+# shard: no bullet below compares one repo against another -- concentrated
+#   complexity, god-functions, complexity x churn, and threshold honesty are
+#   all judged within one file/function's own repo; lizard and scc are both
+#   per-repo tool invocations, so each repo is independently assessable.
+signals: [git-history, lizard, scc]
+# signals: lenses/coverage-map.json requires {lizard, scc} for this lens's
+#   coverage grading; this file's own "Signals:" line additionally names
+#   git-history ("read it for corroboration") for the complexity x churn
+#   bullet, so it is added even though it is not part of the required set.
+---
 # Lens: complexity (group A)
 
 **Question:** which specific functions/files are hard to change correctly, and

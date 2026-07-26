@@ -1,3 +1,16 @@
+---
+shard: workspace
+# shard: jscpd-cross's own run-summary row is recorded under a single
+#   "primary" family member's repository_ref (cli.py's sweep attributes it to
+#   members[0]) even though its clone data spans every repo in the language
+#   family -- a per-repo shard filtered by repository_ref would see that view
+#   for at most one member and silently miss it for the rest, losing this
+#   lens's namesake capability (cross-repo clones). Kept as one workspace task.
+signals: [jscpd, jscpd-cross, lizard]
+# signals: lenses/coverage-map.json requires {jscpd, jscpd-cross}; this
+#   file's own "Signals:" line additionally names lizard ("corroborating
+#   identical complexity signatures"), so it is added too.
+---
 # Lens: duplication (group A)
 
 **Question:** what is copy-pasted, does it drift, and which copies actually
