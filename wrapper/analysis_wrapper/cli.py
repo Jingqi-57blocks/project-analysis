@@ -285,7 +285,14 @@ def parser() -> argparse.ArgumentParser:
     compare_runs.add_argument("candidate", help="candidate completed run directory")
     compare_runs.add_argument(
         "--report", default="",
-        help="optional path to write the full JSON parity report")
+        help="optional path to write the full JSON parity report "
+             "(with --semantic: overrides the default parity-semantic.json path)")
+    compare_runs.add_argument(
+        "--semantic", action="store_true",
+        help="(dev-only) semantic-equivalence mode: writes parity-semantic.json, "
+             "in the current directory by default (override with --report), "
+             "instead of the byte-level report -- tolerant of id/wording churn "
+             "a migration is expected to cause, flags substance drift only")
     return result
 
 
@@ -869,8 +876,65 @@ def _lifecycle_cmd(args: argparse.Namespace) -> int:
     raise AssertionError(args.command)
 
 
+def _print_semantic_summary(report: dict) -> None:
+    findings = report["findings"]
+    if findings == "not present in both runs":
+        print("findings: not present in both runs")
+    else:
+        with_deltas = sum(1 for pair in findings["matched"] if pair["deltas"])
+        print(f"findings: {len(findings['matched'])} matched "
+              f"({with_deltas} with substance deltas), "
+              f"{len(findings['unmatched_left'])} unmatched (base), "
+              f"{len(findings['unmatched_right'])} unmatched (candidate)")
+    module_map = report["module_map"]
+    if module_map == "not present in both runs":
+        print("module_map: not present in both runs")
+    else:
+        print(f"module_map: +{len(module_map['added'])} -{len(module_map['removed'])} "
+              f"~{len(module_map['changed'])}")
+    for name, doc in sorted(report["citations"].items()):
+        if doc == "not present in both runs":
+            print(f"citations/{name}: not present in both runs")
+        else:
+            print(f"citations/{name}: base_valid={doc['base_valid_count']} "
+                  f"candidate_valid={doc['candidate_valid_count']} "
+                  f"+{len(doc['added'])} -{len(doc['removed'])}")
+    disposition = report["disposition_totals"]
+    if disposition == "not present in both runs":
+        print("disposition_totals: not present in both runs")
+    else:
+        print(f"disposition_totals: equal={disposition['equal']} "
+              f"base={disposition['base']} candidate={disposition['candidate']}")
+    for name, row in sorted(report["coverage"].items()):
+        print(f"coverage/{name}: equal={row['equal']} differences={row['difference_count']}")
+    for name, doc in sorted(report["section_completeness"].items()):
+        if doc == "not present in both runs":
+            print(f"section_completeness/{name}: not present in both runs")
+            continue
+        regressions = sorted(section_name for section_name, section in doc["sections"].items()
+                             if not section["equal_or_greater"])
+        suffix = f" [{', '.join(regressions[:5])}]" if regressions else ""
+        print(f"section_completeness/{name}: {len(doc['sections'])} section(s), "
+              f"{len(regressions)} regression(s){suffix}")
+
+
+def _compare_runs_semantic(args: argparse.Namespace) -> int:
+    from . import parity
+    report = parity.compare_semantic(args.base, args.candidate)
+    report_path = (Path(args.report) if args.report
+                  else Path("parity-semantic.json")).expanduser().resolve()
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", "utf-8")
+    print(f"base:      {args.base}")
+    print(f"candidate: {args.candidate}")
+    print(f"semantic report: {report_path}")
+    _print_semantic_summary(report)
+    return 3 if parity.has_semantic_mode_differences(report) else 0
+
+
 def _compare_runs(args: argparse.Namespace) -> int:
     from . import parity
+    if args.semantic:
+        return _compare_runs_semantic(args)
     report = parity.compare(args.base, args.candidate)
     if args.report:
         Path(args.report).expanduser().resolve().write_text(

@@ -28,15 +28,36 @@ keeps no state and consults no history beyond the two runs given to it.
 ``compare()`` is pure: it only reads files under the two given run
 directories. The CLI (`` compare-runs``, wired in :mod:`analysis_wrapper.cli`)
 is the only caller that writes anything, and only when ``--report`` is given.
+
+``compare_semantic()`` (57B-114, ``--semantic``) is a substance-level
+companion to ``compare()``, equally pure. Where ``compare()`` reports every
+byte-shaped fact difference -- including ones a migration is EXPECTED to
+cause, like a finding's id or a module's name churning -- semantic mode is
+tolerant of exactly that churn and reports only substance: do the SAME
+underlying findings still exist (matched by evidence overlap, not id), does
+the module map still partition the same candidates the same way, do the
+narrative reports still cite real evidence and cover every section at least
+as thoroughly. It is layered strictly on top: its ``coverage`` section reads
+``compare()``'s own byte-level sections rather than re-deriving the same
+check a second way.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
+# citation grammar (see its `_source_parts`/`_validate_source_ref`); reused
+# (not re-derived) exactly as ``evidence/facts.py`` already does for the same
+# reason -- parity.py's --semantic citation extraction below classifies a
+# narrative-report citation as grammar-valid using this SAME parser.
+from .findings import _source_parts
+from .module_map import DISPOSITIONS as _DISPOSITIONS
+
 SCHEMA_VERSION = "1.0.0"
+SEMANTIC_SCHEMA_VERSION = "1.0.0"
 
 # A "changed" entry is tagged reclassified=True only when every field that
 # differs is one of these outcome-shaped fields — the same fact re-judged —
@@ -302,15 +323,40 @@ def _system_model_partitions(doc: dict | None) -> dict[str, dict] | None:
     return result
 
 
+def _row_repo_key(row: dict, index: int) -> str:
+    """Repo identity for one per-repo row, tolerant of pre-57B-88 artifacts.
+
+    57B-88 (commit 17f7bb3) renamed this field from ``repo_id`` to
+    ``repository_ref`` in-place, in callgraph-coverage.json,
+    imports/depmap-coverage.json, signals/run-summary.json, AND (via
+    ``identity.externalize_discovery_report``'s own repo_id -> repository_ref
+    ``replace_field``, same migration) discovery-report.json's repo rows --
+    a pure rename (the JSON key changes, the value doesn't), never additive:
+    a row written by either era carries exactly one of the two keys, never
+    both. Keying purely by ``row.get("repository_ref", "")`` therefore reads
+    EVERY row of a genuine pre-88 doc as the same empty string, collapsing
+    two different repos' rows sharing the same secondary key component
+    (lang/lane/tool/profile_id) onto one dict entry and silently dropping
+    one side's facts. Falling back to the legacy field recovers the real
+    identity for exactly that case. The positional discriminator is a last
+    resort for a row carrying neither (not known to occur in practice) -- it
+    guarantees no collapse even then, though it only orders correctly within
+    one doc's own (already sorted) row list, not across independently-
+    numbered docs.
+    """
+    ref = row.get("repository_ref") or row.get("repo_id")
+    return ref if ref else f"__row_{index}__"
+
+
 def _lane_coverage(callgraph_doc: dict | None, depmap_doc: dict | None) -> dict | None:
     if callgraph_doc is None and depmap_doc is None:
         return None
     result: dict[tuple, dict] = {}
-    for row in (callgraph_doc or {}).get("repos", []):
-        key = ("callgraph", row.get("repository_ref", ""), row.get("lang", ""))
+    for index, row in enumerate((callgraph_doc or {}).get("repos", [])):
+        key = ("callgraph", _row_repo_key(row, index), row.get("lang", ""))
         result[key] = {k: v for k, v in row.items() if k not in _STRIPPED_LANE_FIELDS}
-    for row in (depmap_doc or {}).get("repos", []):
-        key = ("depmap", row.get("repository_ref", ""), row.get("lane", ""))
+    for index, row in enumerate((depmap_doc or {}).get("repos", [])):
+        key = ("depmap", _row_repo_key(row, index), row.get("lane", ""))
         result[key] = {k: v for k, v in row.items() if k not in _STRIPPED_LANE_FIELDS}
     return result
 
@@ -319,8 +365,8 @@ def _signals(doc: dict | None) -> dict[tuple, dict] | None:
     if doc is None:
         return None
     result: dict[tuple, dict] = {}
-    for row in doc.get("signals", []):
-        key = (row.get("tool", ""), row.get("repository_ref", ""))
+    for index, row in enumerate(doc.get("signals", [])):
+        key = (row.get("tool", ""), _row_repo_key(row, index))
         result[key] = {"status": row.get("status"), "reason": row.get("reason")}
     result[("__aggregate__",)] = {"status": doc.get("aggregate_status")}
     return result
@@ -441,8 +487,14 @@ def _resolve_route_docs(
 
 def _discovery_facets(doc: dict) -> dict[tuple[str, str], dict]:
     result: dict[tuple[str, str], dict] = {}
-    for repo in doc.get("repos", []):
-        repository_ref = repo.get("repository_ref", "")
+    for index, repo in enumerate(doc.get("repos", [])):
+        # Same 57B-112 §2 class of bug as _lane_coverage/_signals: a pre-88
+        # discovery-report.json repo row carries `repo_id`, not
+        # `repository_ref` (identity.externalize_discovery_report's own
+        # repo_id -> repository_ref rename, same 57B-88 migration) --
+        # keying purely by `repository_ref` reads every row as "", so two
+        # repos sharing a `profile_id` collapse onto one dict key.
+        repository_ref = _row_repo_key(repo, index)
         for facet in repo.get("technology_facets", []):
             key = (repository_ref, facet.get("profile_id", ""))
             result[key] = {
@@ -803,12 +855,26 @@ def compare(base_run: str | Path, candidate_run: str | Path) -> dict[str, Any]:
         _provider_execution_reasons(base_docs["provider_execution"], base_roots),
         _provider_execution_reasons(candidate_docs["provider_execution"], candidate_roots))
 
+    # `by_section` is the SOLE source of the total below (57B-112 §2): a prior
+    # version added the prose lanes' contribution into `total` a second time,
+    # independently of `by_section` -- which never carried a `prose/*` entry
+    # at all -- so a human reconciling the total against the *printed*
+    # per-section counts (which also never showed prose) came up exactly the
+    # prose count short (98,475 vs 98,474 on a real mainline comparison,
+    # traced to one `not_targeted` addition). Folding the prose lanes into
+    # `by_section` itself (instead of adding them on the side) makes `total`
+    # a pure `sum(by_section.values())` -- it cannot diverge from its own
+    # addends again because there is no second, independently-accumulated
+    # number left to diverge from.
     by_section = {
         name: len(section["added"]) + len(section["removed"]) + len(section["changed"])
         for name, section in sections.items()
     }
-    total = sum(by_section.values()) + sum(
-        len(rows["added"]) + len(rows["removed"]) for rows in prose.values())
+    by_section.update({
+        f"prose/{name}": len(rows["added"]) + len(rows["removed"])
+        for name, rows in prose.items()
+    })
+    total = sum(by_section.values())
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -839,5 +905,437 @@ def has_semantic_differences(report: dict[str, Any]) -> bool:
         if rows["base_present"] != rows["candidate_present"]:
             return True
         if rows["added"] or rows["removed"]:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# --semantic mode (57B-114): substance-level comparison, tolerant of the
+# id/wording churn a migration is EXPECTED to cause. A section whose backing
+# artifact is present on NEITHER side degrades to the literal string
+# "not present in both runs" (a deterministic-only pair has no narrative
+# reports/module map at all) -- this is an expected shape, not an error, and
+# is never treated as a difference by ``has_semantic_mode_differences``.
+#
+# Two known v1 limitations, disclosed here rather than left implicit:
+#
+# (a) Findings matching (``_match_findings``) keys evidence by (repository_ref,
+#     relative_path) parsed from SOURCE refs only (``_finding_evidence_spans``).
+#     A finding whose evidence is entirely metric refs (``metric:...``) or
+#     signal refs (``signals/...``) carries no (repo, file) span at all and
+#     can therefore never match anything -- it always surfaces as unmatched
+#     on both sides, even when it is genuinely the same finding re-emitted.
+#     A systemic finding that cites mostly signal views (e.g. a duplication
+#     or dependency-risk finding) is the case most likely to hit this. This
+#     is an acceptable v1 gap, not a silent one: a future iteration could key
+#     those findings by (tool, signal-view-path) or (metric_ref) instead.
+#
+# (b) Citation extraction (``_citation_candidates``) only recognizes
+#     source-ref-shaped tokens (``repo@revision:relative/path:line``). A
+#     narrative report's ``signals/...`` or ``metric:...`` citations are NOT
+#     inventoried by the ``citations`` section at all -- they neither count
+#     toward ``*_valid_count``/``*_invalid_count`` nor appear in
+#     added/removed. This mirrors limitation (a): both stem from the same
+#     narrower-than-full-citation-grammar scope chosen for v1.
+# ---------------------------------------------------------------------------
+
+
+_NARRATIVE_DOCS = ("overview.md", "technical-overview.md")
+_NOT_PRESENT = "not present in both runs"
+
+
+def _read_text(path: Path) -> str | None:
+    """Read one narrative-report artifact, or ``None`` when it is absent.
+
+    Mirrors ``_load_json``'s presence/error split: absence is a normal,
+    expected shape (a deterministic-only run has no narrative reports);
+    an unreadable *present* file is a genuine input error.
+    """
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text("utf-8", errors="replace")
+    except OSError as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+
+
+# --- findings: matched by evidence overlap, not finding_id -----------------
+
+
+def _finding_evidence_spans(finding: dict) -> dict[tuple[str, str], tuple[int, int]]:
+    """(repository_ref, relative_path) -> (min_line, max_line) merged across
+    every source-ref-shaped evidence ref this finding cites. Metric/signal
+    refs (``metric:...``, ``signals/...``) carry no repo+file identity, so
+    they never contribute a span -- consistent with the task's own framing
+    ("same repo + file path with overlapping line ranges"). Known v1
+    limitation (see the ``--semantic mode`` section banner above): a finding
+    whose evidence is ENTIRELY metric/signal refs gets an empty span dict and
+    can therefore never match anything, surfacing as unmatched on both sides
+    even when it is genuinely the same finding re-emitted."""
+    spans: dict[tuple[str, str], tuple[int, int]] = {}
+    for item in finding.get("evidence", []) or []:
+        if not isinstance(item, dict):
+            continue
+        for ref in item.get("refs", []) or []:
+            parts = _source_parts(str(ref))
+            if not parts:
+                continue
+            repository_ref, _revision, relative, line_text = parts
+            line = int(line_text)
+            key = (repository_ref, relative)
+            low, high = spans.get(key, (line, line))
+            spans[key] = (min(low, line), max(high, line))
+    return spans
+
+
+def _spans_overlap_count(base: dict[tuple[str, str], tuple[int, int]],
+                         candidate: dict[tuple[str, str], tuple[int, int]]) -> int:
+    """Count of (repo, file) keys shared by both findings whose line ranges
+    overlap -- the matching SCORE two candidate findings are ranked by, not
+    just a yes/no test, so the greedy matcher below prefers the strongest
+    evidence correspondence when a finding could plausibly pair with more
+    than one candidate on the other side."""
+    count = 0
+    for key, (base_low, base_high) in base.items():
+        other = candidate.get(key)
+        if other is not None and base_low <= other[1] and other[0] <= base_high:
+            count += 1
+    return count
+
+
+_FINDING_SCALAR_FIELDS = ("priority", "confidence")
+
+
+def _finding_deltas(base: dict, candidate: dict) -> dict[str, dict]:
+    """Substance deltas between two MATCHED findings -- priority/confidence/
+    affected-module changes, i.e. the same underlying finding re-judged."""
+    deltas: dict[str, dict] = {}
+    for field_name in _FINDING_SCALAR_FIELDS:
+        if base.get(field_name) != candidate.get(field_name):
+            deltas[field_name] = {"base": base.get(field_name),
+                                  "candidate": candidate.get(field_name)}
+    base_modules = sorted(set(base.get("affected_modules", []) or []))
+    candidate_modules = sorted(set(candidate.get("affected_modules", []) or []))
+    if base_modules != candidate_modules:
+        deltas["affected_modules"] = {"base": base_modules, "candidate": candidate_modules}
+    return deltas
+
+
+def _match_findings(base_rows: list[dict], candidate_rows: list[dict]) -> dict[str, Any]:
+    base_by_id = {str(row.get("finding_id", "")): row for row in base_rows
+                 if isinstance(row, dict)}
+    candidate_by_id = {str(row.get("finding_id", "")): row for row in candidate_rows
+                      if isinstance(row, dict)}
+    base_spans = {finding_id: _finding_evidence_spans(row)
+                 for finding_id, row in base_by_id.items()}
+    candidate_spans = {finding_id: _finding_evidence_spans(row)
+                      for finding_id, row in candidate_by_id.items()}
+
+    scored: list[tuple[int, str, str]] = []
+    for base_id, base_row in base_by_id.items():
+        for candidate_id, candidate_row in candidate_by_id.items():
+            if base_row.get("lens") != candidate_row.get("lens"):
+                continue
+            overlap = _spans_overlap_count(base_spans[base_id], candidate_spans[candidate_id])
+            if overlap:
+                scored.append((overlap, base_id, candidate_id))
+    # Greedy, strongest evidence-overlap first; ids break ties deterministically.
+    scored.sort(key=lambda row: (-row[0], row[1], row[2]))
+
+    matched_base: set[str] = set()
+    matched_candidate: set[str] = set()
+    pairs = []
+    for overlap, base_id, candidate_id in scored:
+        if base_id in matched_base or candidate_id in matched_candidate:
+            continue
+        matched_base.add(base_id)
+        matched_candidate.add(candidate_id)
+        pairs.append({
+            "base_finding_id": base_id, "candidate_finding_id": candidate_id,
+            "evidence_overlap": overlap,
+            "deltas": _finding_deltas(base_by_id[base_id], candidate_by_id[candidate_id]),
+        })
+    pairs.sort(key=lambda row: (row["base_finding_id"], row["candidate_finding_id"]))
+    return {
+        "matched": pairs,
+        "unmatched_left": sorted(set(base_by_id) - matched_base),
+        "unmatched_right": sorted(set(candidate_by_id) - matched_candidate),
+    }
+
+
+def _findings_section(base_run: Path, candidate_run: Path) -> dict | str:
+    base_doc = _load_json(base_run / "findings.json")
+    candidate_doc = _load_json(candidate_run / "findings.json")
+    if base_doc is None and candidate_doc is None:
+        return _NOT_PRESENT
+    result = _match_findings(
+        (base_doc or {}).get("findings", []) or [],
+        (candidate_doc or {}).get("findings", []) or [])
+    result["base_present"] = base_doc is not None
+    result["candidate_present"] = candidate_doc is not None
+    return result
+
+
+# --- module map: ids, candidate-membership sets, classification diffs ------
+
+
+def _module_map_projection(doc: dict) -> dict[str, dict]:
+    membership: dict[str, set[str]] = {}
+    for row in doc.get("candidate_dispositions", []) or []:
+        for module_id in row.get("module_ids", []) or []:
+            membership.setdefault(module_id, set()).add(row.get("candidate_id", ""))
+    result: dict[str, dict] = {}
+    for row in doc.get("modules", []) or []:
+        module_id = row.get("module_id", "")
+        result[module_id] = {
+            "name": row.get("name"),
+            "classification": row.get("classification"),
+            "aliases": sorted(set(row.get("aliases", []) or [])),
+            "candidate_members": sorted(membership.get(module_id, set())),
+        }
+    return result
+
+
+def _module_map_section(base_run: Path, candidate_run: Path) -> dict | str:
+    base_doc = _load_json(base_run / "module-map.json")
+    candidate_doc = _load_json(candidate_run / "module-map.json")
+    if base_doc is None and candidate_doc is None:
+        return _NOT_PRESENT
+    base_modules = _module_map_projection(base_doc) if base_doc is not None else {}
+    candidate_modules = (
+        _module_map_projection(candidate_doc) if candidate_doc is not None else {})
+    added = sorted(set(candidate_modules) - set(base_modules))
+    removed = sorted(set(base_modules) - set(candidate_modules))
+    changed = [
+        {"module_id": module_id, "base": base_modules[module_id],
+         "candidate": candidate_modules[module_id]}
+        for module_id in sorted(set(base_modules) & set(candidate_modules))
+        if base_modules[module_id] != candidate_modules[module_id]
+    ]
+    return {
+        "base_present": base_doc is not None, "candidate_present": candidate_doc is not None,
+        "added": added, "removed": removed, "changed": changed,
+    }
+
+
+# --- citations: extracted from the narrative reports, grammar validated ----
+
+
+# Broad recall on purpose: this only needs to FIND citation-shaped candidates
+# (repo@revision:relative/path:line) embedded in free prose; each candidate
+# is then classified valid/invalid by the SAME grammar findings.json's own
+# refs are validated against (``_source_parts``), reused rather than
+# re-derived as a second, looser regex would be. Trailing prose punctuation
+# (a sentence-ending period/comma right after an unbacktick'd citation) is
+# stripped before validation so it never masquerades as an invalid line number.
+#
+# Known v1 limitation (see the ``--semantic mode`` section banner above):
+# this regex only recognizes source-ref-shaped tokens. A narrative report's
+# ``signals/...`` or ``metric:...`` citations are invisible to this section
+# entirely -- not counted, not diffed -- not just classified invalid.
+_CITATION_CANDIDATE = re.compile(r"[^\s`\[\]()]+@[^\s`\[\]()]+:[^\s`\[\]()]+")
+_CITATION_TRAILING_PUNCT = ".,;:!?)]}"
+
+
+def _citation_candidates(text: str) -> set[str]:
+    return {match.rstrip(_CITATION_TRAILING_PUNCT)
+           for match in _CITATION_CANDIDATE.findall(text)}
+
+
+def _citations_for_text(text: str) -> tuple[list[str], int]:
+    """(sorted grammar-valid citation set, count of grammar-invalid candidates)."""
+    candidates = _citation_candidates(text)
+    valid = sorted(token for token in candidates if _source_parts(token) is not None)
+    return valid, len(candidates) - len(valid)
+
+
+def _citations_section(base_run: Path, candidate_run: Path) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for name in _NARRATIVE_DOCS:
+        base_text = _read_text(base_run / name)
+        candidate_text = _read_text(candidate_run / name)
+        if base_text is None and candidate_text is None:
+            result[name] = _NOT_PRESENT
+            continue
+        base_valid, base_invalid = _citations_for_text(base_text) if base_text else ([], 0)
+        candidate_valid, candidate_invalid = (
+            _citations_for_text(candidate_text) if candidate_text else ([], 0))
+        result[name] = {
+            "base_present": base_text is not None,
+            "candidate_present": candidate_text is not None,
+            "base_valid_count": len(base_valid), "candidate_valid_count": len(candidate_valid),
+            "base_invalid_count": base_invalid, "candidate_invalid_count": candidate_invalid,
+            "added": sorted(set(candidate_valid) - set(base_valid)),
+            "removed": sorted(set(base_valid) - set(candidate_valid)),
+        }
+    return result
+
+
+# --- disposition totals: per-class candidate-disposition counts ------------
+
+
+def _disposition_totals(doc: dict) -> dict[str, int]:
+    counts = {name: 0 for name in _DISPOSITIONS}
+    for row in doc.get("candidate_dispositions", []) or []:
+        disposition = row.get("disposition", "")
+        counts[disposition] = counts.get(disposition, 0) + 1
+    return counts
+
+
+def _disposition_totals_section(base_run: Path, candidate_run: Path) -> dict | str:
+    base_doc = _load_json(base_run / "module-map.json")
+    candidate_doc = _load_json(candidate_run / "module-map.json")
+    if base_doc is None and candidate_doc is None:
+        return _NOT_PRESENT
+    base_totals = _disposition_totals(base_doc) if base_doc is not None else {}
+    candidate_totals = _disposition_totals(candidate_doc) if candidate_doc is not None else {}
+    all_classes = sorted(set(base_totals) | set(candidate_totals))
+    return {
+        "base_present": base_doc is not None, "candidate_present": candidate_doc is not None,
+        "base": base_totals, "candidate": candidate_totals,
+        "equal": base_totals == candidate_totals,
+        "differing_classes": [
+            name for name in all_classes
+            if base_totals.get(name, 0) != candidate_totals.get(name, 0)],
+    }
+
+
+# --- coverage: a semantic READING of compare()'s own byte-level sections ---
+
+
+_COVERAGE_SECTION_NAMES = ("capability_records", "lane_coverage", "signals")
+
+
+def _section_equal(section: dict) -> bool:
+    return (section["base_present"] == section["candidate_present"]
+           and not section["added"] and not section["removed"] and not section["changed"])
+
+
+def _coverage_section(byte_report: dict) -> dict[str, dict]:
+    """Lens/signal status-table equality, read off ``compare()``'s own
+    ``capability_records``/``lane_coverage``/``signals`` sections rather than
+    re-deriving the same check a second, potentially-diverging way."""
+    sections = byte_report["sections"]
+    return {
+        name: {
+            "equal": _section_equal(sections[name]),
+            "difference_count": (
+                len(sections[name]["added"]) + len(sections[name]["removed"])
+                + len(sections[name]["changed"])),
+        }
+        for name in _COVERAGE_SECTION_NAMES
+    }
+
+
+# --- section completeness: presence + word counts + non-regression gate ---
+
+
+_H2_HEADING = re.compile(r"(?m)^##[ \t]+(.+?)[ \t]*$")
+
+
+def _sections_by_heading(text: str) -> dict[str, int]:
+    """H2 heading text -> word count of its body (up to the next H2, or EOF).
+
+    H2 is the section granularity both narrative templates share
+    (``technical-overview.md``'s flat H2 sections; ``overview.md``'s 16
+    numbered H2 sections) -- nested H3 content is counted as part of its
+    parent H2, not split out further.
+    """
+    matches = list(_H2_HEADING.finditer(text))
+    result: dict[str, int] = {}
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        result[match.group(1).strip()] = len(text[start:end].split())
+    return result
+
+
+def _section_completeness_for(base_text: str | None, candidate_text: str | None) -> dict | str:
+    if base_text is None and candidate_text is None:
+        return _NOT_PRESENT
+    base_sections = _sections_by_heading(base_text) if base_text is not None else {}
+    candidate_sections = (
+        _sections_by_heading(candidate_text) if candidate_text is not None else {})
+    rows = {}
+    for name in sorted(set(base_sections) | set(candidate_sections)):
+        base_words = base_sections.get(name)
+        candidate_words = candidate_sections.get(name, 0)
+        rows[name] = {
+            "base_present": name in base_sections, "candidate_present": name in candidate_sections,
+            "base_word_count": base_words or 0, "candidate_word_count": candidate_words,
+            # A section absent from base has no floor to violate; one present
+            # in base must never SHRINK in the candidate (the non-regression
+            # gate this feeds: a migration must never simplify a report away).
+            "equal_or_greater": True if base_words is None else candidate_words >= base_words,
+        }
+    return {
+        "base_present": base_text is not None, "candidate_present": candidate_text is not None,
+        "sections": rows,
+    }
+
+
+def _section_completeness_section(base_run: Path, candidate_run: Path) -> dict[str, Any]:
+    return {
+        name: _section_completeness_for(
+            _read_text(base_run / name), _read_text(candidate_run / name))
+        for name in _NARRATIVE_DOCS
+    }
+
+
+# --- orchestration -----------------------------------------------------
+
+
+def compare_semantic(base_run: str | Path, candidate_run: str | Path) -> dict[str, Any]:
+    """Compare two completed run directories at the substance level.
+
+    Pure read, like ``compare()`` (which this calls first, both for its own
+    directory-existence/malformed-artifact checks and to read its
+    ``coverage``-feeding sections without a second implementation of the same
+    check). Degrades gracefully section-by-section: an optional artifact
+    (findings.json, module-map.json, the narrative reports) absent on BOTH
+    sides never crashes the comparison, it marks that section
+    ``"not present in both runs"`` -- the expected shape for a
+    deterministic-only run pair.
+    """
+    byte_report = compare(base_run, candidate_run)
+    base = Path(base_run).expanduser().resolve()
+    candidate = Path(candidate_run).expanduser().resolve()
+    return {
+        "schema_version": SEMANTIC_SCHEMA_VERSION,
+        "findings": _findings_section(base, candidate),
+        "module_map": _module_map_section(base, candidate),
+        "citations": _citations_section(base, candidate),
+        "disposition_totals": _disposition_totals_section(base, candidate),
+        "coverage": _coverage_section(byte_report),
+        "section_completeness": _section_completeness_section(base, candidate),
+    }
+
+
+def has_semantic_mode_differences(report: dict[str, Any]) -> bool:
+    """True iff ``report`` (from ``compare_semantic``) carries any actual
+    substance difference. A section reading ``"not present in both runs"``
+    is an expected shape, never a difference."""
+    findings = report["findings"]
+    if findings != _NOT_PRESENT and (
+            findings["unmatched_left"] or findings["unmatched_right"]
+            or any(pair["deltas"] for pair in findings["matched"])):
+        return True
+    module_map = report["module_map"]
+    if module_map != _NOT_PRESENT and (
+            module_map["added"] or module_map["removed"] or module_map["changed"]
+            or module_map["base_present"] != module_map["candidate_present"]):
+        return True
+    for doc in report["citations"].values():
+        if doc != _NOT_PRESENT and (doc["added"] or doc["removed"]):
+            return True
+    disposition = report["disposition_totals"]
+    if disposition != _NOT_PRESENT and not disposition["equal"]:
+        return True
+    if any(not row["equal"] for row in report["coverage"].values()):
+        return True
+    for doc in report["section_completeness"].values():
+        if doc == _NOT_PRESENT:
+            continue
+        if any(not section["equal_or_greater"] for section in doc["sections"].values()):
             return True
     return False
