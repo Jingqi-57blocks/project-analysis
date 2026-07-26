@@ -1,7 +1,12 @@
-# state/ — per-target persistent facts (runtime, never committed)
+# state/ — legacy placeholder (runs no longer write here)
 
-Everything under `state/` except this README is gitignored: it is knowledge about
-*target* projects, which never enters the skill repo (generalization discipline).
+**This directory is a legacy placeholder.** Per-target persistent state now lives
+entirely under the external **data root** (`<data-root>/state/...`, resolved via
+`$PROJECT_ANALYSIS_HOME` or the platform default — see `README.md`'s "Where results
+go"), never inside this checkout. The shape below documents the layout under the data
+root; this in-repo `state/` directory is never populated by a current version of the
+wrapper. Everything else under `state/` besides this README stays gitignored, kept only
+for a pre-relocation layout / `migrate --legacy-skill-root` compatibility.
 
 ```
 state/<project-id>/

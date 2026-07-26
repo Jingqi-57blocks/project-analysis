@@ -15,7 +15,10 @@ output/*
 # generated exports (html report, future formats) — regenerable, never tracked
 exported/
 
-# analyzer-owned installed Go tool dir (populated by bootstrap; never committed).
+# legacy, pre-relocation analyzer-owned Go tool dir (never committed). Bootstrap does
+# NOT populate this — the callgraph binary is installed manually by the developer, and
+# current installs target the data-root runtime location instead (see README.md); this
+# in-code path is honored only as a fallback for an already-populated legacy install.
 # node_tools/node_modules is covered by the node_modules/ rule above; its pinned
 # package.json + lockfile stay tracked.
 wrapper/go_tools/
