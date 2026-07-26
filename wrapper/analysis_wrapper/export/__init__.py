@@ -6,9 +6,11 @@ go through :func:`export` / :func:`available_formats` and never import a specifi
 exporter directly.
 
 Exports are written to
-``<skill-root>/exported/{project-name}-analysis/{run-id}/{format}/``
-where ``{project-name}`` is the run's readable, collision-free project
-namespace. That tree is gitignored — generated artifacts never enter the repo.
+``<data-root>/exported/{project-name}-analysis/{run-id}/{format}/`` (57B-89
+Phase 2: ``<data-root>`` is ``analysis_wrapper.paths.data_root()``, outside the
+code tree — never the skill's own checkout) where ``{project-name}`` is the
+run's readable, collision-free project namespace. That tree is gitignored —
+generated artifacts never enter the repo.
 """
 
 from __future__ import annotations
@@ -59,14 +61,19 @@ def _path_segment(value: str, field: str) -> str:
 
 
 def export_output_dir(
-    skill_root: str | Path, project_ref: str, run_id: str, fmt: str
+    data_root: str | Path, project_ref: str, run_id: str, fmt: str
 ) -> Path:
-    """The canonical export destination for one immutable run + format."""
+    """The canonical export destination for one immutable run + format.
+
+    ``data_root`` (57B-89 Phase 2: internal-only param, renamed from the
+    stale ``skill_root`` — every caller passes ``analysis_wrapper.paths.data_root()``,
+    never the code root) is the persistent-data root that ``exported/`` lives
+    under."""
     project = _path_segment(project_name(project_ref), "project reference")
     run = _path_segment(run_id, "run id")
     format_name = _path_segment(fmt, "format")
     return (
-        Path(skill_root) / "exported" / f"{project}-analysis" / run / format_name
+        Path(data_root) / "exported" / f"{project}-analysis" / run / format_name
     )
 
 
@@ -75,12 +82,12 @@ def export(
     fmt: str = DEFAULT_FORMAT,
     *,
     out_dir: str | Path | None = None,
-    skill_root: str | Path | None = None,
+    data_root: str | Path | None = None,
 ) -> ExportResult:
     """Export a completed run in ``fmt``.
 
     The run is loaded once through the shared source layer. ``out_dir`` wins if
-    given; otherwise it is derived from ``skill_root`` and the run's project id.
+    given; otherwise it is derived from ``data_root`` and the run's project id.
     Raises :class:`ExporterUnavailable` (fail-closed) if the format's converter
     is missing, and :class:`ValueError` for an unknown format.
     """
@@ -90,13 +97,13 @@ def export(
         raise ExporterUnavailable(f"format unavailable: {reason}")
     inputs = run_inputs.load(run_dir)
     if out_dir is None:
-        if skill_root is None:
-            raise ValueError("export needs either out_dir or skill_root")
+        if data_root is None:
+            raise ValueError("export needs either out_dir or data_root")
         run_path = Path(run_dir).expanduser().resolve()
         project_key = (run_path.parent.parent.name
                        if run_path.parent.name in {"overview", "drilldown"}
                        else inputs.identity_map.project.artifact_key)
-        out_dir = export_output_dir(skill_root, project_key, inputs.run_id, fmt)
+        out_dir = export_output_dir(data_root, project_key, inputs.run_id, fmt)
     return exporter.export(inputs, Path(out_dir))
 
 

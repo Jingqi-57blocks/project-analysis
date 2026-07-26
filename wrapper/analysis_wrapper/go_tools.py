@@ -1,10 +1,16 @@
 """Resolve the developer-provided Go call-graph tool.
 
-The documented preferred location is ``wrapper/go_tools/bin`` (gitignored), but
-Project Analysis never runs ``go install``. Developers choose and manage their own
-Go runtime and install the documented analyzer version when they need this lane.
-We never resolve a binary from a target repo. When absent, the lane fails CLOSED
-to a disclosed ``unavailable`` coverage state rather than a silent empty graph.
+The documented preferred location (57B-89 Phase 2) is under the data root's
+generated-runtime tree (``paths.go_tools_bin()``) — GENERATED RUNTIME, never
+inside the checkout, so a skill upgrade/reinstall never disturbs an already
+-installed binary. ``default_bin_dir()`` falls back to the legacy in-code
+``wrapper/go_tools/bin`` when ONLY that location already has the binary (a
+pre-relocation install); a later installer phase populates the runtime
+location going forward. Project Analysis never runs ``go install`` itself.
+Developers choose and manage their own Go runtime and install the documented
+analyzer version there when they need this lane. We never resolve a binary
+from a target repo. When absent, the lane fails CLOSED to a disclosed
+``unavailable`` coverage state rather than a silent empty graph.
 """
 
 from __future__ import annotations
@@ -16,9 +22,37 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from . import paths
+
 WRAPPER_ROOT = Path(__file__).resolve().parents[1]
-GO_TOOLS_DIR = WRAPPER_ROOT / "go_tools"
-GO_TOOLS_BIN = GO_TOOLS_DIR / "bin"
+# The legacy, pre-relocation in-code install location. Still honored as a
+# fallback when it alone is populated -- see ``default_bin_dir()``.
+LEGACY_GO_TOOLS_BIN = WRAPPER_ROOT / "go_tools" / "bin"
+
+
+def default_bin_dir() -> Path:
+    """Resolve the GOBIN-equivalent dir: prefer the (57B-89 Phase 2) runtime
+    location; fall back to the legacy in-code ``wrapper/go_tools/bin`` ONLY
+    when the binary already exists there and not at the runtime location.
+
+    This fallback exists for pre-relocation installs: a machine that already
+    ran ``go install ... -o wrapper/go_tools/bin`` before the runtime-root move
+    must not lose the Go call-graph lane. A later installer phase populates the
+    runtime location going forward; once that lands, fresh installs prefer it
+    and this branch simply stops firing.
+
+    Deliberately a function, not a module-level constant: it calls
+    ``paths.go_tools_bin()``, which resolves (and validates) the data root and
+    can raise ValueError on a misconfigured machine; evaluating that at import
+    time would make importing this module fail. Call this only at call time,
+    never from a module-level expression.
+    """
+    preferred = paths.go_tools_bin()
+    legacy_binary = LEGACY_GO_TOOLS_BIN / "callgraph"
+    if not (preferred / "callgraph").is_file() and legacy_binary.is_file():
+        return LEGACY_GO_TOOLS_BIN
+    return preferred
+
 
 CALLGRAPH_PKG = "golang.org/x/tools/cmd/callgraph"
 CALLGRAPH_VERSION = "v0.48.0"          # pinned; recorded in every coverage manifest
@@ -29,22 +63,24 @@ CALLGRAPH_VERSION = "v0.48.0"          # pinned; recorded in every coverage mani
 _MOD_VERSION = re.compile(r"^\s*mod\s+golang\.org/x/tools\s+(\S+)", re.MULTILINE)
 
 
-def expected_callgraph_binary(bin_dir: Path = GO_TOOLS_BIN) -> Path:
+def expected_callgraph_binary(bin_dir: Path | None = None) -> Path:
     """Where the binary WOULD live — whether or not it is installed. The lane
     uses this so its own availability check fails closed when absent, never
     silently falling back to an unpinned tool."""
+    bin_dir = bin_dir if bin_dir is not None else default_bin_dir()
     return bin_dir / "callgraph"
 
 
-def callgraph_binary(bin_dir: Path = GO_TOOLS_BIN) -> Path | None:
+def callgraph_binary(bin_dir: Path | None = None) -> Path | None:
     candidate = expected_callgraph_binary(bin_dir)
     return candidate if candidate.is_file() and os.access(candidate, os.X_OK) else None
 
 
-def resolve(bin_dir: Path = GO_TOOLS_BIN) -> tuple[Path | None, str]:
+def resolve(bin_dir: Path | None = None) -> tuple[Path | None, str]:
     """Resolve the callgraph binary. Returns ``(path, note)``: the analyzer-owned
     copy with no note; else a PATH copy with a disclosure note; else ``(None,
     reason)`` so the lane can record an ``unavailable`` coverage state."""
+    bin_dir = bin_dir if bin_dir is not None else default_bin_dir()
     owned = callgraph_binary(bin_dir)
     if owned is not None:
         return owned, ""

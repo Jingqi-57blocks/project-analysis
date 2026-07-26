@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from .executor import replace_artifact_text
-from . import identity
+from . import identity, paths
 from .sanitize import sanitize_text
 
 SCHEMA_VERSION = "2.0.0"
@@ -274,8 +274,11 @@ def _signal_counts(run: Path, summary: dict,
 
 def build(run_dir: str | Path, *, skill_root: str | Path | None = None) -> dict:
     run = Path(run_dir).expanduser().resolve()
+    # `skill_root` here is always the CODE root (lenses/ ships with the skill,
+    # never the data root) — self-located by default, same as every other
+    # code-asset lookup (57B-89 Phase 2 leaves this unchanged).
     root = (Path(skill_root).expanduser().resolve() if skill_root else
-            Path(__file__).resolve().parents[2])
+            paths.skill_root())
     targets = _load(run / "targets.json")
     identities = identity.load(run)
     summary = _load(run / "signals" / "run-summary.json")

@@ -163,9 +163,12 @@ def analyze(target: RepoTarget, *, repository_ref: str,
             allow_network: bool = False,
             run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
             warm: Callable[..., tuple[bool, str]] = go_cache.warm,
-            bin_dir: Path = go_tools.GO_TOOLS_BIN,
+            bin_dir: Path | None = None,
             timeout_s: int = 900) -> tuple[list[CallEdge], RepoCoverage]:
     """Run the Go lane for one repo. Returns ``(edges, coverage)``."""
+    # Resolved lazily (never a module-level/default-parameter constant): see
+    # go_tools.default_bin_dir()'s docstring for why that matters.
+    bin_dir = bin_dir if bin_dir is not None else go_tools.default_bin_dir()
     repo_root = Path(target.path).expanduser().resolve()
     commit = target.git.head
     module = module_path(repo_root)
