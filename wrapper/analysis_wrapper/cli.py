@@ -293,6 +293,54 @@ def parser() -> argparse.ArgumentParser:
              "in the current directory by default (override with --report), "
              "instead of the byte-level report -- tolerant of id/wording churn "
              "a migration is expected to cause, flags substance drift only")
+    next_task = sub.add_parser(
+        "next-task",
+        help="(orchestrator, 57B-115) claim up to N ready orchestrator tasks; "
+             "prints the claimed {task, attempt} pairs as JSON")
+    next_task.add_argument("--run", required=True, help="run directory")
+    next_task.add_argument("--claim", type=int, default=1, help="max tasks to claim")
+    next_task.add_argument("--executor-kind", default="manual",
+                           help="recorded executor kind (e.g. 'anthropic', 'manual')")
+    next_task.add_argument("--model", default="unknown", help="recorded executor model")
+    submit_task = sub.add_parser(
+        "submit-task",
+        help="(orchestrator, 57B-115) submit + validate one orchestrator task result")
+    submit_task.add_argument("--run", required=True, help="run directory")
+    submit_task.add_argument("--task", required=True, help="task_id being submitted")
+    submit_task.add_argument("--result", required=True,
+                             help="path to a TaskResult JSON file, or - for stdin")
+    run_executor_cmd = sub.add_parser(
+        "run-executor",
+        help="(orchestrator, 57B-115) bundled headless executor loop -- performs "
+             "model-API network calls; invoked explicitly, with your own API key")
+    run_executor_cmd.add_argument("--run", required=True, help="run directory")
+    run_executor_cmd.add_argument("--adapter", required=True,
+                                  choices=["anthropic", "openai-compatible"])
+    run_executor_cmd.add_argument("--model", required=True, help="model id")
+    run_executor_cmd.add_argument("--concurrency", type=int, default=1)
+    run_executor_cmd.add_argument("--base-url", default="",
+                                  help="required for --adapter openai-compatible")
+    run_executor_cmd.add_argument(
+        "--api-key-env", default="",
+        help="env var holding the API key (default: ANTHROPIC_API_KEY / OPENAI_API_KEY)")
+    run_executor_cmd.add_argument("--temperature", type=float, default=0.0)
+    run_executor_cmd.add_argument("--max-attempts", type=int, default=3)
+    conformance = sub.add_parser(
+        "executor-conformance",
+        help="(orchestrator, 57B-115) validate the 8 fixture task types (golden "
+             "outputs by default, or a live --adapter/--model) against the "
+             "orchestrator schemas")
+    conformance.add_argument(
+        "--run", default="",
+        help="run dir to materialize the fixture DAG into (default: a fresh "
+             "temp dir, removed afterward)")
+    conformance.add_argument("--adapter", default="",
+                             choices=["", "anthropic", "openai-compatible"],
+                             help="omit to self-check the built-in golden outputs (no network)")
+    conformance.add_argument("--model", default="")
+    conformance.add_argument("--concurrency", type=int, default=1)
+    conformance.add_argument("--base-url", default="")
+    conformance.add_argument("--api-key-env", default="")
     return result
 
 
@@ -988,6 +1036,81 @@ def _compare_runs(args: argparse.Namespace) -> int:
     return 3 if parity.has_semantic_differences(report) else 0
 
 
+def _next_task(args: argparse.Namespace) -> int:
+    from .orchestrator.engine import Engine
+    run = Path(args.run).expanduser().resolve()
+    engine = Engine(run)
+    if not engine.ledger_exists():
+        print(f"wrapper input error: no orchestrator ledger at "
+              f"{run / 'tasks' / 'ledger.jsonl'} -- create tasks before claiming",
+              file=sys.stderr)
+        return 6
+    claimed = engine.claim(args.claim, executor_kind=args.executor_kind, model=args.model)
+    print(json.dumps([{"task": item.packet.to_dict(), "attempt": item.attempt}
+                      for item in claimed], indent=2, sort_keys=True))
+    return 0
+
+
+def _submit_task(args: argparse.Namespace) -> int:
+    from .orchestrator.engine import Engine, EngineError
+    run = Path(args.run).expanduser().resolve()
+    raw_text = sys.stdin.read() if args.result == "-" else \
+        Path(args.result).expanduser().resolve().read_text("utf-8")
+    try:
+        raw = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        print(f"wrapper input error: --result is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(raw, dict):
+        print("wrapper input error: --result must contain a JSON object", file=sys.stderr)
+        return 2
+    engine = Engine(run)
+    try:
+        outcome = engine.submit(args.task, raw)
+    except EngineError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(outcome, indent=2, sort_keys=True))
+    return 0 if outcome["status"] == "validated" else 3
+
+
+def _run_executor_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator.executor_api import AdapterConfig, ExecutorError, run_executor
+    run = Path(args.run).expanduser().resolve()
+    config = AdapterConfig(name=args.adapter, model=args.model, base_url=args.base_url,
+                           api_key_env=args.api_key_env, temperature=args.temperature)
+    try:
+        summary = run_executor(run, config, concurrency=args.concurrency,
+                               max_attempts=args.max_attempts)
+    except ExecutorError as exc:
+        print(f"wrapper executor error: {exc}", file=sys.stderr)
+        return 4
+    print(f"validated: {len(summary['validated'])}, failed: {len(summary['failed'])}")
+    for task_id in summary["failed"]:
+        print(f"  failed: {task_id}")
+    return 0 if not summary["failed"] else 3
+
+
+def _executor_conformance_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator.conformance import run_conformance
+    from .orchestrator.executor_api import AdapterConfig, ExecutorError
+    config = None
+    if args.adapter:
+        if not args.model:
+            print("wrapper input error: --model is required with --adapter", file=sys.stderr)
+            return 2
+        config = AdapterConfig(name=args.adapter, model=args.model, base_url=args.base_url,
+                               api_key_env=args.api_key_env)
+    try:
+        report = run_conformance(run_dir=args.run or None, config=config,
+                                 concurrency=args.concurrency)
+    except ExecutorError as exc:
+        print(f"wrapper executor error: {exc}", file=sys.stderr)
+        return 4
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["passed"] else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -1015,6 +1138,14 @@ def main(argv: list[str] | None = None) -> int:
             return _export(args)
         if args.command == "compare-runs":
             return _compare_runs(args)
+        if args.command == "next-task":
+            return _next_task(args)
+        if args.command == "submit-task":
+            return _submit_task(args)
+        if args.command == "run-executor":
+            return _run_executor_cmd(args)
+        if args.command == "executor-conformance":
+            return _executor_conformance_cmd(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)
