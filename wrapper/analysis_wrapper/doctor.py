@@ -472,16 +472,33 @@ def _what_you_lose(tool: dict) -> str:
     return first_sentence + ("." if first_sentence and not first_sentence.endswith(".") else "")
 
 
-def build_report(workspace: str | Path | None = None) -> dict:
+def build_report(workspace: str | Path | None = None, *,
+                 tool_ids: "frozenset[str] | None" = None) -> dict:
+    """Assemble the full readiness report.
+
+    ``tool_ids`` (57B-95 review FIX 6, optional/keyword-only, default
+    ``None`` = every manifest tool, unchanged behavior for every existing
+    caller): restricts probing to just this subset of tool ids. Used by
+    ``compat.runtime_reconciliation`` to only spawn subprocesses for the
+    handful of PINNED analyzer-managed tools it actually cares about,
+    instead of the full manifest (developer-managed tools like ``go``/
+    ``node``/``ast-grep`` included) on every single gated CLI invocation.
+    Verdict/coverage fields (``core_ok``, ``verdict``, lane applicability)
+    are computed only over the filtered subset when this is given, so this
+    is NOT meant for the ``doctor`` command's own full report -- callers
+    that need the true overall readiness verdict must leave it ``None``.
+    """
     manifest = read_manifest()
     sniff = sniff_lanes(workspace) if workspace is not None else None
+    manifest_tools = (manifest["tools"] if tool_ids is None
+                      else [t for t in manifest["tools"] if t["id"] in tool_ids])
 
     python_ok = tuple(sys.version_info[:2]) >= MIN_PYTHON
     tools: list[dict] = []
     setup_needed = False
     network_required_for_setup = False
 
-    for tool in manifest["tools"]:
+    for tool in manifest_tools:
         applicable = _tool_applicable(tool["lanes"], sniff)
         requirement = tool["requirement"]
         if requirement == "required":
@@ -524,7 +541,7 @@ def build_report(workspace: str | Path | None = None) -> dict:
                               else _what_you_lose(tool)),
         })
 
-    lanes_seen = sorted({lane for tool in manifest["tools"] for lane in tool["lanes"]})
+    lanes_seen = sorted({lane for tool in manifest_tools for lane in tool["lanes"]})
     lane_applicability = {lane: _lane_applicable(lane, sniff) for lane in lanes_seen}
 
     # Generic over the manifest's required set (57B-91 review FIX 3): any
