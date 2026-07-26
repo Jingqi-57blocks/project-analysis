@@ -43,10 +43,10 @@ from pathlib import Path
 
 from . import identity
 from .executor import replace_artifact_text
+from .overview_audit import SCHEMA_VERSION
 from .sanitize import sanitize_text
 from .system_model import ids
 
-SCHEMA_VERSION = "1.0.0"
 FILENAME = "cohesion-bundle.json"
 
 _FOLDER_DEPTH = 2         # bounded directory-prefix depth for the folder lane

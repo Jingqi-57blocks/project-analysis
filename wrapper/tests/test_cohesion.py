@@ -135,6 +135,41 @@ def test_cohesion_producer_changes_nothing_else_in_the_prepare_pipeline(tmp_path
         assert (run_without / rel).read_bytes() == (run_with / rel).read_bytes(), rel
 
 
+def test_cohesion_bundle_is_covered_by_the_overview_audit(tmp_path):
+    """cohesion-bundle.json must not sit outside every audit allowlist: a
+    clean bundle passes; a wrong schema_version is caught by
+    artifact-contract-versions; a leaked internal id is caught by
+    external-identity-boundary -- both checks walk a CLOSED list of known
+    filenames (see overview_audit.py's own docstring), so a new canonical
+    artifact has to be added to each list explicitly."""
+    from analysis_wrapper import identity, overview_audit, synthesis_input
+
+    run, model_doc = _built_run(tmp_path, with_imports=True)
+    _add_signals_and_depmap_coverage(run)
+    cohesion.write(run, model_doc)
+    capabilities.write(run)
+    coverage_render.write(run)
+    workspace_metrics.write(run)
+    synthesis_input.write(run)
+
+    assert overview_audit.audit(run)["status"] == "passed"
+
+    doc = json.loads((run / cohesion.FILENAME).read_text())
+    doc["schema_version"] = "1.0.0"
+    (run / cohesion.FILENAME).write_text(json.dumps(doc), "utf-8")
+    result = overview_audit.audit(run)
+    assert any(row["check"] == "artifact-contract-versions" and row["status"] == "fail"
+               for row in result["checks"])
+
+    doc["schema_version"] = cohesion.SCHEMA_VERSION
+    internal_id = identity.load(run).repositories[0].internal_id
+    doc["leak"] = internal_id
+    (run / cohesion.FILENAME).write_text(json.dumps(doc), "utf-8")
+    result = overview_audit.audit(run)
+    assert any(row["check"] == "external-identity-boundary" and row["status"] == "fail"
+               for row in result["checks"])
+
+
 # --------------------------------------------------------------------------- #
 # unit: caps / disclosure
 # --------------------------------------------------------------------------- #

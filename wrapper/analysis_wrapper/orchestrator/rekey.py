@@ -43,7 +43,9 @@ def rekey(run_dir: str | Path, findings_doc: Any) -> dict:
     finalized module IDs.
 
     Returns ``{"rekeyed": [...], "tail": [...]}``: every input finding lands
-    in EXACTLY ONE of the two lists (asserted below).
+    in EXACTLY ONE of the two lists (enforced below by raising, not
+    asserting -- this guarantee must not be strippable by running Python
+    with ``-O``).
 
     - A finding whose affected candidates resolve to at least one real
       module is REKEYED: ``affected_modules`` is replaced by the sorted,
@@ -99,9 +101,11 @@ def rekey(run_dir: str | Path, findings_doc: Any) -> dict:
             }
             tail.append(tail_row)
 
-    assert len(rekeyed) + len(tail) == len(findings), \
-        "every input finding must land in exactly one of rekeyed/tail"
-    assert not ({row["finding_id"] for row in rekeyed}
-                & {row["finding_id"] for row in tail}), \
-        "a finding cannot appear in both rekeyed and tail"
+    # Exactly-once invariant: raised, not asserted, so this guarantee cannot
+    # be silently stripped by running Python with -O (assertions vanish
+    # there; a contract this module is defined by must not).
+    if len(rekeyed) + len(tail) != len(findings):
+        raise ValueError("every input finding must land in exactly one of rekeyed/tail")
+    if {row["finding_id"] for row in rekeyed} & {row["finding_id"] for row in tail}:
+        raise ValueError("a finding cannot appear in both rekeyed and tail")
     return {"rekeyed": rekeyed, "tail": tail}

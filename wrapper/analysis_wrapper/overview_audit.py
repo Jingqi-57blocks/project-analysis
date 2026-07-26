@@ -178,6 +178,7 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         "imports/depmap-coverage.json", "system-model.json",
         "module-candidates.json", "workspace-metrics.json",
         "synthesis-input.json", "signals/run-summary.json",
+        "cohesion-bundle.json",
     ]
     if (run / "module-map.json").is_file():
         current_contracts.append("module-map.json")
@@ -432,6 +433,7 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         "imports/depmap-coverage.json", "system-model.json",
         "module-candidates.json", "module-map.json", "workspace-metrics.json",
         "synthesis-input.json", "findings.json", "signals/run-summary.json",
+        "cohesion-bundle.json",
     ]
     for rel in evidence_files:
         path = run / rel
