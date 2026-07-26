@@ -236,7 +236,14 @@ def parser() -> argparse.ArgumentParser:
              "lane (e.g. private git hosts found in package.json); unapproved "
              "hosts make the signal SKIPPED, never silently contacted",
     )
-    sub = result.add_subparsers(dest="command", required=True)
+    # required=False (57B-120): a bare invocation with no subcommand at all
+    # used to be an argparse usage error; it now prints the `help` tour and
+    # exits 0 instead (see `main()`'s `args.command is None` branch below).
+    sub = result.add_subparsers(dest="command", required=False)
+    help_cmd = sub.add_parser(
+        "help", help="curated, task-grouped tour of every command (this "
+                     "screen) -- also shown for a bare invocation with no "
+                     "subcommand at all")
     one = sub.add_parser("run", help="run one tool against one repo")
     one.add_argument("--tool", required=True)
     one.add_argument("--repo", required=True,
@@ -1177,8 +1184,23 @@ def _setup(args: argparse.Namespace) -> int:
     return setup_mod.main_from_args(args)
 
 
+def _help(args: argparse.Namespace) -> int:
+    from . import help as help_mod
+    print(help_mod.render(), end="")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command is None or args.command == "help":
+        # Bare invocation (no subcommand at all) prints the same task-grouped
+        # tour as the explicit `help` subcommand and exits 0 (57B-120) --
+        # checked before anything else (drilldown gate, compat guards, ...)
+        # so this stays reachable even when the installed runtime has
+        # drifted (`help` is classified not-gated in
+        # compat.COMMAND_CLASSIFICATION, and a bare invocation is the same
+        # informational, read-only path).
+        return _help(args)
     if args.command == "new-drilldown":
         # v1 scope gate (57B-97): refuse before ANY filesystem access -- no
         # resolution, no staleness check, no run-state read -- so an existing

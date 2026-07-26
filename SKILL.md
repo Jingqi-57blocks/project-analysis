@@ -294,7 +294,8 @@ the run's own stage bookkeeping already described in "Run lifecycle commands" ab
 0. **Preflight.**
    a. **Toolchain + run-parameter confirmation — ONE consolidated approval.** Run
       `<wrapper-executable> doctor --workspace <target> --json` to see what the target
-      needs. If its `setup_needed` field is true, run
+      needs (`<wrapper-executable> help` gives a one-screen, task-grouped tour of every
+      command, if you need to get your bearings first). If its `setup_needed` field is true, run
       `<wrapper-executable> setup --plan --workspace <target> --json` to compute the
       install plan (this alone never installs anything or touches the network — see
       "Running the wrapper" below). Then present **exactly one** confirmation to the

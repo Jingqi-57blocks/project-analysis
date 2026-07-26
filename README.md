@@ -168,6 +168,10 @@ language); pass `--language en` or `--language zh-CN` to override. Add
 `--run-id <label>` for a readable run label. **Module drill-down (`prd.md`/`health.md`)
 is not available in v1** — v1 ships overview + diagnosis only.
 
+Run `<wrapper-executable> help` (or just `<wrapper-executable>` with no arguments) any
+time for a one-screen, task-grouped tour of every command — get-started, analyze, find
+results, maintain, and low-level/diagnostic (driven by the skill, never by hand).
+
 The **first run checks the toolchain** and asks for **one confirmation**, not several:
 the agent runs `doctor` to see what's needed, and — only if something is missing — runs
 `setup --plan` to compute the install plan. It then presents, together, both the setup
