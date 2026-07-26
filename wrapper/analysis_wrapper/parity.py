@@ -302,15 +302,38 @@ def _system_model_partitions(doc: dict | None) -> dict[str, dict] | None:
     return result
 
 
+def _row_repo_key(row: dict, index: int) -> str:
+    """Repo identity for one coverage/signal row, tolerant of pre-57B-88
+    artifacts.
+
+    57B-88 (commit 17f7bb3) renamed this field from ``repo_id`` to
+    ``repository_ref`` in-place, in callgraph-coverage.json,
+    imports/depmap-coverage.json, AND signals/run-summary.json -- a pure
+    rename (the JSON key changes, the value doesn't), never additive: a row
+    written by either era carries exactly one of the two keys, never both.
+    Keying purely by ``row.get("repository_ref", "")`` therefore reads EVERY
+    row of a genuine pre-88 doc as the same empty string, collapsing two
+    different repos' rows sharing the same secondary key component (lang/
+    lane/tool) onto one dict entry and silently dropping one side's facts.
+    Falling back to the legacy field recovers the real identity for exactly
+    that case. The positional discriminator is a last resort for a row
+    carrying neither (not known to occur in practice) -- it guarantees no
+    collapse even then, though it only orders correctly within one doc's own
+    (already sorted) row list, not across independently-numbered docs.
+    """
+    ref = row.get("repository_ref") or row.get("repo_id")
+    return ref if ref else f"__row_{index}__"
+
+
 def _lane_coverage(callgraph_doc: dict | None, depmap_doc: dict | None) -> dict | None:
     if callgraph_doc is None and depmap_doc is None:
         return None
     result: dict[tuple, dict] = {}
-    for row in (callgraph_doc or {}).get("repos", []):
-        key = ("callgraph", row.get("repository_ref", ""), row.get("lang", ""))
+    for index, row in enumerate((callgraph_doc or {}).get("repos", [])):
+        key = ("callgraph", _row_repo_key(row, index), row.get("lang", ""))
         result[key] = {k: v for k, v in row.items() if k not in _STRIPPED_LANE_FIELDS}
-    for row in (depmap_doc or {}).get("repos", []):
-        key = ("depmap", row.get("repository_ref", ""), row.get("lane", ""))
+    for index, row in enumerate((depmap_doc or {}).get("repos", [])):
+        key = ("depmap", _row_repo_key(row, index), row.get("lane", ""))
         result[key] = {k: v for k, v in row.items() if k not in _STRIPPED_LANE_FIELDS}
     return result
 
@@ -319,8 +342,8 @@ def _signals(doc: dict | None) -> dict[tuple, dict] | None:
     if doc is None:
         return None
     result: dict[tuple, dict] = {}
-    for row in doc.get("signals", []):
-        key = (row.get("tool", ""), row.get("repository_ref", ""))
+    for index, row in enumerate(doc.get("signals", [])):
+        key = (row.get("tool", ""), _row_repo_key(row, index))
         result[key] = {"status": row.get("status"), "reason": row.get("reason")}
     result[("__aggregate__",)] = {"status": doc.get("aggregate_status")}
     return result

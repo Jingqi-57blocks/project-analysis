@@ -846,3 +846,91 @@ def test_capability_applicable_flag_change_is_reclassified(tmp_path):
     changed = report["sections"]["capability_records"]["changed"]
     assert len(changed) == 1
     assert changed[0]["reclassified"] is True
+
+
+# ---------------------------------------------------------------------------
+# 9. 57B-112 §2: mixed-era row-key collapse (lane_coverage / signals).
+# ---------------------------------------------------------------------------
+
+
+def test_lane_coverage_legacy_repo_id_rows_stay_distinct():
+    """A pre-57B-88 callgraph-coverage.json row carries `repo_id`, not
+    `repository_ref` (17f7bb3's rename) -- keying purely by `repository_ref`
+    reads every row as the same empty string, collapsing two different
+    repos sharing `lang` onto one dict key."""
+    doc = {"scan_date": "2026-01-01", "determinism": "x", "repos": [
+        {"repo_id": "api", "lang": "go", "status": "complete"},
+        {"repo_id": "worker", "lang": "go", "status": "complete"},
+    ]}
+
+    result = parity._lane_coverage(doc, None)
+
+    assert len(result) == 2
+    assert {key[1] for key in result} == {"api", "worker"}
+
+
+def test_signals_legacy_repo_id_rows_stay_distinct():
+    """Same rename affected signals/run-summary.json rows."""
+    doc = {"aggregate_status": "complete", "signals": [
+        {"tool": "scc", "repo_id": "api", "status": "complete", "reason": ""},
+        {"tool": "scc", "repo_id": "worker", "status": "complete", "reason": ""},
+    ]}
+
+    result = parity._signals(doc)
+
+    repo_keys = {key for key in result if key != ("__aggregate__",)}
+    assert len(repo_keys) == 2
+    assert {key[1] for key in repo_keys} == {"api", "worker"}
+
+
+def _legacy_callgraph_row(repo_id: str, status: str) -> dict:
+    return {"repo_id": repo_id, "lang": "go", "status": status, "tool": "callgraph",
+            "tool_version": "v1", "algorithm": "vta", "warm_cache": "n/a", "reason": "",
+            "candidates_by_ext": {}, "analyzed_by_ext": {}, "excluded_by_reason": {},
+            "parse_load_failures": 0,
+            "call_sites": {"resolved": 0, "ambiguous": 0, "external": 0, "unresolved": 0,
+                          "total": 0},
+            "edges_emitted": 0, "notes": ""}
+
+
+def test_lane_coverage_two_legacy_repos_sharing_lang_do_not_collapse(tmp_path):
+    """The actual danger of the collapse this fixes: TWO distinct pre-88
+    repos sharing `lang` key to the SAME (kind, "", lang) tuple without the
+    fallback, so the second row silently overwrites the first in the
+    projected dict -- a real status change on the first repo ("api") would
+    never surface as a difference at all, not even a wrong one."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "callgraph-coverage.json", {
+        "scan_date": "2026-07-23", "determinism": "x",
+        "repos": [_legacy_callgraph_row("api", "complete"),
+                 _legacy_callgraph_row("worker", "complete")]})
+    _write(b, "callgraph-coverage.json", {
+        "scan_date": "2026-07-23", "determinism": "x",
+        "repos": [_legacy_callgraph_row("api", "partial"),
+                 _legacy_callgraph_row("worker", "failed")]})
+
+    report = parity.compare(a, b)
+
+    section = report["sections"]["lane_coverage"]
+    assert section["added"] == [] and section["removed"] == []
+    assert {row["key"] for row in section["changed"]} == {
+        "callgraph / api / go", "callgraph / worker / go"}
+
+
+def test_signals_two_legacy_repos_sharing_tool_do_not_collapse(tmp_path):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "signals/run-summary.json", {"aggregate_status": "complete", "signals": [
+        {"tool": "scc", "repo_id": "api", "status": "complete", "reason": ""},
+        {"tool": "scc", "repo_id": "worker", "status": "complete", "reason": ""}]})
+    _write(b, "signals/run-summary.json", {"aggregate_status": "partial", "signals": [
+        {"tool": "scc", "repo_id": "api", "status": "partial", "reason": "x"},
+        {"tool": "scc", "repo_id": "worker", "status": "failed", "reason": "y"}]})
+
+    report = parity.compare(a, b)
+
+    section = report["sections"]["signals"]
+    assert section["added"] == [] and section["removed"] == []
+    changed_keys = {row["key"] for row in section["changed"]}
+    assert "scc / api" in changed_keys and "scc / worker" in changed_keys
