@@ -91,6 +91,38 @@ def test_render_instructions_assembles_preamble_shared_and_lens_body_in_order():
     assert "changeability_question" in instructions  # from the updated _shared.md
 
 
+def test_output_contract_preamble_states_the_exact_coverage_row_shape():
+    preamble = tpl.LENS_OUTPUT_CONTRACT_PREAMBLE
+    assert '"signal"' in preamble and '"note"' in preamble
+    assert '"complete" | "partial" | "failed" | "skipped"' in preamble
+    assert "No other keys" in preamble
+    assert "never a prose sentence" in preamble
+
+
+def test_output_contract_preamble_gives_all_three_citation_grammars_with_examples():
+    preamble = tpl.LENS_OUTPUT_CONTRACT_PREAMBLE
+    assert "repo@revision:path:line" in preamble
+    assert "signals/<view-file>:line" in preamble
+    assert "metric:<metric_ref>" in preamble
+    # one concrete example per grammar, each independently grammar-valid.
+    from analysis_wrapper.orchestrator.schemas import citation_grammar_kind
+    examples = {
+        "source": "api@4f1c9a2b3d5e6f708192a3b4c5d6e7f809192a3b:internal/handler.go:42",
+        "signal": "signals/lizard-api.view.txt:13",
+        "metric": "metric:code.analyzed-scope.total",
+    }
+    for kind, example in examples.items():
+        assert example in preamble
+        assert citation_grammar_kind(example) == kind
+
+
+def test_output_contract_preamble_forbids_candidate_ids_and_input_names_as_refs():
+    preamble = tpl.LENS_OUTPUT_CONTRACT_PREAMBLE
+    assert "NEVER a candidate_id" in preamble
+    assert "NEVER an input" in preamble
+    assert "module-candidates.json" in preamble  # a real input NAME, cited as a bad example
+
+
 # --------------------------------------------------------------------------- #
 # digest sensitivity
 # --------------------------------------------------------------------------- #

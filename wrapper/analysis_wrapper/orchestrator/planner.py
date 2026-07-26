@@ -6,11 +6,23 @@ Two verbs, two CLI subcommands (``plan-judgment``, ``plan-dedup``):
   (``targets.json`` + ``signals/run-summary.json`` + ``synthesis-input.json``
   + ``module-candidates.json`` already written by ``prepare-overview``): one
   ``lens-findings`` task per (repo-sharded lens x repo) + one per
-  workspace-sharded lens, PLUS one independent ``boundary-resolution`` task
-  (no ``depends_on`` -- it runs in parallel with every lens task). Its
-  packet consumes the full candidate universe plus an OPTIONAL deterministic
-  ``cohesion-bundle.json`` when a sibling workstream has already written one
-  into the run dir; a still-valid packet is composed without it.
+  workspace-sharded lens, PLUS one independent ``formation-proposal`` task
+  (task_id ``"formation"``; no ``depends_on`` -- it runs in parallel with
+  every lens task). Its packet consumes the full candidate universe plus an
+  OPTIONAL deterministic ``cohesion-bundle.json`` when a sibling workstream
+  has already written one into the run dir; a still-valid packet is composed
+  without it. Its validated output is the complete module-map.json shape
+  (``modules`` + ``candidate_rules``/``candidate_dispositions`` +
+  ``additional_candidates``) -- a sibling ``formation.py`` module
+  materializes it at module-map.json's canonical path; the existing
+  ``finalize-module-map`` command (unchanged) then expands/validates it.
+  This task type is ``formation-proposal``, NOT ``boundary-resolution``:
+  the latter's M0 output schema validates only a bare ``dispositions``
+  list, which alone cannot produce module-map.json's required ``modules``
+  rows (module_id/name/classification/confidence/aliases).
+  ``boundary-resolution`` stays a defined task type in contracts.py/
+  schemas.py (a distinct, real shape another caller may still compose) --
+  this planner simply does not use it.
 
 - ``plan_dedup`` is a SEPARATE, LATER call: it reads every VALIDATED
   lens-findings output already in the ledger (``results.validated_outputs``)
@@ -103,7 +115,7 @@ def _repo_fragment(repository_ref: str, *, max_len: int = 20) -> str:
 class PlannedTask:
     task_id: str
     task_type: str
-    lens_id: str            # "" for boundary-resolution / dedup-rank
+    lens_id: str            # "" for formation / dedup-rank
     shard: str               # "repo" | "workspace" | "" for non-lens tasks
     repository_ref: str      # "" for workspace-shard / non-lens tasks
     packet_ids: tuple[str, ...]   # literal ledger task_ids after composer sharding
@@ -308,8 +320,20 @@ def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[s
             raise PlannerError(
                 f"signal view listed complete/partial in run-summary.json but "
                 f"unreadable: {view_path} ({exc})") from exc
-        name = f"view:{row.get('tool', '')}:{row.get('repository_ref', '')}:{row['view']}"
-        inputs[name] = content
+        # Named by its own CANONICAL citable path, `signals/<view-file>` --
+        # exactly the prefix _shared.md's `signals/<view>:<line>` citation
+        # grammar expects. A prior `view:<tool>:<repo>:<view-file>` naming
+        # leaked into executors' own citations verbatim (they cite what they
+        # see as the input's own name/header): a live run produced refs like
+        # `view:lizard:wcp-auth:lizard-wcp-auth.view.txt:13`, which fails
+        # citation_grammar_kind (neither "signal" -- it doesn't start with
+        # exactly "signals/" -- nor any other recognized grammar). View
+        # filenames are already unique per (tool, repository_ref) by
+        # construction (executor.py's run_tool names each view
+        # "<tool>-<repo-artifact-key>.view.txt"; a run invokes one tool
+        # against one repo at most once), so the bare `signals/<view-file>`
+        # key can never collide across two different rows in one packet.
+        inputs[f"signals/{row['view']}"] = content
 
     candidates, candidates_meta = _split_module_candidates(module_candidates_doc, repository_ref)
     inputs["module-candidates.json"] = json.dumps(candidates, sort_keys=True)
@@ -335,27 +359,42 @@ def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[s
 
 
 # --------------------------------------------------------------------------- #
-# boundary-resolution -- module-formation rules ported verbatim from
+# formation-proposal -- module-formation rules ported verbatim from
 # synthesis.md step 4's numbered item 1 (extracted fresh from the live file
 # on every call, mirroring rule_gate.py's own re-parse-don't-hand-copy
 # pattern, so a future synthesis.md edit can never silently drift from what
-# this task actually instructs).
+# this task actually instructs). Deliberately task_type "formation-proposal",
+# not "boundary-resolution": the latter's schema validates only a bare
+# ``dispositions`` list, which cannot by itself produce module-map.json's
+# required ``modules`` rows -- formation-proposal's schema already mirrors
+# module-map.json's full shape (see schemas.py's own module docstring).
 # --------------------------------------------------------------------------- #
 
 _STEP4_ITEM1_START = "1. **Form modules from candidates.**"
 _STEP4_ITEM2_START = "2. **Classify** each module:"
 
-BOUNDARY_RESOLUTION_PREAMBLE = (
-    "Return a single JSON object matching the boundary-resolution output "
-    'schema: {"dispositions": [...]}. One row per candidate_id in the given '
+FORMATION_PREAMBLE = (
+    "Return a single JSON object matching the formation-proposal output "
+    'schema: {"modules": [...], "candidate_rules": [...] OR '
+    '"candidate_dispositions": [...], "additional_candidates": [...] '
+    "(optional)}. modules: module_id (stable kebab-case slug), name, "
+    "classification (business|platform|shared-infra|unresolved), confidence "
+    "(high|medium|low), aliases. Disposition EVERY candidate_id in the given "
     "candidate universe (module-candidates.json below; the optional "
     "cohesion-bundle.json, when present, groups candidates by an observed "
     "measure -- route-prefix, folder, import, co-change, or table-ownership "
-    "-- to help judge when signals genuinely support one boundary), each "
-    "with disposition, module_ids, and a short evidence-bounded reason, "
-    "following the project-agnostic granularity contract below (ported "
-    "verbatim from synthesis.md). Return ONLY this JSON object -- no prose "
-    "outside it."
+    "-- to help judge when signals genuinely support one boundary) exactly "
+    "once, either via compact candidate_rules (selectors + disposition + "
+    "module_ids + reason; at most one final remaining:true rule for an "
+    "honest unresolved leftover) or explicit candidate_dispositions rows "
+    "(candidate_id, disposition, module_ids, reason). disposition is one of "
+    "standalone|merged|platform|shared-infrastructure|excluded|unresolved -- "
+    "the first four map to exactly one module_id, the last two to none. An "
+    "evidence-backed boundary not surfaced mechanically may be added only "
+    "through additional_candidates (a stable mc-added-<slug> id, "
+    "repository_ref, value, and at least one citation). Follow the "
+    "project-agnostic granularity contract below (ported verbatim from "
+    "synthesis.md). Return ONLY this JSON object -- no prose outside it."
 )
 
 
@@ -369,12 +408,12 @@ def module_formation_rules(source: str | None = None) -> str:
     return text[start:end].rstrip("\n")
 
 
-def _boundary_resolution_instructions() -> str:
-    return "\n\n".join((BOUNDARY_RESOLUTION_PREAMBLE, module_formation_rules())) + "\n"
+def _formation_instructions() -> str:
+    return "\n\n".join((FORMATION_PREAMBLE, module_formation_rules())) + "\n"
 
 
-def _boundary_resolution_version() -> str:
-    return tpl.content_digest(BOUNDARY_RESOLUTION_PREAMBLE, module_formation_rules())
+def _formation_version() -> str:
+    return tpl.content_digest(FORMATION_PREAMBLE, module_formation_rules())
 
 
 # --------------------------------------------------------------------------- #
@@ -460,28 +499,28 @@ def plan_judgment(run_dir: str | Path, *,
                 estimated_tokens=sum(_packet_tokens(packet) for packet in built),
                 created=False))
 
-    # boundary-resolution: one global, INDEPENDENT task (no depends_on) --
-    # runs in parallel with every lens task above. It carries the FULL
-    # candidate universe (repository_ref=None -> no per-repo trim) -- the
-    # single biggest input in the whole DAG, so it gets the same
-    # array/meta split every lens task's own candidates input gets above.
+    # formation: one global, INDEPENDENT task (no depends_on) -- runs in
+    # parallel with every lens task above. It carries the FULL candidate
+    # universe (repository_ref=None -> no per-repo trim) -- the single
+    # biggest input in the whole DAG, so it gets the same array/meta split
+    # every lens task's own candidates input gets above.
     all_candidates, all_candidates_meta = _split_module_candidates(module_candidates_doc, None)
-    boundary_inputs = {
+    formation_inputs = {
         "module-candidates.json": json.dumps(all_candidates, sort_keys=True),
         "module-candidates-meta.json": json.dumps(all_candidates_meta, sort_keys=True),
     }
     cohesion_path = run / "cohesion-bundle.json"
     if cohesion_path.is_file():
-        boundary_inputs["cohesion-bundle.json"] = cohesion_path.read_text("utf-8")
+        formation_inputs["cohesion-bundle.json"] = cohesion_path.read_text("utf-8")
     built = compose(
-        task_id="boundary-resolution", template_id="boundary-resolution",
-        template_version=_boundary_resolution_version(), task_type="boundary-resolution",
-        instructions=_boundary_resolution_instructions(), inputs=boundary_inputs,
-        output_schema_id="boundary-resolution.v1",
+        task_id="formation", template_id="formation-proposal",
+        template_version=_formation_version(), task_type="formation-proposal",
+        instructions=_formation_instructions(), inputs=formation_inputs,
+        output_schema_id="formation-proposal.v1",
         context_budget_tokens=context_budget_tokens)
     packets.extend(built)
     planned.append(PlannedTask(
-        task_id="boundary-resolution", task_type="boundary-resolution", lens_id="",
+        task_id="formation", task_type="formation-proposal", lens_id="",
         shard="", repository_ref="",
         packet_ids=tuple(packet.task_id for packet in built),
         estimated_tokens=sum(_packet_tokens(packet) for packet in built), created=False))
