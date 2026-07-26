@@ -29,18 +29,22 @@ def test_bundled_locales_share_the_same_key_set():
     assert en_keys  # sanity: catalog is not empty
 
 
-def test_components_mirror_keys_exist_in_both_locales_with_equal_values():
-    """components.* has no human zh-CN translation yet (documented in locale.py):
-    those keys must still exist in zh-CN, mirroring en verbatim, so rendering
-    stays byte-identical (English in both locales) until translated for real.
+def test_components_keys_exist_in_both_locales_with_real_translations():
+    """components.* keys now have genuine zh-CN translations (57B-111 review
+    fix): every key exists in both locales, and -- except for the single
+    intentionally-identical git-ref-name key -- the zh-CN value is a real,
+    distinct translation, not an English mirror.
     """
     en = locale.BUNDLED_LOCALES["en"]
     zh = locale.BUNDLED_LOCALES["zh-CN"]
-    mirror_keys = [key for key in en if key.startswith(COMPONENTS_PREFIX)]
-    assert mirror_keys, "expected components.* keys to exist in the catalog"
-    for key in mirror_keys:
+    component_keys = [key for key in en if key.startswith(COMPONENTS_PREFIX)]
+    assert component_keys, "expected components.* keys to exist in the catalog"
+    for key in component_keys:
         assert key in zh, f"{key} missing from zh-CN catalog"
-        assert zh[key] == en[key], f"{key} must mirror en (no translation yet)"
+        if key in locale._MIRROR_ALLOWLIST:
+            assert zh[key] == en[key], f"{key} expected to stay identical (allowlisted)"
+        else:
+            assert zh[key] != en[key], f"{key} expected a real zh-CN translation"
 
 
 def test_non_component_keys_have_a_real_distinct_zh_cn_translation():
@@ -53,6 +57,50 @@ def test_non_component_keys_have_a_real_distinct_zh_cn_translation():
     assert translated_keys
     for key in translated_keys:
         assert zh[key] != en[key], f"{key} expected a real zh-CN translation"
+
+
+def test_zh_cn_has_no_missing_or_non_allowlisted_mirrored_keys():
+    """The delivered-language gate (57B-111 review fix): zh-CN must be
+    key-complete AND free of non-allowlisted English-mirrored values.
+    """
+    assert locale.missing_keys("zh-CN") == []
+    assert locale.mirrored_keys("zh-CN") == []
+    assert locale.is_delivered("zh-CN")
+
+
+def test_mirrored_keys_detects_a_synthetic_english_mirroring_locale():
+    """A locale that copies English verbatim for a non-allowlisted key must
+    be caught by ``mirrored_keys`` and must not be considered delivered.
+    """
+    en = locale.BUNDLED_LOCALES["en"]
+    mirrored_catalog = dict(en)  # every key byte-identical to English
+    locale.register_locale("xx-mirror-test", mirrored_catalog)
+    try:
+        hits = locale.mirrored_keys("xx-mirror-test")
+        assert "findings.top" in hits
+        assert "chrome.nav.index" in hits
+        # The allowlisted key must NOT be reported even though it's identical.
+        assert "components.header.head" not in hits
+        assert not locale.is_delivered("xx-mirror-test")
+    finally:
+        del locale._registry["xx-mirror-test"]
+
+
+def test_mirrored_keys_allows_the_documented_allowlist_entry():
+    """An allowlisted identical key (e.g. the git ref name "HEAD") must not,
+    by itself, block delivered-language status."""
+    en = locale.BUNDLED_LOCALES["en"]
+    catalog = dict(en)
+    for key in list(catalog):
+        if key not in locale._MIRROR_ALLOWLIST:
+            catalog[key] = catalog[key] + " (translated)"
+    locale.register_locale("xx-allowlist-test", catalog)
+    try:
+        assert locale.mirrored_keys("xx-allowlist-test") == []
+        assert locale.missing_keys("xx-allowlist-test") == []
+        assert locale.is_delivered("xx-allowlist-test")
+    finally:
+        del locale._registry["xx-allowlist-test"]
 
 
 # --------------------------------------------------------------------------- #

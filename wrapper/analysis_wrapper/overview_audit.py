@@ -13,8 +13,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import (coverage_render, findings, identity, module_map, module_render,
-               synthesis_input, workspace_metrics)
+from . import (coverage_render, findings, identity, locale, module_map, module_render,
+               run_provenance, synthesis_input, workspace_metrics)
 from .executor import replace_artifact_text
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec, overlapping_repo_pairs
@@ -28,6 +28,74 @@ _ENCODED_LOCAL_LINK = re.compile(
 _CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _WORD = re.compile(r"\b[A-Za-z0-9][A-Za-z0-9'-]*\b")
 _MERMAID_VALIDATOR = Path(__file__).parent / "report_html" / "validate_mermaid.js"
+
+# -- 57B-111 delivered-language completeness gate --------------------------- #
+#
+# The SKILL.md "Standing scope disclaimer" section is canonical English, with
+# an instruction that a non-English run include "a faithful translation making
+# exactly the same scope claims". The disclaimer is therefore LLM-authored
+# prose per run, not a template string this module can byte-match \u2014 so each
+# delivered language instead registers one short, distinctive marker phrase
+# any faithful translation is expected to carry (the same role
+# `test_skill_hygiene.py`'s ``DISCLAIMER_MARK`` plays for the English
+# templates). Add an entry here when a new language is delivered. Only
+# non-English languages are looked up here (the check below only runs when
+# `language != "en"`), so no "en" entry is needed.
+_DISCLAIMER_MARKERS: dict[str, str] = {
+    "zh-CN": "\u4ee3\u7801\u4ed3\u5e93\u8bc1\u636e",
+}
+
+# Verbatim-cited source tokens (UI labels quoted from the product, code
+# identifiers, error strings, endpoints, citations, file paths, URLs) stay in
+# their source language in ANY run language and must never be flagged as
+# leakage -- these patterns strip them before the prose heuristic runs.
+_FENCED_OR_INLINE_CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+_QUOTED_SPAN = re.compile(r'"[^"\n]*"|\u201c[^\u201d\n]*\u201d|\'[^\'\n]*\'')
+_URL = re.compile(r"https?://\S+")
+_CITATION_OR_PATH = re.compile(
+    r"\b[\w.\-]+@(?:[0-9a-fA-F]{7,40}|WORKTREE|NON-GIT):\S+"  # repo@commit:path:line
+    r"|(?<![\w./\\-])(?:[\w.\-]+[/\\])+[\w.\-]+"               # a/b.c style paths
+)
+_LATIN_WORD_RUN = re.compile(r"(?:[A-Za-z][A-Za-z'\-]*\s+){5,}[A-Za-z][A-Za-z'\-]*")
+_CAMEL_OR_SNAKE_OR_DOTTED = re.compile(r"^[a-z0-9]+[A-Z]|_|\.[A-Za-z]")
+_ENGLISH_STOPWORDS = {
+    "the", "and", "of", "to", "in", "is", "are", "this", "that", "for",
+    "with", "on", "as", "by", "from", "an", "be", "has", "have", "it", "its",
+    "was", "were", "which", "not", "or", "if", "can", "will", "would",
+    "should", "must", "at", "into", "than", "when", "where", "what", "who",
+    "does", "do", "any", "all", "but", "so", "there", "these", "those",
+}
+
+
+def _strip_verbatim_tokens(text: str) -> str:
+    """Remove code/mermaid, inline code, quoted spans, URLs, citations and
+    file paths before the stray-English-prose heuristic runs, so verbatim
+    tokens quoted in ANY run language are never mistaken for leaked prose."""
+    text = _FENCED_OR_INLINE_CODE.sub(" ", text)
+    text = _QUOTED_SPAN.sub(" ", text)
+    text = _URL.sub(" ", text)
+    text = _CITATION_OR_PATH.sub(" ", text)
+    return "\n".join(line for line in text.splitlines()
+                     if not line.lstrip().startswith("|"))
+
+
+def _stray_english_prose(text: str) -> list[str]:
+    """Low-false-positive heuristic: sentence-like runs of Latin-script words
+    that contain several distinct common English function words, after
+    stripping every verbatim-token category (see ``_strip_verbatim_tokens``).
+    A lone code identifier or citation never trips this on its own -- it takes
+    a genuine run of ordinary English sentence structure to match.
+    """
+    cleaned = _strip_verbatim_tokens(text)
+    hits: list[str] = []
+    for match in _LATIN_WORD_RUN.finditer(cleaned):
+        run = match.group(0)
+        words = [w for w in re.findall(r"[A-Za-z][A-Za-z'\-]*", run)
+                 if not _CAMEL_OR_SNAKE_OR_DOTTED.search(w)]
+        stop_hits = {w.lower() for w in words if w.lower() in _ENGLISH_STOPWORDS}
+        if len(stop_hits) >= 3:
+            hits.append(run.strip())
+    return hits
 
 
 def _load(path: Path) -> dict:
@@ -119,8 +187,66 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         checks.append({"check": code, "status": "pass" if passed else "fail",
                        "detail": detail})
 
+    def warn(code: str, triggered: bool, detail: str) -> None:
+        checks.append({"check": code, "status": "warn" if triggered else "pass",
+                       "detail": detail})
+
     spec = TargetSpec.load(run / "targets.json")
     identities = identity.load(run)
+
+    # Run language, for the delivered-language completeness gate (57B-111).
+    # Older runs may predate run-provenance.json entirely; default to "en" so
+    # this gate is inert for them rather than raising -- absence is a
+    # defensible compatibility choice for pre-gate runs. A *present but
+    # unreadable* file is different: it means a run this analyzer claims to
+    # understand cannot actually be verified, so this fails closed instead of
+    # silently reverting to "en" (which would skip every language check for a
+    # run that may not even be English).
+    language = "en"
+    provenance_path = run_provenance.path_for(run)
+    if provenance_path.is_file():
+        try:
+            language = run_provenance.load(run).get("generation", {}).get(
+                "language") or "en"
+        except ValueError as exc:
+            check(
+                "run-provenance-readable", False,
+                "run-provenance.json is present but unreadable; cannot "
+                f"verify run language: {exc}",
+            )
+
+    if language != "en":
+        # (a) Fallback leakage: the precise, non-heuristic signal -- a
+        # catalog that falls back to English for any key, or "translates" a
+        # key to a byte-identical copy of English, is by definition not
+        # delivering the run's primary language natively. This is
+        # deliberately checked at the catalog level (not by scanning rendered
+        # text for English) because the catalog signal is exact and reliable
+        # where text heuristics are not. Both missing keys (silent fallback)
+        # and non-allowlisted mirrored keys (uncaught English copy) are hard
+        # failures here -- key *presence* alone was never a sufficient proxy
+        # for "this renders in the run's language".
+        missing_catalog_keys = locale.missing_keys(language)
+        mirrored_catalog_keys = locale.mirrored_keys(language)
+        catalog_problems = bool(missing_catalog_keys) or bool(mirrored_catalog_keys)
+        detail_parts = []
+        if missing_catalog_keys:
+            detail_parts.append(
+                f"falls back to English for {len(missing_catalog_keys)} "
+                f"key(s): " + ", ".join(missing_catalog_keys[:20]))
+        if mirrored_catalog_keys:
+            detail_parts.append(
+                f"has {len(mirrored_catalog_keys)} non-allowlisted key(s) "
+                f"byte-identical to English (not actually translated): "
+                + ", ".join(mirrored_catalog_keys[:20]))
+        check(
+            "language-catalog-completeness", not catalog_problems,
+            f"{language!r} label catalog is key-complete and has no "
+            f"non-allowlisted English-mirrored values"
+            if not catalog_problems else
+            f"{language!r} label catalog " + "; ".join(detail_parts),
+        )
+
     overlaps = overlapping_repo_pairs(spec.repos)
     check(
         "non-overlapping-targets", not overlaps,
@@ -511,6 +637,54 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         check("pm-abstraction-boundary", not pm_leaks,
               "PM overview contains no source citations/paths/tool identifiers"
               if not pm_leaks else "; ".join(pm_leaks[:20]))
+
+        if language != "en":
+            # (b) Missing disclaimer: SKILL.md requires every report to carry
+            # a faithful translation of the standing scope disclaimer in the
+            # run language -- not the English original. Absence in ANY of the
+            # three narrative reports is a leakage failure.
+            marker = _DISCLAIMER_MARKERS.get(language)
+            reports = (("technical-overview.md", technical),
+                       ("overview.md", overview),
+                       ("project-map.md", project_map))
+            if marker is None:
+                check("language-standing-disclaimer", False,
+                      f"no standing-disclaimer marker registered for "
+                      f"language {language!r} in overview_audit."
+                      f"_DISCLAIMER_MARKERS; add one before delivering this "
+                      f"language")
+            else:
+                disclaimer_problems = [name for name, text in reports
+                                       if text and marker not in text]
+                check(
+                    "language-standing-disclaimer", not disclaimer_problems,
+                    "standing scope disclaimer present (in the run language) "
+                    "in every present narrative report"
+                    if not disclaimer_problems else
+                    f"standing scope disclaimer missing (marker {marker!r} "
+                    f"not found) in: " + ", ".join(disclaimer_problems),
+                )
+
+            # (c) Stray untranslated prose: a low-false-positive heuristic,
+            # not a hard failure (see module docstring note above _stray_
+            # english_prose) -- a false failure on a good run is worse than a
+            # missed heuristic, so this is WARNING-only and never contributes
+            # to `failed_count`/`status`.
+            prose_warnings = []
+            for name, text in reports:
+                if not text:
+                    continue
+                hits = _stray_english_prose(text)
+                if hits:
+                    prose_warnings.append(f"{name}: " + "; ".join(hits[:3]))
+            warn(
+                "language-stray-english-prose", bool(prose_warnings),
+                "no sentence-like English prose runs detected outside "
+                "verbatim-cited tokens"
+                if not prose_warnings else
+                "possible untranslated English prose (heuristic, "
+                "non-blocking -- verify by hand): " + " | ".join(prose_warnings),
+            )
 
     failed = [row for row in checks if row["status"] == "fail"]
     return {

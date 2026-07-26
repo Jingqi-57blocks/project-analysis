@@ -249,7 +249,7 @@ def parser() -> argparse.ArgumentParser:
     drill.add_argument("--module", required=True, help="module-id from the map")
     drill.add_argument("--from-run", default="",
                        help="explicit source overview run id")
-    drill.add_argument("--language", default="",
+    drill.add_argument("--language", default="", choices=["", "en", "zh-CN"],
                        help="report language (default: the source run's)")
     drill.add_argument("--project", default="",
                        help="project-id (needed only when output/ has several)")
