@@ -207,10 +207,15 @@ def test_repo_sharded_lens_task_only_sees_its_own_repos_signal_views(tmp_path):
     # into web's per-repo packet.
     assert not any("jscpd" in name for name in web_inputs)
 
+    # module-candidates.json is a BARE ARRAY (composer-shardable), never a
+    # dict wrapping the array -- see _split_module_candidates.
     api_candidates = json.loads(api_inputs["module-candidates.json"])
-    assert {row["candidate_id"] for row in api_candidates["candidates"]} == {"mc-api-folder"}
+    assert isinstance(api_candidates, list)
+    assert {row["candidate_id"] for row in api_candidates} == {"mc-api-folder"}
+    api_meta = json.loads(api_inputs["module-candidates-meta.json"])
+    assert api_meta["candidate_count"] == 1
     web_candidates = json.loads(web_inputs["module-candidates.json"])
-    assert {row["candidate_id"] for row in web_candidates["candidates"]} == {"mc-web-folder"}
+    assert {row["candidate_id"] for row in web_candidates} == {"mc-web-folder"}
 
 
 def test_duplication_workspace_task_includes_the_cross_repo_view(tmp_path):
@@ -225,8 +230,11 @@ def test_duplication_workspace_task_includes_the_cross_repo_view(tmp_path):
                           module_candidates_doc, run_summary, None)
     assert any("jscpd-cross" in name for name in inputs)
     all_candidates = json.loads(inputs["module-candidates.json"])
-    assert {row["candidate_id"] for row in all_candidates["candidates"]} == {
+    assert isinstance(all_candidates, list)
+    assert {row["candidate_id"] for row in all_candidates} == {
         "mc-api-folder", "mc-web-folder"}
+    all_meta = json.loads(inputs["module-candidates-meta.json"])
+    assert all_meta["candidate_count"] == 2
 
 
 def test_dead_code_route_evidence_is_trimmed_to_its_own_repo(tmp_path):
@@ -241,11 +249,129 @@ def test_dead_code_route_evidence_is_trimmed_to_its_own_repo(tmp_path):
                               module_candidates_doc, run_summary, "api")
     web_inputs = _lens_inputs(run, lens_templates["dead-code"], synthesis_doc,
                               module_candidates_doc, run_summary, "web")
-    api_routes = json.loads(api_inputs["route-evidence.json"])
-    web_routes = json.loads(web_inputs["route-evidence.json"])
-    assert len(api_routes["graph_route_nodes"]) == 1
-    assert web_routes["graph_route_nodes"] == []
-    assert web_routes["route_inventory_rows"] == []
+    api_route_nodes = json.loads(api_inputs["dead-code-graph-route-nodes.json"])
+    web_route_nodes = json.loads(web_inputs["dead-code-graph-route-nodes.json"])
+    assert isinstance(api_route_nodes, list) and isinstance(web_route_nodes, list)
+    assert len(api_route_nodes) == 1
+    assert web_route_nodes == []
+    assert json.loads(web_inputs["dead-code-route-inventory-rows.json"]) == []
+
+
+# --------------------------------------------------------------------------- #
+# every list-carrying input is a BARE JSON ARRAY (composer-shardable), never
+# a dict wrapping it -- the exact defect a real prepared WCP run surfaced:
+# lens-dependencies-cycles/lens-open-lens both failed composition with
+# "input 'module-candidates.json' is ... neither a JSON array nor
+# line-oriented text" the moment that dict became the packet's largest input.
+# --------------------------------------------------------------------------- #
+
+def test_every_extra_section_input_is_a_bare_array_with_a_meta_sibling(tmp_path):
+    run, _ = _build_run(tmp_path)
+    lens_templates = tpl.load_lens_templates()
+    from analysis_wrapper.orchestrator.planner import _load_json, _lens_inputs
+    synthesis_doc = _load_json(run / "synthesis-input.json")
+    module_candidates_doc = _load_json(run / "module-candidates.json")
+    run_summary = _load_json(run / "signals" / "run-summary.json")
+
+    # open-lens pulls in every EXTRA section this table knows about.
+    inputs = _lens_inputs(run, lens_templates["open-lens"], synthesis_doc,
+                         module_candidates_doc, run_summary, None)
+    array_meta_pairs = {
+        "graph-nodes.json": "graph-meta.json",
+        "route-inventory.json": "route-inventory-meta.json",
+        "ui-route-linkage.json": "ui-route-linkage-meta.json",
+        "integration-candidates.json": "integration-candidates-meta.json",
+        "role-catalog-by-repository.json": "role-catalog-by-repository-meta.json",
+        "capabilities.json": "capabilities-meta.json",
+    }
+    for array_name, meta_name in array_meta_pairs.items():
+        assert array_name in inputs, array_name
+        assert meta_name in inputs, meta_name
+        assert isinstance(json.loads(inputs[array_name]), list), array_name
+        assert isinstance(json.loads(inputs[meta_name]), dict), meta_name
+    # repositories.json is likewise a bare array (no "items" wrapper).
+    assert isinstance(json.loads(inputs["repositories.json"]), list)
+
+
+def test_split_graph_flattens_every_node_kind_with_kind_tagged_and_keeps_hub_meta():
+    from analysis_wrapper.orchestrator.planner import _split_graph
+    graph = {
+        "stats": {"x": 1}, "coverage": {"y": 2},
+        "nodes": {
+            "route": {"total_count": 1, "included_count": 1, "truncated": False,
+                     "items": [{"id": "n1", "repository_ref": "api", "label": "GET /x"}]},
+            "module": {"total_count": 1, "included_count": 1, "truncated": False,
+                      "items": [{"id": "n2", "repository_ref": "api", "label": "core"}]},
+        },
+        "edges_by_type_and_status": {"sync-api": {"observed": 3}},
+        "highest_degree_nodes": {"total_count": 1, "included_count": 1, "truncated": False,
+                                 "items": [{"node_id": "n2", "degree": 5}]},
+    }
+    flattened, meta = _split_graph(graph)
+    assert {row["id"]: row["kind"] for row in flattened} == {"n1": "route", "n2": "module"}
+    assert meta["stats"] == {"x": 1}
+    assert meta["nodes_summary"]["route"]["total_count"] == 1
+    assert meta["highest_degree_nodes"]["items"][0]["node_id"] == "n2"
+
+
+def test_split_bounded_list_separates_counts_from_items():
+    from analysis_wrapper.orchestrator.planner import _split_bounded_list
+    section = {"total_count": 5, "included_count": 2, "truncated": True,
+              "items": [{"a": 1}, {"a": 2}]}
+    items, meta = _split_bounded_list(section)
+    assert items == [{"a": 1}, {"a": 2}]
+    assert meta == {"total_count": 5, "included_count": 2, "truncated": True}
+
+
+def test_split_capabilities_keeps_non_capabilities_fields_in_meta():
+    from analysis_wrapper.orchestrator.planner import _split_capabilities
+    doc = {"schema_version": "2.0.0", "project_ref": "proj", "aggregate_status": "complete",
+          "capabilities": [{"capability_id": "routing", "status": "complete"}]}
+    rows, meta = _split_capabilities(doc)
+    assert rows == [{"capability_id": "routing", "status": "complete"}]
+    assert meta == {"schema_version": "2.0.0", "project_ref": "proj",
+                    "aggregate_status": "complete"}
+
+
+def test_a_large_extra_section_now_composes_and_shards_instead_of_failing(tmp_path):
+    """The exact production failure: a section serialized as a JSON OBJECT
+    (not an array) was, before this fix, unshardable the moment it became a
+    packet's largest input -- ComposerError, not a smaller packet. Build a
+    graph large enough to dominate a tight budget and confirm it now shards
+    cleanly instead of raising."""
+    run, _ = _build_run(tmp_path)
+    lens_templates = tpl.load_lens_templates()
+    shared_body = tpl.load_shared_body()
+    from analysis_wrapper.orchestrator.composer import compose
+    from analysis_wrapper.orchestrator.planner import _load_json, _packet_tokens
+
+    synthesis_doc = _load_json(run / "synthesis-input.json")
+    # Inflate the graph's route-node bucket well beyond every other input.
+    synthesis_doc["graph"]["nodes"]["route"]["items"] = [
+        {"id": f"n{i}", "repository_ref": "api", "label": f"GET /x{i}",
+        "status": "observed", "evidence_basis": "static-reference",
+        "evidence": [f"api@HEAD:routes.go:{i}"], "attrs": {}}
+        for i in range(300)
+    ]
+    module_candidates_doc = _load_json(run / "module-candidates.json")
+    run_summary = _load_json(run / "signals" / "run-summary.json")
+    template = lens_templates["structure-inventory"]  # workspace-shard, consumes "graph"
+    from analysis_wrapper.orchestrator.planner import _lens_inputs
+    inputs = _lens_inputs(run, template, synthesis_doc, module_candidates_doc,
+                         run_summary, None)
+    instructions = tpl.render_instructions(template, shared_body)
+
+    # Would previously raise ComposerError once graph-nodes.json dominated a
+    # tight budget (it was a dict, not an array); now it shards cleanly.
+    packets = compose(task_id="t", template_id="t", template_version=template.version,
+                      task_type="lens-findings", instructions=instructions, inputs=inputs,
+                      output_schema_id="lens-findings.v1", context_budget_tokens=3000)
+    assert len(packets) > 1
+    assert all("-shard-" in packet.task_id for packet in packets)
+    assert all(_packet_tokens(packet) <= 3000 for packet in packets)
+    # graph-meta.json (the small sibling) rides on every shard, unsplit.
+    for packet in packets:
+        assert "graph-meta.json" in packet.inputs
 
 
 # --------------------------------------------------------------------------- #
