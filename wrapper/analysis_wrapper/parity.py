@@ -826,12 +826,26 @@ def compare(base_run: str | Path, candidate_run: str | Path) -> dict[str, Any]:
         _provider_execution_reasons(base_docs["provider_execution"], base_roots),
         _provider_execution_reasons(candidate_docs["provider_execution"], candidate_roots))
 
+    # `by_section` is the SOLE source of the total below (57B-112 §2): a prior
+    # version added the prose lanes' contribution into `total` a second time,
+    # independently of `by_section` -- which never carried a `prose/*` entry
+    # at all -- so a human reconciling the total against the *printed*
+    # per-section counts (which also never showed prose) came up exactly the
+    # prose count short (98,475 vs 98,474 on a real mainline comparison,
+    # traced to one `not_targeted` addition). Folding the prose lanes into
+    # `by_section` itself (instead of adding them on the side) makes `total`
+    # a pure `sum(by_section.values())` -- it cannot diverge from its own
+    # addends again because there is no second, independently-accumulated
+    # number left to diverge from.
     by_section = {
         name: len(section["added"]) + len(section["removed"]) + len(section["changed"])
         for name, section in sections.items()
     }
-    total = sum(by_section.values()) + sum(
-        len(rows["added"]) + len(rows["removed"]) for rows in prose.values())
+    by_section.update({
+        f"prose/{name}": len(rows["added"]) + len(rows["removed"])
+        for name, rows in prose.items()
+    })
+    total = sum(by_section.values())
 
     return {
         "schema_version": SCHEMA_VERSION,

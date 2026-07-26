@@ -934,3 +934,33 @@ def test_signals_two_legacy_repos_sharing_tool_do_not_collapse(tmp_path):
     assert section["added"] == [] and section["removed"] == []
     changed_keys = {row["key"] for row in section["changed"]}
     assert "scc / api" in changed_keys and "scc / worker" in changed_keys
+
+
+# ---------------------------------------------------------------------------
+# 10. 57B-112 §2: summary.total_differences off-by-one against by_section.
+# ---------------------------------------------------------------------------
+
+
+def test_summary_total_differences_always_equals_sum_of_by_section(tmp_path):
+    """summary.total_differences must be COMPUTED FROM summary.by_section
+    (never a second, independently-accumulated number) so the two can never
+    diverge again -- previously `total` also added the prose lanes'
+    contribution while `by_section` silently omitted them entirely (98,475
+    vs 98,474 on a real mainline comparison, traced to a single
+    `not_targeted` addition nobody could find in the per-section breakdown)."""
+    a = _write_minimal_run(tmp_path / "a", workspace_root="/ws-a")
+    b = _write_minimal_run(
+        tmp_path / "b", workspace_root="/ws-b",
+        not_targeted=["/ws-b/vendor (excluded by operator flag)"])
+
+    report = parity.compare(a, b)
+
+    by_section = report["summary"]["by_section"]
+    assert report["summary"]["total_differences"] == sum(by_section.values())
+    # The ONLY actual difference here is the prose addition -- by_section
+    # must itself carry it (not just the total), or this assertion is
+    # trivially satisfied by an empty report.
+    assert report["summary"]["total_differences"] == 1
+    assert by_section.get("prose/not_targeted") == 1
+    assert all(count == 0 for name, count in by_section.items()
+              if name != "prose/not_targeted")
