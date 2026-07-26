@@ -29,6 +29,7 @@ English counterpart, except the handful of intentionally-identical keys in
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 
 _EN: dict[str, str] = {
@@ -446,3 +447,56 @@ def delivered_languages() -> list[str]:
     after import counts once (and only once) its catalog is complete.
     """
     return sorted(lang for lang in _registry if is_delivered(lang))
+
+
+# --------------------------------------------------------------------------- #
+# Host-locale auto-detection (57B-97)
+# --------------------------------------------------------------------------- #
+#
+# `new-run --language` used to default to a hardcoded "zh-CN". It now defaults
+# to whatever the HOST environment's locale suggests, falling back to English
+# whenever the host says nothing decidable or names a language this skill does
+# not (yet) deliver -- a run is NEVER started in a language that would render
+# partial/untranslated English under a "delivered" label. `--language` on the
+# command line always overrides this (argparse's explicit value wins over any
+# default, unchanged).
+
+def _normalize_locale_value(raw: str) -> tuple[str, str]:
+    """Parse a POSIX-style locale string (``LANG``/``LC_ALL``/``LC_MESSAGES``,
+    e.g. ``"zh_CN.UTF-8"``) into ``(language, territory)``, both lowercased/
+    uppercased respectively. Returns ``("", "")`` for unset, empty, or the
+    "no locale set" sentinels ``C``/``POSIX`` (case-insensitive) -- none of
+    these name an actual language."""
+    value = (raw or "").split(".", 1)[0].split("@", 1)[0].strip()
+    if not value or value.upper() in ("C", "POSIX"):
+        return "", ""
+    language, _, territory = value.partition("_")
+    return language.lower(), territory.upper()
+
+
+def detect_default_language(env: Mapping[str, str] | None = None) -> str:
+    """Detect the default run language from the host locale.
+
+    Precedence: ``LC_ALL`` > ``LC_MESSAGES`` > ``LANG`` (the standard POSIX
+    override order), falling back to :data:`REFERENCE_LANGUAGE` ("en") when
+    none is set, none parses to an actual language, or the parsed language is
+    not a :func:`is_delivered` language -- a non-delivered locale (e.g.
+    ``fr_FR.UTF-8``) falls back to English rather than being refused or
+    silently rendering partial content.
+
+    ``env`` defaults to ``os.environ``; a caller (e.g. a test) may pass an
+    explicit mapping instead, so this stays hermetic and independent of the
+    real process environment.
+    """
+    source = env if env is not None else os.environ
+    raw = source.get("LC_ALL") or source.get("LC_MESSAGES") or source.get("LANG") or ""
+    language, territory = _normalize_locale_value(raw)
+    if not language:
+        return REFERENCE_LANGUAGE
+    candidates = ([f"{language}-{territory}"] if territory else []) + [language]
+    delivered = delivered_languages()
+    for candidate in candidates:
+        for lang in delivered:
+            if lang.lower() == candidate.lower():
+                return lang
+    return REFERENCE_LANGUAGE

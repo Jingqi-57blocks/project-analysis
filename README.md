@@ -150,28 +150,38 @@ installs, caching, and updates work.
 
 ## First run
 
-Invoke the skill from a new client session:
+The zero-arg happy path — just invoke the skill, no flags required:
 
 ```text
 # Claude Code or Cursor
-/project-analysis /absolute/path/to/project --language en
+/project-analysis
+/project-analysis /absolute/path/to/project
 
 # Codex
-$project-analysis Analyze /absolute/path/to/project --language en
+$project-analysis
+$project-analysis Analyze /absolute/path/to/project
 ```
 
-(`--language` defaults to `zh-CN`; pass `--language en` for English output. Add
-`--run-id <label>` for a readable run label.)
+With no `path`, the current workspace is analyzed. The run language auto-detects from
+the host locale (falling back to English when that's undecidable or not a delivered
+language); pass `--language en` or `--language zh-CN` to override. Add
+`--run-id <label>` for a readable run label. **Module drill-down (`prd.md`/`health.md`)
+is not available in v1** — v1 ships overview + diagnosis only.
 
-The **first run checks the toolchain**. For the Python packages the wrapper itself
-depends on, it shows you a plan and **asks before installing anything** — nothing is
-installed silently. For the Node/pnpm-based and Go-based analyzer tooling (needed only
-if the target uses those stacks), run `<wrapper-executable> setup` (or `setup --plan`
-to preview first): it computes which analyzer-managed pieces your target actually needs
-— a pure-JS target never provisions Go, and vice versa — shows the plan (destination,
-install source, network host contacted), and asks before installing anything; pass
-`--yes` for prior authorization (the plan is still printed first). It never installs
-Node, pnpm, or Go themselves — those stay yours to install (see
+The **first run checks the toolchain** and asks for **one confirmation**, not several:
+the agent runs `doctor` to see what's needed, and — only if something is missing — runs
+`setup --plan` to compute the install plan. It then presents, together, both the setup
+plan (what would be installed, where, which network hosts contacted) and the run
+parameters (workspace, discovered repos/languages, run language, export on/off,
+approximate duration). Nothing is installed until you approve that one confirmation;
+approving runs `setup --yes` and then the analysis. Declining the setup plan does not
+abort the run — it proceeds with disclosed reduced coverage for whatever the missing
+tooling would have covered, unless core execution is impossible. This agent-side flow is
+UX layered on top of a hard guarantee the wrapper itself enforces on every invocation: a
+real analysis command refuses outright if the installed runtime has drifted from what
+the code expects, regardless of what the agent does.
+
+It never installs Node, pnpm, or Go themselves — those stay yours to install (see
 [Environment and coverage](#environment-and-coverage) below) — and a lane whose runtime
 is missing is skipped with a clear reason rather than failing the whole command.
 
@@ -184,12 +194,16 @@ skill code and never inside the analyzed project:
 - macOS: `~/Library/Application Support/project-analysis`
 - Linux/WSL2: `${XDG_DATA_HOME:-~/.local/share}/project-analysis`
 
-Under the data root, each run writes Markdown reports and an offline HTML export. Start
-with:
+Under the data root, each run always writes Markdown reports. Start with:
 
 - **`overview.md`** — the PM-primary report. Start here.
 - **`technical-overview.md`** — the same run's full-detail companion.
 - **`project-map.md`** — the reusable topology (module boundaries, dependency edges).
+
+The offline HTML export is **opt-in**, not automatic: request it up front
+(`--export html`) or run `<wrapper-executable> export --run <run-dir>` afterward at any
+time. When produced, it lands under `<data-root>/exported/<project>-analysis/<run-id>/html/`
+— open `index.html` in a browser.
 
 ## Upgrade
 

@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from . import compat, paths
+from . import locale as run_locale
 from .executor import (SignalResult, WrapperSafetyError,
                        prepare_output_directory, run_tool,
                        use_existing_run_directory)
@@ -30,6 +31,24 @@ _RUN_ARG_ADVANCE_COMMANDS = frozenset({
     "mark-stage", "rollback", "system-model", "prepare-overview",
     "finalize-module-map", "finalize-findings", "audit-overview",
 })
+
+# --------------------------------------------------------------------------
+# v1 scope gate: module drill-down (57B-97)
+# --------------------------------------------------------------------------
+# v1 ships overview + diagnosis only. `new-drilldown` (and everything it would
+# mint -- prd.md/health.md) is deliberately NOT available yet. Gated here, not
+# deleted, so a later re-enable is a one-line revert of this guard -- the
+# resolution/staleness/mint logic in `_new_drilldown` below is untouched and
+# still fully wired. The refusal fires in `main()` BEFORE any filesystem
+# access (no resolution, no staleness check, no run-state read), so an
+# existing drilldown run directory already on disk is never touched by it.
+EXIT_DRILLDOWN_UNAVAILABLE = 10
+DRILLDOWN_UNAVAILABLE_MESSAGE = (
+    "new-drilldown: module drill-down is not available in this version -- "
+    "v1 ships overview + diagnosis only (see SKILL.md's 'Module drill-down' "
+    "section, kept for a future release). Existing drill-down runs under "
+    "output/<project>/drilldown/ are preserved and untouched by this refusal."
+)
 
 
 def _record_summary(out: Path, results: list[SignalResult]) -> None:
@@ -265,7 +284,13 @@ def parser() -> argparse.ArgumentParser:
              "always live under the data root (see PROJECT_ANALYSIS_HOME / "
              "paths.data_root(), resolved automatically). Kept only for CLI "
              "back-compat with older invocations; no longer required.")
-    new_run.add_argument("--language", default="zh-CN", choices=["en", "zh-CN"])
+    new_run.add_argument(
+        "--language", default=run_locale.detect_default_language(),
+        choices=["en", "zh-CN"],
+        help="report + interaction language (default: auto-detected from "
+             "the host locale -- $LC_ALL/$LC_MESSAGES/$LANG -- falling back "
+             "to English when unset or not a delivered language; pass "
+             "explicitly to override)")
     new_run.add_argument(
         "--model", default="",
         help="actual generation model when the host exposes it; otherwise the "
@@ -286,9 +311,16 @@ def parser() -> argparse.ArgumentParser:
                          help="override the self-excluded analyzer checkout "
                               "root (default: resolved from the package)")
     _add_scope_args(new_run)
+    _drilldown_help = (
+        "[NOT AVAILABLE IN v1] module drill-down (PRD + health report) "
+        "is out of scope for this release -- v1 ships overview + "
+        "diagnosis only. Refuses immediately, before touching any "
+        f"run directory, with exit code {EXIT_DRILLDOWN_UNAVAILABLE}. "
+        "Kept wired (arguments unchanged) for a future re-enable; see "
+        "SKILL.md's 'Module drill-down' section."
+    )
     drill = sub.add_parser(
-        "new-drilldown", help="mint a drill-down run from a completed overview "
-                              "run (--from-run → current pointer → refuse)")
+        "new-drilldown", help=_drilldown_help, description=_drilldown_help)
     drill.add_argument(
         "--skill-root", default="",
         help="deprecated for data placement (see `new-run --skill-root`); when "
@@ -1147,6 +1179,15 @@ def _setup(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "new-drilldown":
+        # v1 scope gate (57B-97): refuse before ANY filesystem access -- no
+        # resolution, no staleness check, no run-state read -- so an existing
+        # drilldown run directory is never touched by this refusal. Checked
+        # ahead of the try block below (and ahead of `compat.guard_entry`,
+        # which would otherwise probe the runtime for a command that never
+        # gets to execute anyway).
+        print(DRILLDOWN_UNAVAILABLE_MESSAGE, file=sys.stderr)
+        return EXIT_DRILLDOWN_UNAVAILABLE
     try:
         if args.allow_hosts:
             # Registry guards read this when deciding whether a dependency

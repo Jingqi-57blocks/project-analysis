@@ -129,7 +129,14 @@ def test_pointers_accept_rules(tmp_path, target):
     assert pointers.read()["current"] == "rid-2"  # unchanged
 
 
-def test_new_run_default_language_is_zh_cn(tmp_path, synthetic_repo, capsys):
+def test_new_run_default_language_auto_detects_zh_cn_from_host_locale(
+        tmp_path, synthetic_repo, capsys, monkeypatch):
+    """57B-97: `--language`'s default is no longer a hardcoded "zh-CN" — it is
+    auto-detected from the host locale (`LC_ALL` > `LC_MESSAGES` > `LANG`),
+    landing on "zh-CN" only when the host locale says so."""
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_MESSAGES", raising=False)
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
     code = main(["new-run", "--workspace", str(synthetic_repo.parent),
                  "--skill-root", str(tmp_path / "skill")])
     assert code == 0
@@ -145,6 +152,18 @@ def test_new_run_default_language_is_zh_cn(tmp_path, synthetic_repo, capsys):
     assert mapping.project.display_name == synthetic_repo.parent.name
     assert Path(run_dir).parent.parent.name == mapping.project.artifact_key
     assert mapping.project.internal_id not in Path(run_dir).parts
+
+
+def test_new_run_default_language_falls_back_to_english_without_host_locale(
+        tmp_path, synthetic_repo, capsys, monkeypatch):
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_MESSAGES", raising=False)
+    monkeypatch.delenv("LANG", raising=False)
+    code = main(["new-run", "--workspace", str(synthetic_repo.parent),
+                 "--skill-root", str(tmp_path / "skill")])
+    assert code == 0
+    run_dir = capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1]
+    assert RunState.load(run_dir).language == "en"
 
 
 def test_new_run_works_without_skill_root(tmp_path, synthetic_repo, capsys):
@@ -189,6 +208,7 @@ def test_new_run_records_host_supplied_model_and_effort(tmp_path, synthetic_repo
     code = main([
         "new-run", "--workspace", str(synthetic_repo.parent),
         "--skill-root", str(tmp_path / "skill"),
+        "--language", "zh-CN",  # pinned: 57B-97 made the default host-locale-detected
         "--model", "host-model", "--effort", "light",
     ])
     assert code == 0
