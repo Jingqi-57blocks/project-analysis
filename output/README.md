@@ -1,7 +1,12 @@
-# output/ — analysis runs (runtime, never committed)
+# output/ — legacy placeholder (runs no longer write here)
 
-Everything under `output/` except this README is gitignored: run artifacts describe
-*target* projects and never enter the skill repo.
+**This directory is a legacy placeholder.** Run output now lives entirely under the
+external **data root** (`<data-root>/output/...`, resolved via `$PROJECT_ANALYSIS_HOME`
+or the platform default — see `README.md`'s "Where results go"), never inside this
+checkout. The shape below documents the run-artifact layout under the data root; this
+in-repo `output/` directory is never populated by a current version of the wrapper.
+Everything else under `output/` besides this README stays gitignored, kept only for a
+pre-relocation layout / `migrate --legacy-skill-root` compatibility.
 
 ```
 output/<project-id>/

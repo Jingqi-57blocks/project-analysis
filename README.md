@@ -1,12 +1,12 @@
 # Project Analysis
 
 A portable Agent Skill that examines a codebase (single- or multi-repo workspace) with
-zero target-specific configuration and produces:
+zero target-specific configuration and produces a **project overview + diagnosis**:
+module map, ranked problems with evidence, and honest per-lens coverage reporting.
 
-1. **Project overview + diagnosis** — module map, ranked problems with evidence,
-   honest per-lens coverage reporting.
-2. **Module drill-down** — a PM-readable module PRD (`prd.md`) and a dev-facing
-   health report (`health.md`) with traced change scenarios.
+**v1 scope is overview + diagnosis only.** Module drill-down (a PM-readable module PRD
+and a dev-facing health report) is planned but **not supported in v1** — do not invoke
+it and do not expect it to work yet.
 
 First-class stack support in v1: **JS/TS and Go**. Other stacks are analyzed with
 explicitly disclosed reduced coverage.
@@ -17,28 +17,69 @@ explicitly disclosed reduced coverage.
 - **WSL2** — supported (treated as Linux).
 - **Native Windows** — not supported in v1.
 
-The one hard prerequisite is **Python 3.11+**; everything else is either set up on first
-run or gracefully degraded to disclosed reduced coverage. The machine-readable toolchain
-inventory (ownership, lanes, validated versions, install source, platform support) lives
-in [`tools/manifest.json`](tools/manifest.json), validated against
-[`tools/manifest.schema.json`](tools/manifest.schema.json); the human-readable companion is
-[`tools/README.md`](tools/README.md).
+**Agents officially validated for v1: Claude Code and Codex.** Other agents that support
+the `npx skills` ecosystem or a symlinked skills directory (Cursor and others) are
+expected to work but are best-effort, not validated.
 
-## Status
+## Prerequisite: Python 3.11+
 
-**Phase 1 complete.** The static-analysis foundation (call graphs for JS/TS + Go,
-dependency edges, a deterministic `system-model.json`), the tool wrapper, discovery,
-the lenses, synthesis, and the run lifecycle are built and accepted. `tools/README.md`
-documents the validated toolchain (generic). `overview.md` is the PM-primary document,
-`technical-overview.md` its full-detail companion, and `project-map.md` the reusable
-topology.
+This is the **only hard prerequisite**. The Python environment bootstrap below asks for
+consent before installing anything (see the paragraph after the `bootstrap` command).
+Node and Go tooling for the JS/TS and Go lanes has **no automated installer yet** in
+this release — see [Environment and coverage](#environment-and-coverage) for the manual
+setup steps; an automated, consent-gated setup for those lanes is planned for a later
+release. Until then, skip a lane you don't need and it runs with disclosed reduced
+coverage instead of failing the whole run.
 
-## Quick start
+- **macOS:** `brew install python@3.11` (or newer), or use `pyenv`/`uv`.
+- **Linux:** use your distribution's package manager (e.g. `apt install python3.11`) or
+  `pyenv`/`uv`.
+- **WSL2:** same as Linux, inside the WSL2 distribution.
 
-Project Analysis is not a server and has no daemon to start. Set up its isolated Python
-environment, register the checkout as a skill, start a new agent session, and invoke it.
+Confirm with `python3 --version`.
 
-### 1. Clone and initialize the Python environment
+## Install
+
+### Primary: `npx skills add` (recommended)
+
+[`npx skills`](https://github.com/vercel-labs/skills) is the open, multi-agent Skills
+CLI. Install this skill for the agent(s) you use, at **global/user scope** (recommended,
+so it's available in every project):
+
+```bash
+# Claude Code, global/user scope
+npx skills add Jingqi-57blocks/project-analysis -a claude-code -g
+
+# Codex, global/user scope
+npx skills add Jingqi-57blocks/project-analysis -a codex -g
+
+# Both at once
+npx skills add Jingqi-57blocks/project-analysis -a claude-code -a codex -g
+```
+
+Omit `-g` to install **project-local** instead (installs under `./<agent>/skills/` and is
+committed with that project) — useful if you want the skill version pinned per-repo
+rather than shared globally:
+
+```bash
+npx skills add Jingqi-57blocks/project-analysis -a claude-code
+```
+
+By default `add` installs interactively and lets you choose symlink (recommended) vs.
+copy; pass `-y`/`--yes` to skip prompts (e.g. in CI or a scripted setup).
+
+> **Verified vs. unconfirmed:** the `-a/--agent`, `-g/--global`, `-y/--yes`, and the
+> `add`/`list`/`update`/`remove` verbs above are documented in the
+> [`vercel-labs/skills` README](https://github.com/vercel-labs/skills). The exact
+> repository shorthand (`Jingqi-57blocks/project-analysis`) is this project's current
+> GitHub remote; update it here if the repository moves (for example to an organization
+> account) before release. If your installed
+> CLI version behaves differently, treat its own `--help` output as authoritative and
+> fall back to the git-clone channel below.
+
+### Dev channel: `git clone` + symlink
+
+For local development, or if you want the checkout itself (not a CLI-managed copy):
 
 ```bash
 git clone <repository-url> project-analysis
@@ -49,41 +90,22 @@ cd ..
 ```
 
 Bootstrap requires Python 3.11+ and installs only this project's Python packages into
-the gitignored `wrapper/.venv`. It never installs or changes Node, Go, Homebrew, nvm,
-asdf, mise, or standalone analysis tools.
+an isolated virtual environment under the external **data root**
+(`<data-root>/runtime/<contract>/venv`, resolved via `$PROJECT_ANALYSIS_HOME` — see
+"Where results go" below) — **never** into `wrapper/.venv`; that path is stale and no
+longer used. It never installs or changes Node, Go, Homebrew, nvm, asdf, mise, or
+standalone analysis tools. Bootstrap prints the exact venv and wrapper-executable paths
+it used every time it runs, so you never need to hard-code the data-root location
+yourself.
 
-Confirm the wrapper is available:
-
-```bash
-wrapper/.venv/bin/project-analysis-wrapper --help
-```
-
-### 2. Prepare only the language lanes you need
-
-For a JS/TS target, select Node with your normal version manager. The committed
-dependency-cruiser version supports Node `22.x`, `24.x`, or `26+`. Then prepare the
-analyzer-owned packages yourself:
+Confirm the wrapper is available — prefer the self-locating launcher, which finds the
+bootstrapped venv for you regardless of where the data root resolves to on your machine:
 
 ```bash
-pnpm install --dir wrapper/node_tools --frozen-lockfile --ignore-scripts
+bin/project-analysis --help
 ```
 
-For a Go target, provide a Go runtime compatible with both the target and callgraph
-`v0.48.0` (Go 1.25+), plus `staticcheck`. If callgraph coverage is required, install it
-yourself from the skill root:
-
-```bash
-mkdir -p wrapper/go_tools/bin
-GOBIN="$PWD/wrapper/go_tools/bin" \
-  go install golang.org/x/tools/cmd/callgraph@v0.48.0
-```
-
-Skip both sections when the target contains neither JS/TS nor Go.
-
-### 3. Register the checkout
-
-Choose one or more clients. These commands link the checkout; they do not copy it or
-install software globally.
+Then register the checkout with your client(s):
 
 ```bash
 # Codex
@@ -99,23 +121,123 @@ mkdir -p "$HOME/.cursor/skills"
 ln -s "$PWD" "$HOME/.cursor/skills/project-analysis"
 ```
 
-Do not use `ln -sf`: if a destination already exists, inspect it and decide manually
-whether it should be removed or retained. Start a new client session after registration.
+**Do not use `ln -sf`.** If a destination already exists, inspect it and decide manually
+whether it should be removed or retained — `-f` silently clobbers whatever is there.
+Start a new client session after registration.
 
-### 4. Run an overview
+### Optional convenience: Claude Code plugin
 
-Use the syntax supported by the client:
+This repository also ships a minimal Claude Code plugin wrapper
+(`.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`) so Claude Code users
+can install it through `/plugin` instead of `npx skills`. This is a **Claude-Code-only
+convenience path, secondary to `npx skills add`** — it doesn't help Codex or other
+agents, and it uses Claude Code's own plugin cache/versioning rather than the
+cross-agent Skills CLI.
 
 ```text
-# Codex
-$project-analysis Analyze /absolute/path/to/project --language zh-CN
-
-# Claude Code or Cursor
-/project-analysis /absolute/path/to/project --language zh-CN
+/plugin marketplace add <repository-url-or-owner/repo>
+/plugin install project-analysis@project-analysis-marketplace
+/reload-plugins
 ```
 
-Use `--language en` for English output and `--run-id <label>` for a readable run label.
-The skill writes Markdown under `output/` and an offline HTML export under `exported/`.
+Because this skill ships as a single `SKILL.md` at the plugin root (no `skills/`
+subdirectory), Claude Code loads it as one plugin-scoped skill,
+`/project-analysis:project-analysis`. See
+[Claude Code plugin docs](https://code.claude.com/docs/en/plugins) for how plugin
+installs, caching, and updates work.
+
+## First run
+
+Invoke the skill from a new client session:
+
+```text
+# Claude Code or Cursor
+/project-analysis /absolute/path/to/project --language en
+
+# Codex
+$project-analysis Analyze /absolute/path/to/project --language en
+```
+
+(`--language` defaults to `zh-CN`; pass `--language en` for English output. Add
+`--run-id <label>` for a readable run label.)
+
+The **first run checks the toolchain**. For the Python packages the wrapper itself
+depends on, it shows you a plan and **asks before installing anything** — nothing is
+installed silently. For the Node/pnpm-based and Go-based analyzer tooling (needed only
+if the target uses those stacks), there is **no installer yet** in this release: the
+run reports whichever of those lanes you haven't set up manually as disclosed reduced
+coverage rather than failing the whole run. See
+[Environment and coverage](#environment-and-coverage) below for the manual one-time
+setup commands for the JS/TS and Go lanes. A consent-gated automated setup for those
+lanes is planned for a later release.
+
+## Where results go
+
+All persistent output lives in an external **data root**, never inside the installed
+skill code and never inside the analyzed project:
+
+- `$PROJECT_ANALYSIS_HOME` (explicit override), else
+- macOS: `~/Library/Application Support/project-analysis`
+- Linux/WSL2: `${XDG_DATA_HOME:-~/.local/share}/project-analysis`
+
+Under the data root, each run writes Markdown reports and an offline HTML export. Start
+with:
+
+- **`overview.md`** — the PM-primary report. Start here.
+- **`technical-overview.md`** — the same run's full-detail companion.
+- **`project-map.md`** — the reusable topology (module boundaries, dependency edges).
+
+## Upgrade
+
+- **git-clone channel:** `git pull` inside the checkout, then re-run bootstrap if
+  `wrapper/pyproject.toml` changed:
+  `cd wrapper && python3 -m analysis_wrapper.bootstrap && cd ..`
+- **`npx skills` channel:** run the CLI's own `update` verb, e.g.
+  `npx skills update project-analysis -g` (add `-y` to skip prompts). If your installed
+  CLI version doesn't support `update` for your source, re-running the original `add`
+  command re-installs the latest revision.
+- **Claude Code plugin channel:** there is no per-plugin `/plugin update` verb.
+  `/plugin marketplace update project-analysis-marketplace` refreshes the marketplace
+  catalog; Claude Code's own background auto-update then updates the installed plugin
+  (toggle auto-update for this marketplace from `/plugin` → **Marketplaces**; it is off
+  by default for local/third-party marketplaces). To force an immediate update instead
+  of waiting, uninstall and reinstall:
+  `/plugin uninstall project-analysis@project-analysis-marketplace` then
+  `/plugin install project-analysis@project-analysis-marketplace`. Either way, finish
+  with `/reload-plugins`.
+
+In every channel, **your data root is untouched by upgrading the skill code** — runs,
+state, and exports under the data root survive.
+
+## Uninstall / data cleanup
+
+Removing the skill only removes the **code**; the **data root persists** — deliberately,
+so you don't lose run history by upgrading or reinstalling. If you actually want to
+delete your analysis history, do so explicitly:
+
+- **git-clone channel:** delete the checkout and its symlink(s), e.g.
+  `rm "$HOME/.claude/skills/project-analysis"` (repeat for each client you registered),
+  then remove the cloned directory itself.
+- **`npx skills` channel:** `npx skills remove project-analysis -g` (or without `-g` for
+  a project-local install; add `--agent <agent>` to target one agent, `-y` to skip
+  prompts).
+- **Claude Code plugin channel:** `/plugin uninstall project-analysis@project-analysis-marketplace`
+  (or remove the whole marketplace with
+  `/plugin marketplace remove project-analysis-marketplace`, which also uninstalls any
+  plugins installed from it).
+
+**None of the above deletes the data root.** To remove it as well:
+
+```bash
+# macOS
+rm -rf "${PROJECT_ANALYSIS_HOME:-$HOME/Library/Application Support/project-analysis}"
+
+# Linux / WSL2
+rm -rf "${PROJECT_ANALYSIS_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/project-analysis}"
+```
+
+Double-check `$PROJECT_ANALYSIS_HOME` isn't set to something unexpected before running
+this — it deletes every run, all state, and all exports.
 
 ## Design
 
@@ -129,9 +251,11 @@ The skill writes Markdown under `output/` and an offline HTML export under `expo
 
 ## Privacy & packaging
 
-Per-target analysis output is never committed: runs write to gitignored `output/` and
-`state/`. The tracked tree is **target-neutral** — `SKILL.md`, the lens definitions, the
-templates, the tool wrapper, and the generic `tools/README.md`.
+Per-target analysis output is never committed and never lives inside this checkout: runs
+write to the external data root described above (`$PROJECT_ANALYSIS_HOME` and its
+platform defaults), not to any `output/`/`exported/` directory inside the skill code. The
+tracked tree is **target-neutral** — `SKILL.md`, the lens definitions, the templates, the
+tool wrapper, and the generic `tools/README.md`.
 
 Per-target **acceptance evidence** (spike bake-offs, benchmark checklists, and validation
 runs against real repositories — which contain real author names, internal architecture,
@@ -140,6 +264,9 @@ reachable for our own reproducibility but never shipped. Git history is likewise
 that evidence: it was removed with `git filter-repo`. (Commit messages and tags may still
 reference a target project by name — that was an explicit scope choice; the requirement is
 that no target's evidence *content* is tracked or retrievable from history.)
+
+Third-party components this project installs, vendors, or invokes (and their licenses)
+are listed in [`NOTICE.md`](NOTICE.md).
 
 ## Environment and coverage
 
@@ -163,12 +290,52 @@ your preferred manager (`nvm`, `asdf`, `mise`, Homebrew, system packages, and so
 
 The project intentionally does not prescribe how Node, Go, or standalone binaries are
 installed. Validated tool versions and invocation details are listed in
-[`tools/README.md`](tools/README.md); actual versions and resulting coverage are recorded
-in every run's manifests. Developers working on the wrapper add `--dev` to bootstrap and
-run tests with `wrapper/.venv/bin/python -m pytest`.
+[`tools/README.md`](tools/README.md) and the machine-readable
+[`tools/manifest.json`](tools/manifest.json) (validated against
+[`tools/manifest.schema.json`](tools/manifest.schema.json)); actual versions and
+resulting coverage are recorded in every run's manifests.
 
-## Tracking
+### Manual setup: JS/TS lane (dependency-cruiser + TypeScript)
 
-Linear: team `57blocks-Project-Analysis`, project **Project Analysis**
-(issues 57B-5 … 57B-20, four phase milestones with user review at each exit).
-The team key stays `57B` and existing `57B-*` issue identifiers are unchanged.
+There is no automated installer for this lane yet (planned for a later release): install
+the analyzer-owned, lockfile-frozen copy yourself, with your own Node runtime and pnpm,
+into the **data-root runtime location** (`<data-root>/runtime/<contract>/node_tools`;
+`bin/project-analysis`/bootstrap's own output reports the current `<contract>` value —
+`1` at the time of writing). The tracked `wrapper/node_tools/package.json` +
+`pnpm-lock.yaml` are always the install source; `pnpm install --dir` needs those two
+files alongside wherever it writes `node_modules/`, so copy them there first, then
+install in place:
+
+```bash
+mkdir -p "<data-root>/runtime/1/node_tools"
+cp wrapper/node_tools/package.json wrapper/node_tools/pnpm-lock.yaml \
+   "<data-root>/runtime/1/node_tools/"
+pnpm install --dir "<data-root>/runtime/1/node_tools" --frozen-lockfile --ignore-scripts
+```
+
+This installs dependency-cruiser 18.1.0 + TypeScript 5.9.3 exactly as pinned. A legacy
+install directly into `wrapper/node_tools/node_modules` (pre-relocation) is still
+honored as a fallback if the runtime location above is empty, but new installs should
+target the runtime location above. See `wrapper/README.md` for more detail.
+
+### Manual setup: Go lane (`callgraph`)
+
+Likewise install the pinned `callgraph` binary yourself, with your own Go toolchain,
+into the data-root runtime location:
+
+```bash
+GOBIN="<data-root>/runtime/1/go_tools/bin" go install golang.org/x/tools/cmd/callgraph@v0.48.0
+```
+
+A legacy install into `wrapper/go_tools/bin` (pre-relocation) is still honored as a
+fallback if the runtime location above has no binary, but new installs should target the
+runtime location above.
+
+### Running tests
+
+Developers working on the wrapper add `--dev` to bootstrap first
+(`python3 -m analysis_wrapper.bootstrap --dev`, from `wrapper/`) — `pytest` ships in the
+`dev` extra and is not installed by a plain bootstrap. Then run tests with the
+bootstrapped interpreter, e.g. `<venv>/bin/python -m pytest` where `<venv>` is the path
+`bootstrap` printed (or use `bin/project-analysis`'s own venv resolution — see
+"Dev channel" above).

@@ -1,0 +1,18 @@
+{
+  "name": "project-analysis-marketplace",
+  "owner": {
+    "name": "57blocks"
+  },
+  "plugins": [
+    {
+      "name": "project-analysis",
+      "source": "./",
+      "description": "Read-only codebase diagnostician: project overview + diagnosis (module map, ranked problems with evidence, honest coverage). v1 scope is overview + diagnosis only; module drill-down is not yet supported.",
+      "version": "1.0.0-dev",
+      "author": {
+        "name": "57blocks"
+      },
+      "license": "MIT"
+    }
+  ]
+}
