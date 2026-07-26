@@ -24,6 +24,12 @@ def _write(run: Path, relpath: str, obj) -> None:
     path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", "utf-8")
 
 
+def _write_text(run: Path, relpath: str, text: str) -> None:
+    path = run / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, "utf-8")
+
+
 def _capabilities(*, scan_date="2026-07-23", status="complete", details=None):
     return {
         "schema_version": "2.0.0", "project_ref": "proj", "scan_date": scan_date,
@@ -849,7 +855,7 @@ def test_capability_applicable_flag_change_is_reclassified(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 9. 57B-112 §2: mixed-era row-key collapse (lane_coverage / signals).
+# 9. 57B-112 §2 regressions: mixed-era row-key collapse + totals off-by-one.
 # ---------------------------------------------------------------------------
 
 
@@ -936,18 +942,14 @@ def test_signals_two_legacy_repos_sharing_tool_do_not_collapse(tmp_path):
     assert "scc / api" in changed_keys and "scc / worker" in changed_keys
 
 
-# ---------------------------------------------------------------------------
-# 10. 57B-112 §2: summary.total_differences off-by-one against by_section.
-# ---------------------------------------------------------------------------
-
-
 def test_summary_total_differences_always_equals_sum_of_by_section(tmp_path):
-    """summary.total_differences must be COMPUTED FROM summary.by_section
-    (never a second, independently-accumulated number) so the two can never
-    diverge again -- previously `total` also added the prose lanes'
-    contribution while `by_section` silently omitted them entirely (98,475
-    vs 98,474 on a real mainline comparison, traced to a single
-    `not_targeted` addition nobody could find in the per-section breakdown)."""
+    """57B-112 §2: summary.total_differences must be COMPUTED FROM
+    summary.by_section (never a second, independently-accumulated number) so
+    the two can never diverge again -- previously `total` also added the
+    prose lanes' contribution while `by_section` silently omitted them
+    entirely (98,475 vs 98,474 on a real mainline comparison, traced to a
+    single `not_targeted` addition nobody could find in the per-section
+    breakdown)."""
     a = _write_minimal_run(tmp_path / "a", workspace_root="/ws-a")
     b = _write_minimal_run(
         tmp_path / "b", workspace_root="/ws-b",
@@ -964,3 +966,232 @@ def test_summary_total_differences_always_equals_sum_of_by_section(tmp_path):
     assert by_section.get("prose/not_targeted") == 1
     assert all(count == 0 for name, count in by_section.items()
               if name != "prose/not_targeted")
+
+
+# ---------------------------------------------------------------------------
+# 10. 57B-114: --semantic mode.
+# ---------------------------------------------------------------------------
+
+
+def _finding_row(finding_id, *, lens="architecture", priority="high", confidence="medium",
+                 affected_modules=None, refs=None):
+    return {
+        "finding_id": finding_id, "claim": f"claim for {finding_id}", "lens": lens,
+        "priority": priority, "confidence": confidence,
+        "affected_modules": affected_modules or ["mod-a"],
+        "evidence": [{"fact": "observed", "basis": "static-reference",
+                     "refs": refs or ["api@NON-GIT:internal/handlers/foo.go:10"]}],
+        "evidence_basis": ["static-reference"],
+        "impact": "impact text", "limitations": "none", "suggested_direction": "investigate",
+    }
+
+
+def _findings_doc(rows):
+    return {"schema_version": "2.0.0", "project_ref": "proj", "scan_date": "2026-07-23",
+            "findings": rows}
+
+
+def _module_map_doc(dispositions, modules):
+    return {"schema_version": "2.0.0", "project_ref": "proj",
+            "candidate_dispositions": dispositions, "modules": modules}
+
+
+def test_findings_matched_by_evidence_overlap_tolerates_differing_ids(tmp_path):
+    """--semantic must match the SAME underlying finding across a migration
+    that renumbers finding_ids, by evidence overlap (same repo+file,
+    overlapping line ranges, same lens) -- not by id."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "findings.json", _findings_doc([
+        _finding_row("finding-base-shared", priority="high",
+                    refs=["api@NON-GIT:internal/handlers/foo.go:10",
+                          "api@NON-GIT:internal/handlers/foo.go:15"]),
+        _finding_row("finding-base-only", lens="performance",
+                    refs=["api@NON-GIT:internal/other.go:1"]),
+    ]))
+    _write(b, "findings.json", _findings_doc([
+        _finding_row("finding-candidate-shared", priority="critical",
+                    refs=["api@NON-GIT:internal/handlers/foo.go:12",
+                          "api@NON-GIT:internal/handlers/foo.go:20"]),
+        _finding_row("finding-candidate-only", lens="security",
+                    refs=["api@NON-GIT:internal/new.go:1"]),
+    ]))
+
+    report = parity.compare_semantic(a, b)
+
+    findings = report["findings"]
+    assert findings["unmatched_left"] == ["finding-base-only"]
+    assert findings["unmatched_right"] == ["finding-candidate-only"]
+    assert len(findings["matched"]) == 1
+    pair = findings["matched"][0]
+    assert pair["base_finding_id"] == "finding-base-shared"
+    assert pair["candidate_finding_id"] == "finding-candidate-shared"
+    assert pair["deltas"] == {"priority": {"base": "high", "candidate": "critical"}}
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_findings_pure_id_churn_has_zero_semantic_differences(tmp_path):
+    """The whole point of --semantic: identical substance under a different
+    finding_id must compare clean."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    refs = ["api@NON-GIT:internal/handlers/foo.go:10"]
+    _write(a, "findings.json", _findings_doc([_finding_row("finding-old-id", refs=refs)]))
+    _write(b, "findings.json", _findings_doc([_finding_row("finding-new-id", refs=refs)]))
+
+    report = parity.compare_semantic(a, b)
+
+    findings = report["findings"]
+    assert findings["unmatched_left"] == [] and findings["unmatched_right"] == []
+    assert len(findings["matched"]) == 1
+    assert findings["matched"][0]["deltas"] == {}
+    assert not parity.has_semantic_mode_differences(report)
+
+
+def test_module_map_classification_and_membership_diffs(tmp_path):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "module-map.json", _module_map_doc(
+        [{"candidate_id": "mc-1", "disposition": "standalone", "module_ids": ["mod-a"],
+          "reason": ""}],
+        [{"module_id": "mod-a", "name": "Mod A", "classification": "business",
+          "aliases": [], "confidence": "high"}]))
+    _write(b, "module-map.json", _module_map_doc(
+        [{"candidate_id": "mc-1", "disposition": "standalone", "module_ids": ["mod-a"],
+          "reason": ""},
+         {"candidate_id": "mc-2", "disposition": "standalone", "module_ids": ["mod-b"],
+          "reason": ""}],
+        [{"module_id": "mod-a", "name": "Mod A", "classification": "platform",
+          "aliases": [], "confidence": "high"},
+         {"module_id": "mod-b", "name": "Mod B", "classification": "business",
+          "aliases": [], "confidence": "high"}]))
+
+    report = parity.compare_semantic(a, b)
+
+    module_map = report["module_map"]
+    assert module_map["added"] == ["mod-b"]
+    assert module_map["removed"] == []
+    assert len(module_map["changed"]) == 1
+    changed = module_map["changed"][0]
+    assert changed["module_id"] == "mod-a"
+    assert changed["base"]["classification"] == "business"
+    assert changed["candidate"]["classification"] == "platform"
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_disposition_totals_mismatch_is_flagged(tmp_path):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "module-map.json", _module_map_doc(
+        [{"candidate_id": "mc-1", "disposition": "standalone", "module_ids": ["mod-a"],
+          "reason": ""}],
+        [{"module_id": "mod-a", "name": "Mod A", "classification": "business",
+          "aliases": [], "confidence": "high"}]))
+    _write(b, "module-map.json", _module_map_doc(
+        [{"candidate_id": "mc-1", "disposition": "excluded", "module_ids": [], "reason": "dup"}],
+        []))
+
+    report = parity.compare_semantic(a, b)
+
+    disposition = report["disposition_totals"]
+    assert not disposition["equal"]
+    assert disposition["base"]["standalone"] == 1
+    assert disposition["candidate"]["excluded"] == 1
+    assert "standalone" in disposition["differing_classes"]
+    assert "excluded" in disposition["differing_classes"]
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_citations_and_section_completeness(tmp_path):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    base_overview = (
+        "## Executive summary\n"
+        "This finding is backed by `api@NON-GIT:internal/handlers/foo.go:10` "
+        "and also cites api@NON-GIT:internal/handlers/bar.go:5 directly.\n\n"
+        "## Analysis scope\n"
+        "Short section.\n"
+    )
+    candidate_overview = (
+        "## Executive summary\n"
+        "This finding is backed by `api@NON-GIT:internal/handlers/foo.go:10` "
+        "and a NEW citation api@NON-GIT:internal/handlers/baz.go:9 as well, "
+        "with quite a lot more words describing the same evidence in depth.\n\n"
+    )
+    _write_text(a, "overview.md", base_overview)
+    _write_text(b, "overview.md", candidate_overview)
+
+    report = parity.compare_semantic(a, b)
+
+    citations = report["citations"]["overview.md"]
+    assert citations["removed"] == ["api@NON-GIT:internal/handlers/bar.go:5"]
+    assert citations["added"] == ["api@NON-GIT:internal/handlers/baz.go:9"]
+    assert report["citations"]["technical-overview.md"] == "not present in both runs"
+
+    completeness = report["section_completeness"]["overview.md"]
+    exec_summary = completeness["sections"]["Executive summary"]
+    assert exec_summary["equal_or_greater"] is True
+    scope = completeness["sections"]["Analysis scope"]
+    assert scope["candidate_present"] is False
+    assert scope["equal_or_greater"] is False
+    assert report["section_completeness"]["technical-overview.md"] == "not present in both runs"
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_semantic_coverage_reflects_byte_level_capability_and_signal_sections(tmp_path):
+    """`coverage` is a semantic READING of compare()'s own sections, not a
+    second implementation of the same check."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b", capability_status="partial")
+
+    report = parity.compare_semantic(a, b)
+
+    coverage = report["coverage"]
+    assert coverage["capability_records"]["equal"] is False
+    assert coverage["capability_records"]["difference_count"] == 1
+    assert coverage["lane_coverage"]["equal"] is True
+    assert coverage["signals"]["equal"] is True
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_semantic_mode_degrades_gracefully_when_narrative_artifacts_absent(tmp_path):
+    """Deterministic-only runs have no findings.json/module-map.json/
+    narrative reports at all -- every section depending on one must degrade
+    to the literal 'not present in both runs' marker, never crash, and never
+    count as a difference."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+
+    report = parity.compare_semantic(a, b)
+
+    assert report["findings"] == "not present in both runs"
+    assert report["module_map"] == "not present in both runs"
+    assert report["disposition_totals"] == "not present in both runs"
+    for name in ("overview.md", "technical-overview.md"):
+        assert report["citations"][name] == "not present in both runs"
+        assert report["section_completeness"][name] == "not present in both runs"
+    assert not parity.has_semantic_mode_differences(report)
+
+
+def test_cli_compare_runs_semantic_writes_default_report_and_prints_summary(
+        tmp_path, capsys, monkeypatch):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["compare-runs", str(a), str(b), "--semantic"]) == 0
+    default_path = tmp_path / "parity-semantic.json"
+    assert default_path.is_file()
+    written = json.loads(default_path.read_text("utf-8"))
+    assert written["schema_version"] == parity.SEMANTIC_SCHEMA_VERSION
+    out = capsys.readouterr().out
+    assert "findings: not present in both runs" in out
+
+    b_mutated = _write_minimal_run(tmp_path / "b-mutated", capability_status="partial")
+    custom_path = tmp_path / "custom-semantic.json"
+    assert main([
+        "compare-runs", str(a), str(b_mutated), "--semantic", "--report", str(custom_path),
+    ]) == 3
+    assert custom_path.is_file()
+    assert json.loads(custom_path.read_text("utf-8"))["coverage"]["capability_records"][
+        "equal"] is False
