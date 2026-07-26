@@ -1,3 +1,19 @@
+---
+shard: repo
+# shard: every bullet (coverage asymmetry, test wiring, assertion-quality
+#   sampling, type/migration nets, operational-state signals) is a per-repo
+#   observation. The Rules section's "Non-git targets: this lens is
+#   unavailable" is itself a PER-REPO fact -- some workspace repos may be
+#   non-git while siblings are git -- which a repo shard represents
+#   naturally (one shard reports unavailable, siblings report their own
+#   findings), corrected from an initial workspace guess inherited from the
+#   old README grouping (shared history-lane invocation with
+#   hotspots-change-friction, not a shared need for cross-repo comparison).
+signals: [git-history, scc]
+# signals: lenses/coverage-map.json requires only {scc}; this file's own
+#   "Signals:" line additionally names git-history ("do tests change
+#   alongside the code they cover?"), so it is added.
+---
 # Lens: safety-net (group B)
 
 **Question:** when someone changes this code, what actually catches mistakes —

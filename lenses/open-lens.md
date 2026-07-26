@@ -1,3 +1,18 @@
+---
+shard: workspace
+# shard: this file's own "Signals:" line says "ALL views + manifests +
+#   discovery-report + module candidates -- this is free observation,
+#   bounded by evidence discipline, not by a tool"; it is also the sole
+#   basis for cross-repo catalog-drift and UI/backend contract-mismatch
+#   findings ("Contract mismatches -- UI calling endpoints no analyzed
+#   service exposes"), both inherently workspace-wide questions.
+signals: []
+# signals: lenses/coverage-map.json records "tools": [] for open-lens
+#   deliberately -- no single required tool. templates.py's resolver must
+#   treat an EMPTY signals list here as "every tool this run recorded",
+#   never as "no tool" -- documented explicitly so a future maintainer does
+#   not read the empty list as "nothing".
+---
 # Lens: open-lens (group C)
 
 **Question:** what matters about this codebase that no other lens was built

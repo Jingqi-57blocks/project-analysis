@@ -1,3 +1,15 @@
+---
+shard: repo
+# shard: every bullet (unused Go symbols, JS/TS orphan modules, zombie
+#   features) is a within-one-repo determination; staticcheck/cruiser/go-list
+#   are all per-repo tool invocations and nothing here compares repos.
+signals: [dependency-cruiser, go-list, staticcheck]
+# signals: lenses/coverage-map.json requires only {staticcheck} for coverage
+#   grading, but this file's own "Signals:" line names dependency-cruiser
+#   (JS/TS orphan modules) and go-list (packages outside the import graph)
+#   as PRIMARY evidence for this lens, not mere corroboration -- both are
+#   added so the lens task actually receives the views its own body needs.
+---
 # Lens: dead-code (group A)
 
 **Question:** what code exists but demonstrably isn't wired in — and what

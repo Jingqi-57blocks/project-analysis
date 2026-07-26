@@ -1,3 +1,19 @@
+---
+shard: workspace
+# shard: this lens's own first bullet below ("Size/shape imbalance -- one
+#   repo or folder dwarfing the rest of the system") is a cross-repo
+#   comparison of scc line counts; a per-repo task could never see a
+#   sibling repo's numbers to make that call, so the whole lens stays one
+#   workspace-wide task (corrected from an initial per-repo guess).
+signals: [scc, dependency-cruiser, go-list]
+# signals: union of lenses/coverage-map.json's required set for
+#   structure-inventory (scc, dependency-cruiser, go-list -- the tested
+#   catalog workspace_metrics.py uses for coverage grading) with this file's
+#   own "Signals:" line below (scc, go-list). dependency-cruiser is kept
+#   because coverage-map.json requires it even though the prose line omits
+#   it -- it backs the "layout vs claimed structure" bullet's module-graph
+#   check.
+---
 # Lens: structure-inventory (group A)
 
 **Question:** what is this codebase made of, and where does its shape already

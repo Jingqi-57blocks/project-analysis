@@ -1,3 +1,17 @@
+---
+shard: workspace
+# shard: the "Cross-stack contracts" bullet below explicitly needs
+#   endpoints/paths shared between a UI repo and an API repo in the SAME
+#   task -- a per-repo shard could only ever see one side of that
+#   correlation, so this lens stays one workspace-wide task.
+signals: [dependency-cruiser, go-list, staticcheck]
+# signals: matches lenses/coverage-map.json's required set for
+#   dependencies-cycles exactly ({dependency-cruiser, go-list, staticcheck}).
+#   This file's own "Signals:" line does not mention staticcheck, but
+#   coverage-map.json is workspace_metrics.py's tested, authoritative
+#   catalog (test_skill_hygiene.py keeps it in lockstep with the installed
+#   lens set), so it is kept rather than dropped.
+---
 # Lens: dependencies-cycles (group A)
 
 **Question:** where does the dependency structure make change expensive —
