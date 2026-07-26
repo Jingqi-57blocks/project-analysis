@@ -193,6 +193,24 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
   ownership-concentration (bus-factor proxy) lenses, citations are non-reproducible
   (`repo@NON-GIT:path:line`), results are never cached or reused. Git is required for
   full provenance.
+  **Non-git container limitation:** when git repos sit inside a stack-bearing directory
+  that itself has no root manifest (`package.json`/`go.mod`) — e.g. `services/{a,b}`
+  where `a`/`b` are git repos but `services/` is not — the container becomes ONE
+  reduced-coverage non-git target, and the child git repos are disclosed as "contained
+  in … scanned as part of the canonical non-git project", not scanned with their own
+  full git provenance. This holds for both the baseline run and `--only services`.
+  **Workaround: `--repo <child>` works.** Naming a child directly (`--repo a`) makes
+  the container (`services`) fail the allowlist and drop out of the non-git candidate
+  set entirely, which admits `a` as a full git target with real history/provenance —
+  so the degradation is NOT unconditional; `--repo <child>` is a working escape hatch
+  out of it.
+- **Finding prior runs:** `list [--project <key>] [--json]` is a read-only inventory of
+  every run under `<data-root>/output/` — run id, date, language, kind
+  (overview/drilldown), status (complete / inspection-only / incomplete with its resume
+  stage), resolved location, and which run is `current`/`latest_completed`. It never
+  creates the data root or writes anything, and a corrupt/partial run directory is
+  reported unreadable rather than crashed on. With no runs at all it prints a friendly
+  message and the data-root path (exit 0, not an error).
 
 ## Run lifecycle commands (wrapper-managed checkpoints)
 
@@ -209,6 +227,15 @@ under `<data-root>/output/`, resolved automatically — no flag needed):
   Hosts that cannot expose model or effort omit those flags; provenance records the
   value as `unknown`, never as a guessed default. (`--skill-root` is still accepted for
   older invocations but is a no-op here — it never determines where data lives; omit it.)
+  **Scope targeting** (large workspaces): `--repo <name>[,<name>...]` (repeatable too) is
+  an allowlist matched against a repo's basename or workspace-relative path — an
+  unmatched value is a hard error, never a silent no-op. `--only <relative-path>` scopes
+  discovery to one workspace-relative subdirectory. Order: `--only` narrows first, then
+  `--repo`, then the pre-existing `--exclude` denylist can still remove members from
+  what `--repo` selected — all combinable. Every repo scoped out this way is disclosed
+  (never a silent subset): in `discovery-report.json`'s `not_targeted` list and in its
+  dedicated `scope_narrowing` block (`only_path`, `repo_filter`, `excluded`), and echoed
+  in the CLI's own printed output.
 - `status --run <run-dir>` — prints the resume point and staleness (exit 5 +
   a per-repo `old -> new` list when the workspace moved). **Fresh + incomplete
   → resume from the printed next stage instead of starting over; stale → mint

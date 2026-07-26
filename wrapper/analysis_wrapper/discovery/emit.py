@@ -159,9 +159,25 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     return target, cand.candidates, report
 
 
+def _match_keys(path: Path, workspace_root: Path) -> set[str]:
+    """A repo/project's basename plus (when it is under ``workspace_root``)
+    its workspace-relative posix path — the two forms an operator can name a
+    repo by on the command line (``--repo api`` or ``--repo services/api``,
+    the latter disambiguating same-basename repos in different subtrees)."""
+    resolved = path.resolve()
+    keys = {resolved.name}
+    try:
+        keys.add(resolved.relative_to(workspace_root).as_posix())
+    except ValueError:
+        pass
+    return keys
+
+
 def discover(workspace_root: str | Path,
              exclude_names: list[str] | None = None,
-             analyzer_root: str | Path | None = None) -> tuple[TargetSpec, dict]:
+             analyzer_root: str | Path | None = None,
+             include_repos: list[str] | None = None,
+             only_path: str | None = None) -> tuple[TargetSpec, dict]:
     """Run all producers; return (TargetSpec, discovery report dict).
 
     ``analyzer_root`` is the analyzer's own checkout, excluded by canonical path
@@ -169,16 +185,59 @@ def discover(workspace_root: str | Path,
     package install location and needs no operator input; self-exclusion is
     independent of ``exclude_names``. If the analyzer is embedded inside a
     legitimate target repo we FAIL CLOSED (see ``self_exclusion``).
+
+    Scope targeting (57B-110): ``only_path`` restricts discovery to one
+    workspace-relative subdirectory; ``include_repos`` is an ALLOWLIST of
+    repo names (matched against a repo's basename or its workspace-relative
+    posix path — see :func:`_match_keys`). Order of application, applied to
+    every candidate repo/non-git project independently: (1) ``only_path``
+    scoping, (2) ``include_repos`` allowlist, (3) ``exclude_names`` denylist
+    (unchanged, pre-existing) — so ``--repo`` and ``--exclude`` are fully
+    combinable (``--repo`` narrows the candidate set down; ``--exclude`` can
+    still remove members from what ``--repo`` selected). Every repo excluded
+    by scope narrowing is disclosed in the report's ``not_targeted`` list AND
+    in the dedicated ``scope_narrowing`` block, same as a pre-existing
+    ``--exclude`` — never a silent subset. An ``include_repos`` entry that
+    matches nothing anywhere in the workspace is a hard, fail-closed error
+    (never a silent no-op over the full workspace or an empty result).
     """
     inv = inventory.find_repos(workspace_root)
     excluded = set(exclude_names or [])
+    include_set = set(include_repos or [])
+    matched_include: set[str] = set()
+    workspace_resolved = Path(inv.workspace_root)
     analyzer = self_exclusion.resolve_analyzer_root(analyzer_root)
+
+    only_root: Path | None = None
+    if only_path:
+        candidate = (workspace_resolved / only_path).resolve()
+        if not path_contains(workspace_resolved, candidate):
+            raise ValueError(
+                f"--only path {only_path!r} escapes the workspace root "
+                f"{workspace_resolved}")
+        if not candidate.is_dir():
+            raise ValueError(
+                f"--only path {only_path!r} is not a directory under "
+                f"{workspace_resolved}")
+        only_root = candidate
 
     repo_targets: list[RepoTarget] = []
     all_candidates = []
     repo_reports: list[dict] = []
     disclosed: list[str] = list(inv.skipped)
     reduced: list[str] = []
+    scope_excluded: list[str] = []
+
+    def in_only_scope(path: Path) -> bool:
+        return only_root is None or path_contains(only_root, path)
+
+    def repo_selected(path: Path) -> bool:
+        if not include_set:
+            return True
+        keys = _match_keys(path, workspace_resolved)
+        hit = keys & include_set
+        matched_include.update(hit)
+        return bool(hit)
 
     def admit(path: Path, repo_id: str) -> None:
         for existing in repo_targets:
@@ -215,17 +274,51 @@ def discover(workspace_root: str | Path,
     for path in raw_non_git:
         if self_excluded(path):
             continue
+        if not in_only_scope(path):
+            reason = f"{path} (outside --only scope {only_path!r})"
+            disclosed.append(reason)
+            scope_excluded.append(reason)
+            continue
+        if not repo_selected(path):
+            reason = f"{path} (not selected by --repo)"
+            disclosed.append(reason)
+            scope_excluded.append(reason)
+            continue
         if path.name in excluded:
             disclosed.append(f"{path} (excluded by operator flag)")
             continue
         non_git_paths.append(path)
 
+    # Tracks, per git-repo path, whether it survived self-exclusion/--only/
+    # --repo/--exclude gating on its OWN merits (True) or was itself excluded
+    # (False). ``inv.repos`` is a top-down walk (inventory.find_repos appends
+    # a directory's own hit before descending into its children), so by the
+    # time a nested hit is processed its enclosing repo's entry is already
+    # present here — letting the nested-repo disclosure below tell the truth
+    # about whether the enclosing repo was actually scanned.
+    repo_scope_status: dict[str, bool] = {}
+
     for hit in inv.repos:
         if self_excluded(hit.path):
+            repo_scope_status[hit.path] = False
+            continue
+        if not in_only_scope(Path(hit.path)):
+            reason = f"{hit.path} (outside --only scope {only_path!r})"
+            disclosed.append(reason)
+            scope_excluded.append(reason)
+            repo_scope_status[hit.path] = False
+            continue
+        if not repo_selected(Path(hit.path)):
+            reason = f"{hit.path} (not selected by --repo)"
+            disclosed.append(reason)
+            scope_excluded.append(reason)
+            repo_scope_status[hit.path] = False
             continue
         if Path(hit.path).name in excluded:
             disclosed.append(f"{hit.path} (excluded by operator flag)")
+            repo_scope_status[hit.path] = False
             continue
+        repo_scope_status[hit.path] = True
         if hit.nested_in:
             if Path(hit.nested_in).resolve() == analyzer:
                 # The enclosing repo is the self-excluded analyzer, so this
@@ -234,6 +327,14 @@ def discover(workspace_root: str | Path,
                 disclosed.append(
                     f"{hit.path} (nested in the analyzer-owned checkout — "
                     f"not scanned)")
+            elif repo_scope_status.get(hit.nested_in) is False:
+                # The enclosing repo itself was excluded from this run's scope
+                # (self-excluded, --only/--repo narrowed out, or --exclude'd),
+                # so nothing scanned this subtree either — the "scanned as
+                # part of the enclosing repo" wording below would be false.
+                disclosed.append(
+                    f"{hit.path} (nested in {hit.nested_in}, which is excluded "
+                    f"from this run's scope — not scanned)")
             else:
                 disclosed.append(
                     f"{hit.path} (nested in {hit.nested_in} — scanned as part "
@@ -249,6 +350,27 @@ def discover(workspace_root: str | Path,
             continue
         admit(Path(hit.path), hit.repo_id)
 
+    unmatched_include = include_set - matched_include
+    if unmatched_include:
+        all_candidate_paths = [Path(p) for p in git_paths] + raw_non_git
+        if only_root is not None:
+            # Scoped to --only: the unfiltered inventory would list repos
+            # --only itself excludes, which reads as self-contradictory
+            # ("matched no repository ... available: [the very name it
+            # rejected]"). Report what's actually reachable under --only.
+            location = "in scope"
+            candidate_paths = [p for p in all_candidate_paths if in_only_scope(p)]
+        else:
+            location = "in the workspace"
+            candidate_paths = all_candidate_paths
+        available = sorted({
+            key for path in candidate_paths
+            for key in _match_keys(path, workspace_resolved)
+        })
+        raise ValueError(
+            f"--repo value(s) matched no repository {location}: "
+            f"{sorted(unmatched_include)}; available: {available}")
+
     for path in non_git_paths:
         owner = next((Path(target.path).resolve() for target in repo_targets
                       if Path(target.path).resolve() != path
@@ -263,6 +385,35 @@ def discover(workspace_root: str | Path,
             f"{path} (non-git folder: targeted with reduced coverage — "
             f"no history lane, non-reproducible citations, no caching)")
         admit(path, stable_repo_id(str(path)))
+
+    if (only_path or include_set) and not repo_targets:
+        # A narrowed run (--only/--repo) that ends up with zero execution
+        # targets is never allowed to mint silently: without this, a request
+        # like `--repo <name-that-matches-a-nested-repo-whose-enclosing-repo-
+        # was-just-excluded>` (or `--only <a-dir-with-no-repos>`) would run to
+        # completion, write a run directory, and exit 0 while claiming
+        # coverage it never had (the enclosing-repo case is exactly what the
+        # nested-repo disclosure above now refuses to misstate). Scoped to
+        # the NARROWED case only — an unnarrowed empty workspace, or a
+        # legitimate non-git/no-repos workspace with no --only/--repo given,
+        # is a pre-existing, intentionally-supported outcome and must keep
+        # working.
+        requested_bits = []
+        if only_path:
+            requested_bits.append(f"--only={only_path!r}")
+        if include_set:
+            requested_bits.append(f"--repo={sorted(include_set)!r}")
+        available = sorted({
+            key for path in [Path(p) for p in git_paths] + raw_non_git
+            for key in _match_keys(path, workspace_resolved)
+        })
+        raise ValueError(
+            "narrowed scope ({}) matched zero analysis targets in this "
+            "workspace; matched candidate name(s): {}; excluded: {}; "
+            "available in workspace: {}".format(
+                ", ".join(requested_bits),
+                sorted(matched_include) if matched_include else "(none)",
+                sorted(disclosed), available))
 
     workspace = Path(inv.workspace_root).resolve()
     root_targeted = any(Path(target.path).resolve() == workspace
@@ -289,6 +440,18 @@ def discover(workspace_root: str | Path,
         "not_targeted": sorted(disclosed),
         "reduced_coverage_targets": sorted(reduced),
         "integration_candidate_count": len(all_candidates),
+        # 57B-110: honest-disclosure surface for operator-narrowed scope,
+        # dedicated (machine-readable) alongside the same entries already
+        # folded into `not_targeted` above (57B-91-style "one fact, two
+        # views" — never a silent subset). `only_path`/`repo_filter` record
+        # the narrowing REQUEST even when it excluded nothing (e.g. --repo
+        # named every repo in the workspace); `excluded` lists exactly which
+        # candidates it removed and why.
+        "scope_narrowing": {
+            "only_path": only_path or None,
+            "repo_filter": sorted(include_set) if include_set else None,
+            "excluded": sorted(scope_excluded),
+        },
         # route_inventory/ui_route_linkage (route liveness: a frontend joined
         # against backend route tables) retired here (57B-84 B2):
         # RouteInventoryProvider/UiRouteLinkageProvider are now the
