@@ -64,5 +64,7 @@ Tracked in Linear 57B-89.
   channel, Python 3.11+ is stated as the only hard prerequisite, results are documented at the
   external data root, and uninstall now warns that the data root persists. v1 scope (overview
   and diagnosis only; module drill-down not yet supported) is stated explicitly.
+- The git-clone dev channel registers the checkout as `project-analysis-local`, so a
+  checkout and an installed copy can coexist without colliding.
 - `output/README.md`, `state/README.md`, `.gitignore` comments — corrected to reflect that runs
   write under the external data root; these in-tree paths are legacy placeholders only.
