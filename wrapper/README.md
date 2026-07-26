@@ -91,6 +91,23 @@ of it is a tested, thin analyzer-owned layer (`git_history/worker.py`,
 
 ## Analyzer-owned Node toolchain, ast-grep, and SQLGlot
 
+`<venv>/bin/project-analysis-wrapper setup` (57B-92) automates the JS/TS and Go manual
+procedures documented below end to end, after showing its plan and getting the user's
+consent (`--yes` for prior authorization; the plan is still printed first). `setup
+--plan`/`--dry-run` previews without installing or touching the network, and
+`--lane js|go|all` narrows the scope. It installs only the analyzer-managed pieces below
+(never Node, pnpm, Go, or ast-grep themselves); a lane whose runtime is absent is
+reported and skipped, not attempted. The commands below remain the documented manual
+fallback and are exactly what `setup` itself runs.
+
+Non-interactive callers (scripts, agents, CI — anything without a TTY on stdin) are
+always declined by default and exit non-zero (`5`, consent declined) unless `--yes` is
+passed: `setup` never treats "no TTY" as "silently install". Pass `--yes` only after
+you have actually obtained the user's consent to the plan — with `--json`, the plan is
+still shown first (written to stderr, so stdout stays a single parseable apply-result
+document); with a TTY and no `--yes`, the interactive `[y/N]` prompt is also written to
+stderr for the same reason.
+
 For JS/TS analysis, developers prepare the pinned, lockfile-frozen packages with
 their own Node runtime and pnpm. The tracked `wrapper/node_tools/package.json` +
 `pnpm-lock.yaml` (code) are always the install SOURCE; the generated
