@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Callable
 
 from .executor import (SignalResult, WrapperSafetyError,
                        prepare_output_directory, run_tool,
@@ -63,6 +66,46 @@ def _run_one(args: argparse.Namespace, spec: TargetSpec, out: Path,
     )]
 
 
+def _resolve_jobs(requested: int | None) -> int:
+    """Bounded worker count for the sweep's thread pool (57B-115).
+
+    ``None`` (flag omitted) means "pick the default": ``min(8, cpu_count)``.
+    An explicit value must be >= 1 — ``1`` is not a special "disable
+    threading" sentinel handled elsewhere, it simply makes the pool a no-op
+    (see ``_run_tasks``), which is exactly today's serial call path.
+    """
+    if requested is None:
+        return min(8, os.cpu_count() or 1)
+    if requested < 1:
+        raise ValueError(f"--jobs must be >= 1, got {requested}")
+    return requested
+
+
+def _run_tasks(tasks: list[Callable[[], SignalResult]], *,
+              jobs: int) -> list[SignalResult]:
+    """Execute independent signal-tool invocations, at most ``jobs`` at once.
+
+    Every task is a fully-bound ``run_tool`` call (its target/tool/output
+    already fixed): parallelism only changes WHEN a subprocess runs, never
+    what gets written, since each task writes its own uniquely-named
+    artifacts (``<tool>-<artifact-key>`` or a cross-repo ``signal_id``) —
+    concurrent tasks never share an output path. Results are always
+    returned in the SAME order the tasks were submitted (the same order the
+    old serial ``for`` loop would have produced), regardless of completion
+    order or thread count, so a caller that sorts/serializes afterward (as
+    ``_record_summary`` does) gets byte-identical output whether this ran
+    with ``jobs=1`` or ``jobs=8``.
+
+    ``jobs <= 1`` (or fewer than two tasks, where a pool buys nothing) never
+    constructs a ``ThreadPoolExecutor`` at all — it calls each task directly
+    in a plain loop, i.e. today's exact serial path, unchanged.
+    """
+    if jobs <= 1 or len(tasks) <= 1:
+        return [task() for task in tasks]
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        return list(pool.map(lambda task: task(), tasks))
+
+
 def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
            identities, *,
            exclude_tool_names: frozenset[str] = frozenset()) -> list[SignalResult]:
@@ -72,9 +115,21 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
     exactly once, through their own capability providers, instead of also
     running here. The standalone ``run``/``sweep`` CLI subcommands are
     user-facing debug paths and never pass this — they keep executing every
-    tool directly, unchanged."""
-    results: list[SignalResult] = []
+    tool directly, unchanged.
+
+    Every (repo, tool) invocation below — plus the cross-repo per-family
+    jscpd pass — is subprocess-bound and independent of every other one, so
+    they are collected into a flat, deterministically-ordered task list
+    (``functools.partial`` binds each task's arguments immediately, avoiding
+    the classic late-binding-closure bug of capturing a loop variable by
+    reference) and handed to ``_run_tasks`` (57B-115), which runs up to
+    ``--jobs`` of them concurrently. Collection order — and therefore
+    everything written from ``results`` afterward — is identical to the
+    pre-57B-115 serial loop regardless of how many workers ran it; see
+    ``_run_tasks``'s own docstring.
+    """
     repos = sorted(spec.repos, key=lambda r: r.repo_id)
+    tasks: list[Callable[[], SignalResult]] = []
     for target in repos:
         definitions = local_tools(target)
         # Respect the CLI's reproducible history window instead of the registry default.
@@ -86,10 +141,10 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
         definitions += network_tools(target)
         if exclude_tool_names:
             definitions = [d for d in definitions if d.name not in exclude_tool_names]
+        repo_identity = identities.repository(target.repo_id)
         for definition in definitions:
-            results.append(run_tool(
-                definition, target, out, args.scan_date,
-                identities.repository(target.repo_id),
+            tasks.append(functools.partial(
+                run_tool, definition, target, out, args.scan_date, repo_identity,
                 allow_network=args.include_network,
             ))
     # Cross-repo duplication runs per LANGUAGE FAMILY: Phase 0 proved jscpd is
@@ -99,15 +154,15 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
         if len(members) < 2:
             continue
         definition = jscpd_multi(members)
-        results.append(run_tool(
-            definition, members[0], out, args.scan_date,
+        tasks.append(functools.partial(
+            run_tool, definition, members[0], out, args.scan_date,
             identities.repository(members[0].repo_id),
             additional_targets=members[1:], signal_id=f"jscpd-cross-{family}",
             additional_repository_identities=[
                 identities.repository(item.repo_id) for item in members[1:]],
             allow_network=args.include_network,
         ))
-    return results
+    return _run_tasks(tasks, jobs=_resolve_jobs(getattr(args, "jobs", None)))
 
 
 def _family_groups(repos: list) -> dict[str, list]:
@@ -147,6 +202,13 @@ def parser() -> argparse.ArgumentParser:
         help="comma-separated extra network hosts approved for the package "
              "lane (e.g. private git hosts found in package.json); unapproved "
              "hosts make the signal SKIPPED, never silently contacted",
+    )
+    result.add_argument(
+        "--jobs", type=int, default=None,
+        help="max concurrent signal-tool invocations for prepare-overview/"
+             "sweep (subprocess-bound work only — every write still happens "
+             "in the same deterministic order --jobs 1 would produce); "
+             "default: min(8, cpu count); --jobs 1 = today's exact serial path",
     )
     sub = result.add_subparsers(dest="command", required=True)
     one = sub.add_parser("run", help="run one tool against one repo")
