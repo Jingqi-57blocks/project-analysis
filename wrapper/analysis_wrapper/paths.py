@@ -176,6 +176,19 @@ def _resolve_data_root() -> Path:
     return root
 
 
+def resolved_data_root() -> Path:
+    """Public, non-mutating equivalent of ``_resolve_data_root()``: the same
+    precedence resolution plus the read-only safety check, but never mkdirs
+    the data root. For callers that must stay read-only (e.g. ``doctor``,
+    which advertises itself as never writing to the host — 57B-91 review
+    FIX 7) and only need to report where the data root WOULD resolve to,
+    without creating it as a side effect. Every other getter in this module
+    (``data_root()``, ``output_root()``, ``state_root()``, ``exported_root()``)
+    mkdirs; use those instead when the caller actually intends to write.
+    """
+    return _resolve_data_root()
+
+
 def data_root(*, target: str | Path | None = None) -> Path:
     """The root of every persistent artifact: ``state/``, ``output/``,
     ``exported/``, and the generated-runtime tree (see ``runtime_root()``).

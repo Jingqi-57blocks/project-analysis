@@ -321,6 +321,26 @@ def parser() -> argparse.ArgumentParser:
     compare_runs.add_argument(
         "--report", default="",
         help="optional path to write the full JSON parity report")
+    doctor = sub.add_parser(
+        "doctor",
+        help="offline preflight/readiness check: read tools/manifest.json, probe "
+             "installed tools, and (with --workspace) sniff which analysis lanes "
+             "apply, so absent Go tooling on a pure-JS target reports "
+             "not-applicable rather than missing. Exit codes: 0 ok (including "
+             "disclosed reduced coverage from absent optional tools; a data "
+             "root that cannot be resolved is also reported in-band at exit "
+             "0, not treated as fatal), 2 invalid invocation, 3 environment "
+             "incomplete (Python < 3.11), 4 installation corrupt (manifest "
+             "missing/malformed or unreadable code assets), 1 internal "
+             "failure. Never installs, never writes "
+             "to the target, never touches the network beyond probing local "
+             "binaries for --version.")
+    doctor.add_argument(
+        "--workspace", default="",
+        help="target workspace to sniff lane applicability for (optional; "
+             "without it every lane is reported applicable-unknown)")
+    doctor.add_argument("--json", action="store_true",
+                        help="machine-readable structured output")
     migrate = sub.add_parser(
         "migrate",
         help="one-time move of a legacy --skill-root's output/state/exported "
@@ -1017,6 +1037,16 @@ def _compare_runs(args: argparse.Namespace) -> int:
     return 3 if parity.has_semantic_differences(report) else 0
 
 
+def _doctor(args: argparse.Namespace) -> int:
+    from . import doctor as doctor_mod
+    # doctor.run() maps every failure mode to its own documented exit code
+    # internally and never raises; it must NOT be routed through this
+    # module's blanket (OSError, ValueError, ...) -> 2 handler below, which
+    # would collapse the distinct environment-incomplete/installation-corrupt
+    # codes doctor is specifically required to keep separate.
+    return doctor_mod.run(args.workspace or None, as_json=args.json)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -1024,6 +1054,8 @@ def main(argv: list[str] | None = None) -> int:
             # Registry guards read this when deciding whether a dependency
             # host outside the default registries is explicitly approved.
             os.environ["PROJECT_ANALYSIS_ALLOW_HOSTS"] = args.allow_hosts
+        if args.command == "doctor":
+            return _doctor(args)
         if args.command == "new-run":
             return _new_run(args)
         if args.command == "new-drilldown":
