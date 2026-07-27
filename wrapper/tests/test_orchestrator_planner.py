@@ -254,17 +254,26 @@ def test_select_task_gets_the_exact_same_inputs_the_lens_task_itself_would(tmp_p
     assert set(select_packet["inputs"]) == set(expected_inputs)
 
 
-def test_select_task_instructions_request_up_to_12_locations_with_empty_quoted_text(tmp_path):
+def test_select_task_instructions_request_up_to_its_own_lens_cap_with_empty_quoted_text(tmp_path):
     run, _ = _build_run(tmp_path)
     planner.plan_judgment(run)
     engine = Engine(run)
     created = {rec.task_id: rec.detail["task"] for rec in engine._read_records()
               if rec.event == "created"}
+    # open-lens's own frontmatter raises its cap to 24 (round-2 strengthener) --
+    # its select task's instructions must ask for ITS number, not the flat default.
     instructions = created["lens-open-lens-select"]["instructions"]
-    assert instructions.index(tpl.SELECTION_FETCH_PREAMBLE) == 0
-    assert "up to 12" in instructions.lower()
+    open_lens = tpl.load_lens_templates()["open-lens"]
+    assert open_lens.max_selections == 24
+    assert instructions.index(tpl.selection_fetch_preamble(open_lens.max_selections)) == 0
+    assert "up to 24" in instructions.lower()
     assert 'EMPTY ("")' in instructions
     assert "# Lens: open-lens" in instructions  # the lens's own body still rides along
+
+    # a lens that keeps the flat default (dependencies-cycles is source_reads
+    # but never overrides max_selections) asks for "up to 12" instead.
+    dep_instructions = created["lens-dependencies-cycles-select"]["instructions"]
+    assert "up to 12" in dep_instructions.lower()
 
 
 def test_repo_sharded_lens_task_only_sees_its_own_repos_signal_views(tmp_path):

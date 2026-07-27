@@ -31,11 +31,13 @@ Four verbs, four CLI subcommands (``plan-judgment``, ``plan-dedup``,
   file's own frontmatter comment for why), ``plan_judgment`` composes ONLY
   its paired ``selection-fetch`` task (task_id ``<lens-task-id>-select``,
   same inputs the lens task itself would get) -- NOT the lens-findings task
-  directly. That select task's own job is to REQUEST up to 12 source
-  locations (``quoted_text`` left empty, schemas.py's request state) the
-  lens needs read in full to verify a fact its bounded signal views only
-  hint at. ``fetch-selections`` (selection.py) then fetches bounded,
-  revision-checked, sanitized excerpts for a validated select task, and
+  directly. That select task's own job is to REQUEST up to that lens's own
+  ``max_selections`` source locations (``quoted_text`` left empty,
+  schemas.py's request state; default 12, overridable per lens -- see
+  ``LensTemplate.max_selections``) the lens needs read in full to verify a
+  fact its bounded signal views only hint at. ``fetch-selections``
+  (selection.py) then fetches bounded, revision-checked, sanitized excerpts
+  for a validated select task, enforcing that SAME per-lens cap, and
   ``plan_lens_finalize`` (below) composes the REAL lens-findings task from
   the ORIGINAL lens inputs plus that fetched evidence -- mirroring
   ``plan_dedup``'s own two-phase pattern for the identical reason: a
@@ -723,7 +725,8 @@ def plan_judgment(run_dir: str | Path, *,
             select_task_id = _select_task_id(spec.task_id)
             select_instructions = tpl.render_selection_instructions(template, shared_body)
             select_version = tpl.content_digest(
-                tpl.SELECTION_FETCH_PREAMBLE, shared_body, template.body_md)
+                tpl.selection_fetch_preamble(template.max_selections), shared_body,
+                template.body_md)
             built = compose(
                 task_id=select_task_id, template_id=f"lens-{spec.lens_id}-select",
                 template_version=select_version, task_type="selection-fetch",

@@ -36,11 +36,19 @@ from typing import Any
 from .. import identity
 from ..sanitize import sanitize_text
 from ..targetspec import TargetSpec
+from . import templates as tpl
+from .engine import Engine
 from .planner import fetch_selections_output_path
 from .results import validated_outputs
 from .schemas import source_ref_parts
 
-MAX_SELECTIONS = 12          # matches the select task's own "up to 12" request
+# 57B-116 round 2: the per-run selection cap is now PER LENS (that lens's own
+# frontmatter max_selections field -- e.g. open-lens's 24), not a single flat
+# number. DEFAULT_MAX_SELECTIONS is only the fallback used when a select
+# task's own template_id cannot be resolved to a known lens (a synthetic/test
+# task_id, or a select task predating this lookup) -- see
+# _max_selections_for, the one place that decides the cap actually enforced.
+DEFAULT_MAX_SELECTIONS = 12
 CONTEXT_LINES = 40           # +/- this many lines of surrounding context
 MAX_LINE_CHARS = 2000        # per-line truncation guard (mirrors synthesis_input.py's own cap)
 MAX_TOTAL_BYTES = 200_000    # total fetched-evidence.json excerpt budget for one run
@@ -137,12 +145,55 @@ def _fetch_source_excerpt(ref: str, spec: TargetSpec, identities: identity.Ident
     return _truncate_to_byte_cap(excerpt, MAX_EXCERPT_BYTES)
 
 
+def _lens_id_for_select_task(run: Path, select_task_id: str) -> str | None:
+    """The lens_id this select task belongs to, recovered from its OWN
+    packet's ``template_id`` -- ``planner.py``'s ``plan_judgment`` composes a
+    select task's ``template_id`` as ``f"lens-{lens_id}-select"``. Unlike
+    ``task_id`` (a repo-sharded task_id carries an unreversible hash
+    fragment -- see ``_LensTaskSpec``'s own comment on why that string is
+    never parsed), ``template_id`` never includes ``repository_ref`` at all,
+    so recovering ``lens_id`` from it this way is safe. Returns ``None``
+    when no ``created`` record exists for this task_id, or its
+    ``template_id`` does not match the lens-select convention (a synthetic
+    task_id, typically from a test) -- either way the caller falls back to
+    ``DEFAULT_MAX_SELECTIONS``."""
+    engine = Engine(run)
+    if not engine.ledger_exists():
+        return None
+    for record in engine._read_records():
+        if record.event == "created" and record.task_id == select_task_id:
+            template_id = record.detail["task"].get("template_id", "")
+            if template_id.startswith("lens-") and template_id.endswith("-select"):
+                return template_id[len("lens-"):-len("-select")]
+            return None
+    return None
+
+
+def _max_selections_for(run: Path, select_task_id: str,
+                        skill_root: str | Path | None = None) -> int:
+    """This select task's OWN lens's ``max_selections`` cap -- the same
+    number ``templates.render_selection_instructions`` used to phrase that
+    lens's select task's own instructions ("Name UP TO N source
+    locations..."), looked up fresh via the lens's ``template_id`` rather
+    than re-typed anywhere, so the number the model was asked for and the
+    number enforced here can never independently drift. Falls back to
+    ``DEFAULT_MAX_SELECTIONS`` when the task's ``template_id`` does not
+    resolve to a known lens."""
+    lens_id = _lens_id_for_select_task(run, select_task_id)
+    if lens_id is None:
+        return DEFAULT_MAX_SELECTIONS
+    template = tpl.load_lens_templates(skill_root).get(lens_id)
+    return template.max_selections if template is not None else DEFAULT_MAX_SELECTIONS
+
+
 def fetch(run_dir: str | Path, select_task_id: str, *,
-         out: str | Path | None = None) -> Path:
+         out: str | Path | None = None, skill_root: str | Path | None = None) -> Path:
     """Fetch bounded source context for every selection in the run's
     validated ``select_task_id`` selection-fetch output; writes
     fetched-evidence.json (``out``, when given, overrides the canonical
-    path) and returns the path written."""
+    path) and returns the path written. The per-run selection cap enforced
+    is THIS select task's own lens's ``max_selections`` (see
+    ``_max_selections_for``), not a single flat number."""
     run = Path(run_dir).expanduser().resolve()
     outputs = validated_outputs(run, task_type="selection-fetch")
     output = outputs.get(select_task_id)
@@ -154,6 +205,7 @@ def fetch(run_dir: str | Path, select_task_id: str, *,
     spec = TargetSpec.load(run / "targets.json")
     identities = identity.load(run)
     selections = output.get("selections", [])
+    max_selections = _max_selections_for(run, select_task_id, skill_root)
 
     rows: list[dict[str, Any]] = []
     total_bytes = 0
@@ -161,10 +213,10 @@ def fetch(run_dir: str | Path, select_task_id: str, *,
         selection_id = selection.get("selection_id", f"selection-{index}")
         purpose = selection.get("purpose", "")
         ref = selection.get("ref", "")
-        if index >= MAX_SELECTIONS:
+        if index >= max_selections:
             rows.append({"selection_id": selection_id, "purpose": purpose, "ref": ref,
                         "excerpt": _skip(f"exceeds the per-run selection cap "
-                                         f"({MAX_SELECTIONS})")})
+                                         f"({max_selections})")})
             continue
         excerpt = _fetch_source_excerpt(ref, spec, identities)
         encoded_len = len(excerpt.encode("utf-8"))

@@ -163,12 +163,25 @@ def test_render_instructions_appends_source_verified_addendum_only_when_asked():
 def test_render_selection_instructions_uses_the_selection_preamble_not_the_lens_one():
     loaded = tpl.load_lens_templates(REAL_SKILL_ROOT)
     shared = tpl.load_shared_body(REAL_SKILL_ROOT)
-    instructions = tpl.render_selection_instructions(loaded["open-lens"], shared)
-    assert instructions.index(tpl.SELECTION_FETCH_PREAMBLE) == 0
+    open_lens = loaded["open-lens"]
+    instructions = tpl.render_selection_instructions(open_lens, shared)
+    assert instructions.index(tpl.selection_fetch_preamble(open_lens.max_selections)) == 0
     assert tpl.LENS_OUTPUT_CONTRACT_PREAMBLE not in instructions
     assert "# Lens: open-lens" in instructions  # still carries the lens's own body
     assert "quoted_text" in instructions and 'EMPTY ("")' in instructions
-    assert "up to 12" in instructions.lower() or "UP TO 12" in instructions
+    # open-lens's own frontmatter raises its cap to 24 (round-2 strengthener) --
+    # the instructions must reflect ITS number, not the flat default.
+    assert open_lens.max_selections == 24
+    assert "up to 24" in instructions.lower()
+
+
+def test_selection_fetch_preamble_is_parameterized_by_max_selections():
+    twelve = tpl.selection_fetch_preamble(12)
+    twenty_four = tpl.selection_fetch_preamble(24)
+    assert "up to 12" in twelve.lower() and "up to 24" not in twelve.lower()
+    assert "up to 24" in twenty_four.lower() and "up to 12" not in twenty_four.lower()
+    # everything else about the preamble is identical regardless of the cap.
+    assert twelve.replace("12", "24") == twenty_four
 
 
 def test_frontmatter_parses_bare_true_false_as_python_bool(tmp_path):
@@ -187,6 +200,48 @@ def test_source_reads_defaults_false_when_absent_from_frontmatter(tmp_path):
     root = _write_synthetic_lens_dir(
         tmp_path, lens_frontmatter="---\nshard: repo\nsignals: []\n---\n")
     assert tpl.load_lens_templates(root)["sample-lens"].source_reads is False
+
+
+# --------------------------------------------------------------------------- #
+# 57B-116 round 2: max_selections frontmatter (per-lens selection-fetch cap)
+# --------------------------------------------------------------------------- #
+
+def test_max_selections_defaults_to_twelve_when_absent_from_frontmatter(tmp_path):
+    root = _write_synthetic_lens_dir(
+        tmp_path, lens_frontmatter="---\nshard: repo\nsignals: []\n---\n")
+    assert tpl.load_lens_templates(root)["sample-lens"].max_selections == 12
+
+
+def test_frontmatter_parses_a_bare_integer_max_selections(tmp_path):
+    root = _write_synthetic_lens_dir(tmp_path, lens_frontmatter=(
+        "---\nshard: workspace\nsignals: []\nmax_selections: 24\n---\n"))
+    template = tpl.load_lens_templates(root)["sample-lens"]
+    assert template.max_selections == 24
+    assert isinstance(template.max_selections, int)
+
+
+def test_max_selections_must_be_a_positive_integer(tmp_path):
+    root = _write_synthetic_lens_dir(tmp_path, lens_frontmatter=(
+        "---\nshard: repo\nsignals: []\nmax_selections: 0\n---\n"))
+    with pytest.raises(tpl.TemplateError, match="max_selections"):
+        tpl.load_lens_templates(root)
+
+
+def test_max_selections_rejects_a_non_integer_value(tmp_path):
+    root = _write_synthetic_lens_dir(tmp_path, lens_frontmatter=(
+        "---\nshard: repo\nsignals: []\nmax_selections: many\n---\n"))
+    with pytest.raises(tpl.TemplateError, match="max_selections"):
+        tpl.load_lens_templates(root)
+
+
+def test_open_lens_frontmatter_raises_its_own_cap_to_twenty_four():
+    loaded = tpl.load_lens_templates(REAL_SKILL_ROOT)
+    assert loaded["open-lens"].max_selections == 24
+    # every other lens keeps the flat default -- open-lens is the sole
+    # deliberate override (round-2 evidence; see its own frontmatter comment).
+    for lens_id, template in loaded.items():
+        if lens_id != "open-lens":
+            assert template.max_selections == 12, lens_id
 
 
 # --------------------------------------------------------------------------- #

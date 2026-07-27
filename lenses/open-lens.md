@@ -21,6 +21,19 @@ source_reads: true
 #   actual source/config file content, which is exactly what this lens's
 #   "free observation, bounded by evidence discipline, not by a tool" own
 #   line already claims to do.
+max_selections: 24
+# max_selections: this is the ONLY lens whose own "Signals:" line is "ALL
+#   views + manifests... workspace-wide", making it the sole carrier of
+#   cross-repo systemic conditions (background jobs, dead integration
+#   surfaces, dependency-declaration drift, per-route enforcement
+#   consistency, client-layer duplication -- see the systemic-condition
+#   checklist below). A run spanning several repositories, each contributing
+#   its own instances of several of these concern families, structurally
+#   needs more than the flat per-lens default to name enough locations to
+#   verify them all -- round-2 spot-check evidence showed the flat 12-cap
+#   silently starving this lens specifically. 24 keeps a real, disclosed
+#   ceiling (never unbounded) while giving this one workspace-wide lens
+#   roughly double the default headroom.
 ---
 # Lens: open-lens (group C)
 
@@ -53,6 +66,23 @@ Typical catches (non-exhaustive — that is the point of this lens):
   This is the ONLY basis the snapshot and access model may use — absent such
   evidence, roles stay `unresolved`, never inferred from module or folder names.
 - **Anything else** you can claim, cite, and argue impact for.
+
+**Systemic-condition checklist** — work through each of these explicitly for
+this run, not only as catches you happen to stumble on:
+- Background jobs/schedulers — which framework(s) run them, whether more
+  than one generation coexists side by side, and whether error/failure
+  handling is present or absent per implementation.
+- Provisioned-but-dead integration surfaces — env vars, config entries, or
+  dependencies present with no live call path ever reaching them.
+- Dependency declaration vs. use — imports with no matching manifest entry,
+  and manifest entries with no matching import anywhere in the source.
+- Per-route-group enforcement consistency — the same middleware/guard
+  applied, commented out, or simply absent across different registration
+  sites; verify at the actual registration lines, never by assumption from
+  one example.
+- Client-layer duplication — more than one HTTP or data-access layer
+  performing the same kind of call, with DIFFERING cross-cutting behavior
+  (session handling, error handling) between them.
 
 Rules:
 - Same shape, same citation discipline, same two-signal bar for high
