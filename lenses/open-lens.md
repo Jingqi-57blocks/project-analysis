@@ -12,6 +12,15 @@ signals: []
 #   treat an EMPTY signals list here as "every tool this run recorded",
 #   never as "no tool" -- documented explicitly so a future maintainer does
 #   not read the empty list as "nothing".
+source_reads: true
+# source_reads: this lens's richest catches -- "Half-finished migrations...
+#   (cite both generations)", "Configuration drift risk -- the same logical
+#   setting duplicated across services/env templates", and the
+#   role/permission enforcement-layer evidence its own body requires -- are
+#   none of them visible in any tool-summarized view; they exist only in
+#   actual source/config file content, which is exactly what this lens's
+#   "free observation, bounded by evidence discipline, not by a tool" own
+#   line already claims to do.
 ---
 # Lens: open-lens (group C)
 

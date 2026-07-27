@@ -654,8 +654,15 @@ def _validate_selection_row(row: Any, location: str, failures: _Failures) -> Non
     failures.require(isinstance(ref, str) and citation_grammar_kind(ref) is not None,
                       "selection-ref", "ref must match a recognized citation grammar",
                       f"{location}.ref")
-    failures.require(isinstance(row.get("quoted_text"), str) and bool(row["quoted_text"]),
-                      "selection-quoted-text", "quoted_text must be a non-empty string",
+    # quoted_text carries TWO states (57B-116): empty ("") is a REQUEST -- the
+    # location is named but not yet fetched (planner.py's source_reads select
+    # tasks always emit this state; a later, separate fetch step fills it
+    # in) -- non-empty is FETCHED, the quoted text itself. Both are valid
+    # here; only a non-string is rejected.
+    failures.require(isinstance(row.get("quoted_text"), str),
+                      "selection-quoted-text",
+                      "quoted_text must be a string (\"\" for a REQUEST not yet "
+                      "fetched, the quoted text itself once FETCHED)",
                       f"{location}.quoted_text")
 
 

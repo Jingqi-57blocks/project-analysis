@@ -1,6 +1,8 @@
 """Judgment-DAG planner for the orchestrator (57B-113 / 57B-116, M2).
 
-Two verbs, two CLI subcommands (``plan-judgment``, ``plan-dedup``):
+Four verbs, four CLI subcommands (``plan-judgment``, ``plan-dedup``,
+``plan-lens-finalize``, and ``fetch-selections`` lives in the sibling
+``selection.py`` module):
 
 - ``plan_judgment`` composes and registers, for a PREPARED run directory
   (``targets.json`` + ``signals/run-summary.json`` + ``synthesis-input.json``
@@ -24,6 +26,35 @@ Two verbs, two CLI subcommands (``plan-judgment``, ``plan-dedup``):
   schemas.py (a distinct, real shape another caller may still compose) --
   this planner simply does not use it.
 
+  For a lens whose frontmatter sets ``source_reads: true`` (structure-
+  inventory, dependencies-cycles, safety-net, open-lens -- see each lens
+  file's own frontmatter comment for why), ``plan_judgment`` composes ONLY
+  its paired ``selection-fetch`` task (task_id ``<lens-task-id>-select``,
+  same inputs the lens task itself would get) -- NOT the lens-findings task
+  directly. That select task's own job is to REQUEST up to 12 source
+  locations (``quoted_text`` left empty, schemas.py's request state) the
+  lens needs read in full to verify a fact its bounded signal views only
+  hint at. ``fetch-selections`` (selection.py) then fetches bounded,
+  revision-checked, sanitized excerpts for a validated select task, and
+  ``plan_lens_finalize`` (below) composes the REAL lens-findings task from
+  the ORIGINAL lens inputs plus that fetched evidence -- mirroring
+  ``plan_dedup``'s own two-phase pattern for the identical reason: a
+  :class:`~.contracts.TaskPacket`'s inputs must be concrete TEXT at
+  creation time, and the fetched evidence does not exist yet when the
+  select task is first planned.
+
+  Every lens task ALSO gets, deterministically read straight from the
+  workspace at composition time (Part A, 57B-116): for safety-net and
+  open-lens specifically, a ``test-ci-evidence.json`` input per repo (test-
+  file inventory, CI config file contents, package.json scripts, go.mod
+  module line) -- see ``_test_ci_evidence_row``'s own docstring. This is
+  NOT a signal-sweep tool result; it is read fresh here because no signal
+  tool covers it, but it is fully deterministic given a pinned workspace
+  state, and citations into it are ordinary ``repo@revision:path:line``
+  refs -- the exact grammar (and the exact finalize-findings citation
+  check, which already re-reads the real repo file) every other source ref
+  already uses, so no new validator is needed for it.
+
 - ``plan_dedup`` is a SEPARATE, LATER call: it reads every VALIDATED
   lens-findings output already in the ledger (``results.validated_outputs``)
   and composes the ONE global ``dedup-rank`` task from their real finding
@@ -32,12 +63,30 @@ Two verbs, two CLI subcommands (``plan-judgment``, ``plan-dedup``):
   time, and dedup-rank's whole job is to merge findings that do not exist
   yet when the lens tasks are first planned. The engine's digest-keyed
   generations (``engine.py``) make re-running either verb idempotent.
+  It refuses (fails closed) while any lens-findings task is still pending
+  -- including a source_reads lens whose select task has validated but
+  whose plan_lens_finalize step has not run yet, which would otherwise be
+  invisible here (nothing was ever created for it) and silently drop that
+  lens's findings from the merge pool.
+
+- ``plan_lens_finalize`` is the second phase of the select/finalize pair
+  above: given the ORIGINAL lens task_id plan_judgment would have used (not
+  the select task_id), it looks up that lens's own shard/repo via
+  ``_lens_task_specs`` (never by parsing the task_id string -- a
+  repository_ref's task_id fragment is an unreversible hash suffix, see
+  ``_repo_fragment``), requires its select task to have validated and
+  fetch-selections to have written its fetched-evidence.json, and composes
+  the real lens-findings task from the same inputs the select task got plus
+  that fetched evidence and an appended instructions addendum
+  (``templates.SOURCE_VERIFIED_ADDENDUM``).
 
 No per-lens or per-shard merge step exists anywhere in this module --
 cross-shard AND cross-lens duplication is left entirely to the one global
 dedup-rank task (schemas.py already makes its ``merge_map``/``rank`` shape
 self-verifiably exactly-once); this module only ever creates INDEPENDENT
-lens-findings tasks, never one that depends on another lens's output.
+lens-findings tasks, never one that depends on another lens's output
+(a select task's paired lens task is the one narrow exception: it depends
+on ITS OWN select task only, never another lens's).
 """
 
 from __future__ import annotations
@@ -46,10 +95,12 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 from .. import identity
+from ..exclusions import is_excluded_relative
+from ..targetspec import RepoTarget, TargetSpec
 from . import templates as tpl
 from .composer import compose, estimate_tokens
 from .contracts import TaskPacket
@@ -121,6 +172,55 @@ class PlannedTask:
     packet_ids: tuple[str, ...]   # literal ledger task_ids after composer sharding
     estimated_tokens: int         # summed across every packet_id above
     created: bool                 # False = idempotent no-op re-create (unchanged digest)
+
+
+# --------------------------------------------------------------------------- #
+# _LensTaskSpec -- the one place a lens's (lens_id, repository_ref) maps to
+# its task_id, shared by plan_judgment and plan_lens_finalize so the two can
+# never derive a different task_id for the same pair. A repository_ref's
+# task_id fragment is an UNREVERSIBLE hash suffix (see _repo_fragment), so a
+# task_id string alone cannot be parsed back into its repository_ref --
+# plan_lens_finalize looks it up here instead of parsing.
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class _LensTaskSpec:
+    lens_id: str
+    template: tpl.LensTemplate
+    repository_ref: str | None
+    task_id: str
+
+
+def _lens_task_specs(lens_templates: Mapping[str, tpl.LensTemplate],
+                     identities: identity.IdentityMap) -> list[_LensTaskSpec]:
+    specs: list[_LensTaskSpec] = []
+    for lens_id in sorted(lens_templates):
+        template = lens_templates[lens_id]
+        repo_refs: list[str | None]
+        if template.shard == "repo":
+            repo_refs = sorted(repo.reference for repo in identities.repositories)
+        else:
+            repo_refs = [None]
+        for repository_ref in repo_refs:
+            task_id = (f"lens-{lens_id}-{_repo_fragment(repository_ref)}"
+                      if repository_ref is not None else f"lens-{lens_id}")
+            specs.append(_LensTaskSpec(lens_id=lens_id, template=template,
+                                       repository_ref=repository_ref, task_id=task_id))
+    return specs
+
+
+def _select_task_id(lens_task_id: str) -> str:
+    return f"{lens_task_id}-select"
+
+
+def fetch_selections_output_path(run_dir: str | Path, select_task_id: str) -> Path:
+    """The canonical path ``fetch-selections`` (selection.py) writes to and
+    ``plan_lens_finalize`` reads from, for one select task --
+    ``<run>/tasks/<select_task_id>-fetched-evidence.json``, alongside the
+    ledger. Parameterized by select_task_id since multiple select tasks (one
+    per source_reads lens x repo-shard) can exist in the same run at once."""
+    return (Path(run_dir).expanduser().resolve() / "tasks"
+           / f"{select_task_id}-fetched-evidence.json")
 
 
 # --------------------------------------------------------------------------- #
@@ -308,9 +408,138 @@ _SECTION_SPLITTERS: dict[str, tuple[str, str, Callable[[Mapping[str, Any]], tupl
 }
 
 
+# --------------------------------------------------------------------------- #
+# test/CI evidence (57B-116, Part A): bounded, deterministic evidence read
+# straight from the workspace at packet-composition time, for safety-net and
+# open-lens ONLY -- the two lenses whose own bodies most directly need it
+# ("Assertion quality sampling... cite the specific test files sampled",
+# "Type/migration nets... read tsconfig/migration files as data", and open-
+# lens's own free-observation mandate). No signal tool covers this; it is
+# read fresh HERE rather than through the signal-sweep pipeline because it
+# is small, simple, and needs no subprocess/tool-version machinery. It is
+# still fully DETERMINISTIC given a pinned workspace state (same git commit/
+# dirty-state -> byte-identical evidence), and citations into it are
+# ordinary `repo@revision:path:line` refs -- the SAME grammar, and the SAME
+# finalize-findings citation check (which already re-reads the real repo
+# file), every other source ref already goes through -- no new validator.
+# --------------------------------------------------------------------------- #
+
+_TEST_CI_EVIDENCE_LENSES = frozenset({"safety-net", "open-lens"})
+_TEST_FILE_CAP = 200
+_CI_CONFIG_LINE_CAP = 2000  # per-file safety truncation (mirrors synthesis_input.py's own caps)
+_CI_CONFIG_FIXED_RELATIVE_PATHS = ("bitbucket-pipelines.yml", "Jenkinsfile", ".gitlab-ci.yml")
+
+
+def _is_test_file(relative_posix: str) -> bool:
+    """*_test.go, *.test.*, *.spec.*, or anywhere under a test/ or tests/
+    directory (matching a "test?(s)/ dirs" glob literally: any path
+    component named exactly "test" or "tests", not only the immediate
+    parent) -- a file living under such a directory counts regardless of
+    its own name."""
+    path = PurePosixPath(relative_posix)
+    name = path.name
+    if name.endswith("_test.go") or ".test." in name or ".spec." in name:
+        return True
+    return any(part in ("test", "tests") for part in path.parts[:-1])
+
+
+def _iter_repo_relative_files(target: RepoTarget) -> list[str]:
+    """Every file under `target`'s analysis roots, Tier-1/Tier-2 excluded
+    dirs skipped (`exclusions.is_excluded_relative` -- the SAME policy
+    every signal-producing tool already applies), as paths relative to the
+    REPO root (not the analysis root) so they match the `path` half of a
+    `repo@revision:path:line` citation exactly."""
+    root = Path(target.path).expanduser().resolve()
+    found: list[str] = []
+    for analysis_root in target.root_paths():
+        for candidate in analysis_root.rglob("*"):
+            if not candidate.is_file():
+                continue
+            try:
+                relative = candidate.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if is_excluded_relative(target, relative):
+                continue
+            found.append(relative)
+    return found
+
+
+def _ci_config_relative_paths(target: RepoTarget) -> list[str]:
+    root = Path(target.path).expanduser().resolve()
+    found = [rel for rel in _CI_CONFIG_FIXED_RELATIVE_PATHS if (root / rel).is_file()]
+    workflows_dir = root / ".github" / "workflows"
+    if workflows_dir.is_dir():
+        found.extend(f".github/workflows/{path.name}"
+                    for path in sorted(workflows_dir.glob("*.yml")))
+    return found
+
+
+def _package_json_scripts(target: RepoTarget) -> dict | None:
+    path = Path(target.path).expanduser().resolve() / "package.json"
+    if not path.is_file():
+        return None
+    try:
+        doc = json.loads(path.read_text("utf-8", errors="replace"))
+    except ValueError:
+        return None
+    scripts = doc.get("scripts") if isinstance(doc, dict) else None
+    return scripts if isinstance(scripts, dict) else {}
+
+
+def _go_mod_module_line(target: RepoTarget) -> str | None:
+    path = Path(target.path).expanduser().resolve() / "go.mod"
+    if not path.is_file():
+        return None
+    for line in path.read_text("utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("module "):
+            return stripped
+    return None
+
+
+def _test_ci_evidence_row(target: RepoTarget, repository_ref: str) -> dict:
+    root = Path(target.path).expanduser().resolve()
+    test_paths = sorted({relative for relative in _iter_repo_relative_files(target)
+                        if _is_test_file(relative)})
+    capped = test_paths[:_TEST_FILE_CAP]
+    ci_configs = []
+    for rel in _ci_config_relative_paths(target):
+        lines = (root / rel).read_text("utf-8", errors="replace").splitlines()
+        ci_configs.append({
+            "path": rel,
+            "content": "\n".join(lines[:_CI_CONFIG_LINE_CAP]),
+            "truncated": len(lines) > _CI_CONFIG_LINE_CAP,
+        })
+    return {
+        "repository_ref": repository_ref,
+        "test_files": {
+            "total_count": len(test_paths), "included_count": len(capped),
+            "truncated": len(capped) < len(test_paths), "cap": _TEST_FILE_CAP,
+            "paths": capped,
+        },
+        "ci_configs": ci_configs,
+        "package_json_scripts": _package_json_scripts(target),
+        "go_mod_module": _go_mod_module_line(target),
+    }
+
+
+def _test_ci_evidence_rows(spec: TargetSpec, identities: identity.IdentityMap,
+                          ) -> dict[str, dict]:
+    """``{repository_ref: row}``, computed ONCE per plan_judgment/
+    plan_lens_finalize call regardless of how many source_reads/
+    _TEST_CI_EVIDENCE_LENSES tasks need it (safety-net's per-repo shards and
+    open-lens's single workspace task all reuse the same rows -- a repo is
+    walked at most once)."""
+    return {repo.reference: _test_ci_evidence_row(
+                spec.repo(identities.internal_id_for(repo.reference)), repo.reference)
+           for repo in identities.repositories}
+
+
 def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[str, Any],
                  module_candidates_doc: Mapping[str, Any], run_summary: Mapping[str, Any],
-                 repository_ref: str | None) -> dict[str, str]:
+                 repository_ref: str | None, *,
+                 test_ci_rows: Mapping[str, dict] | None = None) -> dict[str, str]:
     inputs: dict[str, str] = {}
     for row in _matching_signal_rows(run_summary, template.signals, repository_ref):
         view_path = run / "signals" / str(row["view"])
@@ -355,6 +584,14 @@ def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[s
             array, meta = split(section)
             inputs[array_name] = json.dumps(array, sort_keys=True)
             inputs[meta_name] = json.dumps(meta, sort_keys=True)
+
+    if template.lens_id in _TEST_CI_EVIDENCE_LENSES:
+        rows_by_ref = test_ci_rows or {}
+        if repository_ref is not None:
+            selected = [rows_by_ref[repository_ref]] if repository_ref in rows_by_ref else []
+        else:
+            selected = [rows_by_ref[ref] for ref in sorted(rows_by_ref)]
+        inputs["test-ci-evidence.json"] = json.dumps(selected, sort_keys=True)
     return inputs
 
 
@@ -467,37 +704,55 @@ def plan_judgment(run_dir: str | Path, *,
     module_candidates_doc = _load_json(run / "module-candidates.json")
     lens_templates = tpl.load_lens_templates(skill_root)
     shared_body = tpl.load_shared_body(skill_root)
+    target_spec = TargetSpec.load(run / "targets.json")
+    test_ci_rows = _test_ci_evidence_rows(target_spec, identities)
 
     packets: list[TaskPacket] = []
     planned: list[PlannedTask] = []
 
-    for lens_id in sorted(lens_templates):
-        template = lens_templates[lens_id]
-        instructions = tpl.render_instructions(template, shared_body)
-        template_id = f"lens-{lens_id}"
-        repo_refs: list[str | None]
-        if template.shard == "repo":
-            repo_refs = sorted(repo.reference for repo in identities.repositories)
-        else:
-            repo_refs = [None]
+    for spec in _lens_task_specs(lens_templates, identities):
+        template = spec.template
+        inputs = _lens_inputs(run, template, synthesis_doc, module_candidates_doc,
+                              run_summary, spec.repository_ref, test_ci_rows=test_ci_rows)
 
-        for repository_ref in repo_refs:
-            inputs = _lens_inputs(run, template, synthesis_doc, module_candidates_doc,
-                                  run_summary, repository_ref)
-            task_id = (f"lens-{lens_id}-{_repo_fragment(repository_ref)}"
-                      if repository_ref is not None else f"lens-{lens_id}")
+        if template.source_reads:
+            # ONLY the select task is composed here -- the real lens-findings
+            # task (same task_id a non-source_reads lens would get directly)
+            # is created later by plan_lens_finalize, once fetch-selections
+            # has produced real evidence for it. See the module docstring.
+            select_task_id = _select_task_id(spec.task_id)
+            select_instructions = tpl.render_selection_instructions(template, shared_body)
+            select_version = tpl.content_digest(
+                tpl.SELECTION_FETCH_PREAMBLE, shared_body, template.body_md)
             built = compose(
-                task_id=task_id, template_id=template_id, template_version=template.version,
-                task_type="lens-findings", instructions=instructions, inputs=inputs,
-                output_schema_id=tpl.LENS_OUTPUT_SCHEMA_ID,
+                task_id=select_task_id, template_id=f"lens-{spec.lens_id}-select",
+                template_version=select_version, task_type="selection-fetch",
+                instructions=select_instructions, inputs=inputs,
+                output_schema_id=tpl.SELECTION_FETCH_OUTPUT_SCHEMA_ID,
                 context_budget_tokens=context_budget_tokens)
             packets.extend(built)
             planned.append(PlannedTask(
-                task_id=task_id, task_type="lens-findings", lens_id=lens_id,
-                shard=template.shard, repository_ref=repository_ref or "",
+                task_id=select_task_id, task_type="selection-fetch", lens_id=spec.lens_id,
+                shard=template.shard, repository_ref=spec.repository_ref or "",
                 packet_ids=tuple(packet.task_id for packet in built),
                 estimated_tokens=sum(_packet_tokens(packet) for packet in built),
                 created=False))
+            continue
+
+        instructions = tpl.render_instructions(template, shared_body)
+        built = compose(
+            task_id=spec.task_id, template_id=f"lens-{spec.lens_id}",
+            template_version=template.version,
+            task_type="lens-findings", instructions=instructions, inputs=inputs,
+            output_schema_id=tpl.LENS_OUTPUT_SCHEMA_ID,
+            context_budget_tokens=context_budget_tokens)
+        packets.extend(built)
+        planned.append(PlannedTask(
+            task_id=spec.task_id, task_type="lens-findings", lens_id=spec.lens_id,
+            shard=template.shard, repository_ref=spec.repository_ref or "",
+            packet_ids=tuple(packet.task_id for packet in built),
+            estimated_tokens=sum(_packet_tokens(packet) for packet in built),
+            created=False))
 
     # formation: one global, INDEPENDENT task (no depends_on) -- runs in
     # parallel with every lens task above. It carries the FULL candidate
@@ -542,7 +797,20 @@ def _pending_lens_task_ids(run: Path) -> set[str]:
     whatever DID validate, on the same fail-open-and-disclose footing as
     every lens's own coverage-honesty rule (that shard's absence is a gap
     for a later stage to surface, not a reason to block every other lens's
-    findings from being merged)."""
+    findings from being merged).
+
+    A source_reads lens's select task validating does NOT by itself count
+    as done: its lens-findings task_id does not exist in the ledger at all
+    until ``plan_lens_finalize`` creates it (see the module docstring) --
+    without this check, that lens's findings would silently never reach
+    ``plan_dedup``'s merge pool simply because nothing was ever CREATED for
+    it. Every CREATED ``<...>-select`` task_id whose paired lens-findings
+    task_id has no "created" record yet is therefore ALSO reported pending,
+    using the select task_id itself as the (informative) placeholder --
+    UNLESS the select task itself is permanently FAILED, which gets the
+    exact same fail-open treatment as a directly failed lens shard (its
+    lens's findings can never be produced without it, so it is excluded
+    from the merge pool rather than blocking every other lens forever)."""
     engine = Engine(run)
     if not engine.ledger_exists():
         return set()
@@ -551,7 +819,21 @@ def _pending_lens_task_ids(run: Path) -> set[str]:
     lens_task_ids = {record.task_id for record in records
                      if record.event == "created"
                      and record.detail["task"].get("task_type") == "lens-findings"}
-    return {task_id for task_id in lens_task_ids if states.get(task_id) == "pending"}
+    pending = {task_id for task_id in lens_task_ids if states.get(task_id) == "pending"}
+
+    created_select_ids = {record.task_id for record in records
+                         if record.event == "created"
+                         and record.detail["task"].get("task_type") == "selection-fetch"}
+    for select_task_id in created_select_ids:
+        if not select_task_id.endswith("-select"):
+            continue
+        lens_task_id = select_task_id[:-len("-select")]
+        if lens_task_id in lens_task_ids:
+            continue  # already finalized -- its own lens-findings state is checked above
+        if states.get(select_task_id) == "failed":
+            continue  # permanently failed select -- fail-open, same as a failed lens shard
+        pending.add(select_task_id)
+    return pending
 
 
 def plan_dedup(run_dir: str | Path, *,
@@ -605,5 +887,84 @@ def plan_dedup(run_dir: str | Path, *,
     return PlannedTask(
         task_id="dedup-rank", task_type="dedup-rank", lens_id="", shard="",
         repository_ref="", packet_ids=tuple(packet.task_id for packet in built),
+        estimated_tokens=sum(_packet_tokens(packet) for packet in built),
+        created=any(pid in created_ids for pid in (packet.task_id for packet in built)))
+
+
+# --------------------------------------------------------------------------- #
+# plan_lens_finalize -- phase 2 of the source_reads select/finalize pair
+# --------------------------------------------------------------------------- #
+
+def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
+                       context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS,
+                       skill_root: str | Path | None = None) -> PlannedTask:
+    """Composes the REAL lens-findings task for a source_reads lens --
+    ``plan_judgment`` created only its paired select task (see the module
+    docstring). ``lens_task_id`` is the ORIGINAL lens task_id
+    ``plan_judgment`` would have used directly for a non-source_reads lens
+    (never the ``-select`` id) -- looked up via ``_lens_task_specs``, not
+    parsed, since a repository_ref's task_id fragment is an unreversible
+    hash suffix.
+
+    Fails closed when: ``lens_task_id`` names no known lens task;
+    that lens is not source_reads (nothing to finalize -- plan_judgment
+    already created it directly); its select task has not validated yet;
+    or ``fetch-selections`` has not written fetched-evidence.json for that
+    select task yet.
+    """
+    run = Path(run_dir).expanduser().resolve()
+    identities = identity.load(run)
+    lens_templates = tpl.load_lens_templates(skill_root)
+    shared_body = tpl.load_shared_body(skill_root)
+    specs_by_id = {spec.task_id: spec for spec in _lens_task_specs(lens_templates, identities)}
+    spec = specs_by_id.get(lens_task_id)
+    if spec is None:
+        raise PlannerError(f"unknown lens task_id: {lens_task_id!r}")
+    if not spec.template.source_reads:
+        raise PlannerError(
+            f"{lens_task_id!r} is not a source_reads lens task -- plan_judgment already "
+            "created it directly; there is nothing for plan_lens_finalize to do")
+
+    select_task_id = _select_task_id(lens_task_id)
+    select_outputs = validated_outputs(run, task_type="selection-fetch")
+    if select_task_id not in select_outputs:
+        raise PlannerError(
+            f"{select_task_id!r} has not validated yet -- run its executor to "
+            "completion before plan-lens-finalize")
+
+    fetched_path = fetch_selections_output_path(run, select_task_id)
+    if not fetched_path.is_file():
+        raise PlannerError(
+            f"no fetched evidence at {fetched_path} -- run "
+            f"'fetch-selections --run <dir> --task {select_task_id}' before "
+            "plan-lens-finalize")
+    try:
+        fetched_evidence = json.loads(fetched_path.read_text("utf-8"))
+    except ValueError as exc:
+        raise PlannerError(f"{fetched_path}: invalid JSON: {exc}") from exc
+    if not isinstance(fetched_evidence, list):
+        raise PlannerError(f"{fetched_path} must contain a JSON array")
+
+    run_summary = _load_json(run / "signals" / "run-summary.json")
+    synthesis_doc = _load_json(run / "synthesis-input.json")
+    module_candidates_doc = _load_json(run / "module-candidates.json")
+    target_spec = TargetSpec.load(run / "targets.json")
+    test_ci_rows = _test_ci_evidence_rows(target_spec, identities)
+
+    inputs = _lens_inputs(run, spec.template, synthesis_doc, module_candidates_doc,
+                          run_summary, spec.repository_ref, test_ci_rows=test_ci_rows)
+    inputs["fetched-evidence.json"] = json.dumps(fetched_evidence, sort_keys=True)
+    instructions = tpl.render_instructions(spec.template, shared_body, source_verified=True)
+
+    built = compose(
+        task_id=lens_task_id, template_id=f"lens-{spec.lens_id}",
+        template_version=spec.template.version, task_type="lens-findings",
+        instructions=instructions, inputs=inputs, output_schema_id=tpl.LENS_OUTPUT_SCHEMA_ID,
+        context_budget_tokens=context_budget_tokens, depends_on=(select_task_id,))
+    created_ids = set(Engine(run).create_tasks(built))
+    return PlannedTask(
+        task_id=lens_task_id, task_type="lens-findings", lens_id=spec.lens_id,
+        shard=spec.template.shard, repository_ref=spec.repository_ref or "",
+        packet_ids=tuple(packet.task_id for packet in built),
         estimated_tokens=sum(_packet_tokens(packet) for packet in built),
         created=any(pid in created_ids for pid in (packet.task_id for packet in built)))

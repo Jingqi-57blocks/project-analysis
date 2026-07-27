@@ -11,6 +11,13 @@ signals: [dependency-cruiser, go-list, staticcheck]
 #   coverage-map.json is workspace_metrics.py's tested, authoritative
 #   catalog (test_skill_hygiene.py keeps it in lockstep with the installed
 #   lens set), so it is kept rather than dropped.
+source_reads: true
+# source_reads: "Boundary violations -- UI importing persistence directly,
+#   module A reaching into module B's internals (cite the specific import
+#   edges)" and the "Cross-stack contracts... label the relationship
+#   observed only when both sides are cited" rule both need the actual
+#   import/route-binding source line, not just a cruiser/go-list edge count
+#   or pair -- the graph view proves an edge exists, not what it means.
 ---
 # Lens: dependencies-cycles (group A)
 

@@ -425,8 +425,10 @@ def parser() -> argparse.ArgumentParser:
         "plan-judgment",
         help="(orchestrator, 57B-116) compose + register the judgment DAG for a "
              "prepared run: one lens-findings task per repo-sharded lens x repo "
-             "(plus one per workspace-sharded lens), and the independent "
-             "formation-proposal task")
+             "(plus one per workspace-sharded lens), the independent "
+             "formation-proposal task, and -- for a source_reads lens -- its "
+             "paired selection-fetch task in place of the lens task directly "
+             "(fetch-selections + plan-lens-finalize compose the real one)")
     plan_judgment_cmd.add_argument("--run", required=True, help="run directory")
     plan_judgment_cmd.add_argument(
         "--context-budget", type=int, default=96000, dest="context_budget",
@@ -462,6 +464,35 @@ def parser() -> argparse.ArgumentParser:
         "--out", default="",
         help="override output path (default: <run>/module-map.json, the "
              "canonical location finalize-module-map reads)")
+    fetch_selections_cmd = sub.add_parser(
+        "fetch-selections",
+        help="(orchestrator, 57B-116) fetch bounded, revision-checked, sanitized "
+             "+/-40-line source excerpts for a VALIDATED selection-fetch task's "
+             "requested locations -- writes fetched-evidence.json; run this "
+             "before plan-lens-finalize for the same lens")
+    fetch_selections_cmd.add_argument("--run", required=True, help="run directory")
+    fetch_selections_cmd.add_argument(
+        "--task", required=True, dest="task",
+        help="the validated selection-fetch task_id to fetch for (a "
+             "<lens-task-id>-select id)")
+    fetch_selections_cmd.add_argument(
+        "--out", default="",
+        help="override output path (default: <run>/tasks/<task>-fetched-"
+             "evidence.json, the canonical location plan-lens-finalize reads)")
+    plan_lens_finalize_cmd = sub.add_parser(
+        "plan-lens-finalize",
+        help="(orchestrator, 57B-116) phase 2 of a source_reads lens's select/"
+             "finalize pair: compose + register the REAL lens-findings task "
+             "from its original inputs plus fetch-selections's fetched-"
+             "evidence.json -- run this after fetch-selections for the same lens")
+    plan_lens_finalize_cmd.add_argument("--run", required=True, help="run directory")
+    plan_lens_finalize_cmd.add_argument(
+        "--lens", required=True, dest="lens",
+        help="the ORIGINAL lens task_id (not the -select id) plan-judgment "
+             "would have used directly for a non-source_reads lens")
+    plan_lens_finalize_cmd.add_argument(
+        "--context-budget", type=int, default=96000, dest="context_budget",
+        help="per-packet context budget in estimated tokens (default: 96000)")
     return result
 
 
@@ -1322,6 +1353,33 @@ def _write_module_map_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fetch_selections_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import selection
+    run = Path(args.run).expanduser().resolve()
+    try:
+        out_path = selection.fetch(run, args.task, out=args.out or None)
+    except selection.SelectionFetchError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    print(f"wrote {out_path}")
+    return 0
+
+
+def _plan_lens_finalize_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import planner
+    run = Path(args.run).expanduser().resolve()
+    try:
+        task = planner.plan_lens_finalize(
+            run, args.lens, context_budget_tokens=args.context_budget)
+    except planner.PlannerError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    status = "" if task.created else " (already planned, no-op)"
+    print(f"{task.task_id}: ~{task.estimated_tokens} tokens, "
+          f"{len(task.packet_ids)} packet(s){status}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -1367,6 +1425,10 @@ def main(argv: list[str] | None = None) -> int:
             return _assemble_findings_cmd(args)
         if args.command == "write-module-map":
             return _write_module_map_cmd(args)
+        if args.command == "fetch-selections":
+            return _fetch_selections_cmd(args)
+        if args.command == "plan-lens-finalize":
+            return _plan_lens_finalize_cmd(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)
