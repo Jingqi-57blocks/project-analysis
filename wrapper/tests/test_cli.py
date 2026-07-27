@@ -3,7 +3,8 @@ import os
 import argparse
 from pathlib import Path
 
-from analysis_wrapper.cli import PROVIDER_OWNED_SIGNAL_TOOLS, _record_summary, _sweep, main
+from analysis_wrapper.cli import (PROVIDER_OWNED_SIGNAL_TOOLS, _record_summary,
+                                  _sweep, main, parser)
 from analysis_wrapper.callgraph.contract import CoverageReport, RepoCoverage
 from analysis_wrapper.depmap import emit as dm_emit
 from analysis_wrapper.depmap.contract import DepMapReport, RepoDepCoverage
@@ -44,6 +45,11 @@ def _targets(tmp_path: Path, target) -> Path:
 
 def _reference(target) -> str:
     return Path(target.path).name
+
+
+def test_cli_does_not_advertise_the_retired_drilldown_stub():
+    """Phase 2 must not expose a command that only mints dead-end run dirs."""
+    assert "new-drilldown" not in parser().format_help()
 
 
 def test_cli_runs_one_tool_one_repo(monkeypatch, tmp_path, target):

@@ -37,7 +37,6 @@ class GenerateResult:
     section_count: int = 0
     diagram_count: int = 0
     missing_artifacts: list[str] = field(default_factory=list)
-    drilldown_available: bool = False
 
 
 def _write_json(path: Path, obj: dict) -> None:
@@ -215,23 +214,6 @@ def generate_from_inputs(
     ]
     primary_doc = inputs.doc("overview") or (inputs.docs[0] if inputs.docs else None)
 
-    # Drill-down module documents (present only once Phase 2 emits them). Each is
-    # rendered as a lossless full-document page and folded into the content map.
-    module_docs: list[tuple] = []  # (module, kind, DocSource, MarkdownDoc)
-    for m in inputs.drilldown_modules:
-        for kind, rel in (("prd", m.prd_relpath), ("health", m.health_relpath)):
-            if not rel:
-                continue
-            text = (inputs.run_dir / rel).read_text(encoding="utf-8")
-            did = narrative.drilldown_page_id(m, kind)
-            ds = run_inputs.DocSource(did, rel, f"{m.module_id} — {kind}", text)
-            md = render_document(did, text, link_map=document_link_map)
-            module_docs.append((m, kind, ds, md))
-            doc_entries.append(DocEntry(did, rel, pages.doc_page(did), md))
-
-    def module_page_for(module, kind: str) -> str:
-        return pages.doc_page(narrative.drilldown_page_id(module, kind))
-
     structured_registry: list[dict] = []
     extra_dests: dict[tuple[str, str], list] = {}
 
@@ -368,11 +350,10 @@ def generate_from_inputs(
     ))
 
     # ---- modules entrance ----
-    module_block = narrative.module_entrance(
+    module_block = narrative.module_map_entrance(
         inputs,
         rendered.get("project-map"),
         pages.doc_page("project-map") if inputs.doc("project-map") else None,
-        module_page_for=module_page_for if module_docs else None,
     )
     out_pages.append(pages.Page(
         "modules", P["modules"],
@@ -404,9 +385,6 @@ def generate_from_inputs(
     # ---- full-document lossless views ----
     for d in inputs.docs:
         out_pages.append(pages.full_document_page(inputs, d, rendered[d.doc_id]))
-    for _m, _kind, ds, md in module_docs:
-        out_pages.append(pages.full_document_page(inputs, ds, md))
-
     # ---- content map + diagram manifest ----
     cmap = content_map.build_content_map(doc_entries, extra_dests, structured_registry)
     missing = content_map.verify_completeness(cmap)
@@ -452,5 +430,4 @@ def generate_from_inputs(
         section_count=section_count,
         diagram_count=len(dmanifest["diagrams"]),
         missing_artifacts=inputs.missing_artifacts(),
-        drilldown_available=inputs.drilldown_available,
     )

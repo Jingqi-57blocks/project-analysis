@@ -13,9 +13,6 @@ output/<project-id>/
     signals/                 wrapper output: views + manifests + run-summary.json
       raw/                   contained raw tool output (self-gitignored, never
                              model-read, never packaged)
-  drilldown/<run-id>/
-    <module-id>/prd.md  <module-id>/health.md
-    source_overview_run      link back to the overview run this was built from
 ```
 
 - `<run-id>` — `YYYYMMDDThhmmssZ-<6-hex digest>`: a UTC start timestamp plus a short
@@ -25,5 +22,5 @@ output/<project-id>/
   suffix is appended). Runs are **immutable snapshots**: a repo mismatch
   (HEAD/dirty/tool versions/analysis identity) always means a NEW overview run, never a
   partial refresh of an old one.
-- Overview and drill-down trees are separate on purpose: drill-downs reference their
-  source overview via `source_overview_run` instead of mutating it.
+- Module Drill has no runtime layout yet. Its approved standalone and overview-backed
+  source contract is in `references/module-drill-mvp-contract.md`.

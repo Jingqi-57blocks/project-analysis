@@ -13,9 +13,9 @@ state/<project-id>/
   absolute path (same rule the wrapper uses for repo-ids).
 - `pointers.json` — `{"latest_completed": "<run-id>", "current": "<run-id>|null"}`.
   `latest_completed` is set automatically when any overview finishes and is for
-  **inspection only** — it is never an implicit drill-down source. `current` is set
-  ONLY on the user's explicit acceptance and is the default source for module
-  drill-downs.
+  **inspection only**. `current` is set ONLY on the user's explicit acceptance. A
+  future Module Drill may use a compatible accepted overview as optional immutable
+  evidence, according to `references/module-drill-mvp-contract.md`.
 - `confirmed_facts.md` — one record per confirmed correction: scope, source, date,
   status (`active | superseded | conflicts_with_observation`). A fact that contradicts
   observed code is surfaced in reports, never silently applied.

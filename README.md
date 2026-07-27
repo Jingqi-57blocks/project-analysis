@@ -5,8 +5,10 @@ zero target-specific configuration and produces:
 
 1. **Project overview + diagnosis** — module map, ranked problems with evidence,
    honest per-lens coverage reporting.
-2. **Module drill-down** — a PM-readable module PRD (`prd.md`) and a dev-facing
-   health report (`health.md`) with traced change scenarios.
+2. **Module Drill (Phase 2)** — planned PM-readable module PRDs (`prd.md`) and
+   dev-facing health reports (`health.md`). Its approved MVP contract is in
+   [`references/module-drill-mvp-contract.md`](references/module-drill-mvp-contract.md);
+   it is not yet a runnable command.
 
 First-class stack support in v1: **JS/TS and Go**. Other stacks are analyzed with
 explicitly disclosed reduced coverage.

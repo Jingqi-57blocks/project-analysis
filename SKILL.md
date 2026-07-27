@@ -6,7 +6,9 @@ description: Project Analysis — point it at any codebase (single- or multi-rep
 # Project Analysis
 
 You are running Project Analysis: a read-only diagnostician for codebases. You produce
-(1) a **project overview + diagnosis** and (2) **module drill-downs** on request. The
+(1) a **project overview + diagnosis**. Module Drill is a separately planned Phase 2
+workflow; its contract lives in `references/module-drill-mvp-contract.md` and it is not
+yet available as a command. The
 target may be a single repo or a multi-repo workspace. Nothing about the target is
 configured in advance — **zero project-specific configuration**: everything is discovered
 from its repositories. (The machine still needs the analyzer's own prerequisites: Python
@@ -22,7 +24,6 @@ first-class confidence.
 
 ```
 /project-analysis [path] [--language zh-CN|en] [--run-id <label>]
-/project-analysis module <module-id> [--from-run <run-id>] [--language zh-CN|en]
 ```
 
 (The command is `/project-analysis`.)
@@ -34,13 +35,6 @@ first-class confidence.
   identifiers, and error strings are ALWAYS quoted verbatim from source — never
   translated. Intermediate artifacts (lens findings, signals) may remain English;
   the RUN language governs the delivered reports.
-- `/project-analysis module` resolves its source overview as: `--from-run <run-id>` if
-  given → otherwise the project's `current` pointer → otherwise **refuse**, listing the
-  project's completed runs. A run other than `current` may be accepted later ONLY if it
-  still passes the same match check as drill-down reuse (HEADs, clean state, tool
-  versions, analysis identity); if the repos have moved on, advise a new overview
-  instead. Inspection-only runs (dirty worktree or non-git) can NEVER be accepted —
-  not at completion and not later.
 
 ## Two directory worlds — never mix them
 
@@ -142,19 +136,18 @@ wanting the wrapper to "decide" something analytical, stop — that logic belong
   exists, append the first free `-2`, `-3`, … suffix.
 - Two pointers per project in `state/<project-key>/pointers.json`:
   `latest_completed` (set automatically when any overview finishes) and `current` (set
-  only on explicit user acceptance). `latest_completed` is for inspection only — it is
-  NEVER an implicit drill-down source. When an overview completes cleanly, offer
-  acceptance in one word.
+  only on explicit user acceptance). `latest_completed` is for inspection only. When an
+  overview completes cleanly, offer acceptance in one word.
 - There is no cross-run cache, replay, content-addressed store, incremental planner, or
   receipt graph. An interrupted overview may resume only its own canonical checkpoints,
   and only while target state, analyzer version/state, and bound preparation options are
-  unchanged. Any mismatch requires a new overview. A later drill-down may reference an
-  accepted overview as immutable source evidence; it does not refresh or rewrite it.
+  unchanged. Any mismatch requires a new overview. A future Module Drill may reference
+  a compatible overview as immutable source evidence; it does not refresh or rewrite it.
   NON-GIT targets use one local source-state digest solely to detect same-run changes;
   it is not a cache identity and never enables reuse across runs.
 - **Dirty worktrees:** the overview proceeds as **inspection-only** (disclosed in the
-  header, `repo@WORKTREE:` citations, no acceptance offer, no drill-down reuse, and
-  never acceptable later either). Advise committing or stashing for an acceptable run.
+  header, `repo@WORKTREE:` citations, no acceptance offer, and never acceptable later
+  either). Advise committing or stashing for an acceptable run.
 - **Non-git folders:** analyzed with reduced coverage — no history or
   ownership-concentration (bus-factor proxy) lenses, citations are non-reproducible
   (`repo@NON-GIT:path:line`), results are never cached or reused. Git is required for
@@ -290,29 +283,12 @@ entry files, for their verbatim UI labels — never broad source reads. If it ru
 budget, the affected section is reported `partial`/`unknown`, never backfilled with broad
 reads; a fresh run should stay within ~20% of the current baseline wall-clock.
 
-## Module drill-down
+## Module Drill (planned)
 
-Mint the drill-down run with the wrapper (it enforces resolution, staleness, and
-linkage — never create the directory by hand):
-
-```
-"${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-analysis-wrapper" new-drilldown \
-    --skill-root "${CLAUDE_SKILL_DIR}" --module <module-id> [--from-run <run-id>]
-```
-
-Resolution is `--from-run` → `current` pointer → refusal listing completed runs;
-a stale source (any repo moved/dirtied since the overview) exits 5 naming the
-drift — run a new overview instead. The minted run lives in
-`output/<project-key>/drilldown/<run-id>/` with a `source_overview_run` link and
-stages `resolve → prd → health` (same `mark-stage`/`rollback`/audit-before-mark
-discipline as overviews). Then produce two documents from the templates:
-- `prd.md` (`templates/module-prd.md`) — PM-facing; sections included **where
-  applicable**: UI entry points (verbatim labels), roles, flows, rules/states,
-  notifications/integrations, open questions. Readable standalone.
-- `health.md` (`templates/module-health.md`) — dev-facing; findings with evidence,
-  dependency picture, and up to **3 applicable** traced change scenarios chosen from:
-  UI change, business-rule change, data/API change, scheduler/event change,
-  external-integration change.
+Module Drill is intentionally not exposed as a partial command. Its standalone and
+overview-backed MVP contract is `references/module-drill-mvp-contract.md`. It will use
+a compatible overview as optional immutable static evidence, or perform bounded
+standalone scope discovery; neither path silently depends on the other.
 
 ## Confirmed facts
 
@@ -326,10 +302,10 @@ observed code, surface the conflict in the report — never silently prefer eith
 ```
 SKILL.md            this file
 lenses/             lens prompt definitions (analysis dimensions)
-templates/          overview (PM primary), technical-overview, project-map, module-prd, module-health
+templates/          overview (PM primary), technical-overview, project-map
 wrapper/            Python tool-execution wrapper (see wrapper/README.md)
 state/<project-key>/     pointers.json, confirmed_facts.md   (runtime, per target)
-output/<project-key>/    overview/<run-id>/, drilldown/<run-id>/   (runtime, per target)
+output/<project-key>/    overview/<run-id>/   (runtime, per target)
 ```
 
 `<project-key>` is the portable filename form of the real workspace name. Ordinary
