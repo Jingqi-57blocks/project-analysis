@@ -27,6 +27,7 @@ from .contracts import (
 )
 from .layout import MODULE_RUN_VERSION, ModuleRunLayout, create_module_run, mint_module_run_id
 from .overview import OverviewScopeProvider
+from .standalone import StandaloneScopeProvider
 
 __all__ = [
     "MODULE_RUN_VERSION",
@@ -46,6 +47,7 @@ __all__ = [
     "ScopeAlternative",
     "ScopeProvider",
     "ScopeResolutionError",
+    "StandaloneScopeProvider",
     "Selector",
     "create_module_run",
     "mint_module_run_id",

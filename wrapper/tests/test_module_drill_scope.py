@@ -25,6 +25,7 @@ from analysis_wrapper.module_drill import (
     ProjectSnapshot,
     RepositorySnapshot,
     Selector,
+    StandaloneScopeProvider,
     create_module_run,
     load_scope,
     mint_module_run_id,
@@ -318,6 +319,53 @@ def test_overview_provider_can_follow_only_an_accepted_current_pointer(tmp_path,
     with pytest.raises(ValueError) as unsafe_key:
         OverviewScopeProvider.from_current(root, "../outside")
     assert unsafe_key.value.code == "invalid-project-key"
+
+
+def _standalone_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "src" / "orders").mkdir(parents=True)
+    (workspace / "src" / "shared").mkdir()
+    (workspace / "package.json").write_text(json.dumps({"name": "example-app"}), "utf-8")
+    (workspace / "src" / "orders" / "orders.ts").write_text(
+        'import "../shared/client";\nexport function createOrder() {}\napp.post("/orders", createOrder);\n',
+        "utf-8")
+    (workspace / "src" / "shared" / "client.ts").write_text("export const client = {};\n", "utf-8")
+    return workspace
+
+
+@pytest.mark.parametrize("selector", [
+    Selector("orders", "name"), Selector("orders", "alias"),
+    Selector("src/orders", "path"), Selector("createOrder", "symbol"),
+    Selector("POST /orders", "route"), Selector("/orders", "api"),
+])
+def test_standalone_provider_resolves_bounded_generic_selectors(tmp_path, selector):
+    provider = StandaloneScopeProvider(_standalone_workspace(tmp_path))
+    scope = resolve_scope(provider, ModuleScopeRequest(
+        "standalone", provider.project_snapshot, selector))
+    assert scope.source_mode == "standalone"
+    assert scope.owned_scope[0].root == "src/orders"
+    assert scope.coverage.capabilities[0][0] == "overview-evidence" or scope.coverage.capabilities
+    assert scope.overview_lineage is None
+    assert "src/orders/orders.ts" in scope.owned_scope[0].files
+
+
+def test_standalone_provider_handles_package_ambiguity_and_inspection_only(tmp_path):
+    workspace = _standalone_workspace(tmp_path)
+    provider = StandaloneScopeProvider(workspace)
+    package_scope = resolve_scope(provider, ModuleScopeRequest(
+        "standalone", provider.project_snapshot, Selector("example-app", "package")))
+    assert package_scope.owned_scope[0].root == "."
+    assert package_scope.project.inspection_only
+
+    (workspace / "src" / "second-orders").mkdir()
+    (workspace / "src" / "second-orders" / "x.ts").write_text(
+        "export function createOrder() {}\n", "utf-8")
+    ambiguous = StandaloneScopeProvider(workspace)
+    with pytest.raises(ValueError) as exc:
+        ambiguous.resolve(ModuleScopeRequest(
+            "standalone", ambiguous.project_snapshot, Selector("createOrder", "symbol")))
+    assert exc.value.code == "ambiguous-module"
+    assert len(exc.value.alternatives) == 2
 
 
 @pytest.mark.parametrize("value", ["../escape", "two/parts", "two\\parts", ".", "name."])
