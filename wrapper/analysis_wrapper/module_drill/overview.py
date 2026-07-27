@@ -74,6 +74,11 @@ class OverviewScopeProvider:
     def __init__(self, run_dir: str | Path):
         self.run_dir = Path(run_dir).expanduser().resolve()
 
+    def source_inputs(self) -> tuple[TargetSpec, identity.IdentityMap, ProjectSnapshot]:
+        """Expose the exact already-validated source mapping to the command layer."""
+        _state, spec, identities, _candidates, _map, _model, _coverage, _findings = self._load_contracts()
+        return spec, identities, self._snapshot(spec, identities)
+
     @classmethod
     def from_current(cls, skill_root: str | Path, project_key: str) -> "OverviewScopeProvider":
         """Load the explicitly accepted overview for one output namespace."""
