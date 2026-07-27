@@ -26,6 +26,7 @@ from .contracts import (
     write_scope,
 )
 from .layout import MODULE_RUN_VERSION, ModuleRunLayout, create_module_run, mint_module_run_id
+from .overview import OverviewScopeProvider
 
 __all__ = [
     "MODULE_RUN_VERSION",
@@ -38,6 +39,7 @@ __all__ = [
     "ModuleScope",
     "ModuleScopeRequest",
     "OverviewLineage",
+    "OverviewScopeProvider",
     "OwnedLocation",
     "ProjectSnapshot",
     "RepositorySnapshot",

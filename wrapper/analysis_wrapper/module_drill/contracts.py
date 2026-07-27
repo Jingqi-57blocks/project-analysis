@@ -237,8 +237,11 @@ class OwnedLocation:
         object.__setattr__(self, "symbols", _list(self.symbols, "owned location symbols"))
         object.__setattr__(self, "evidence_refs", _refs(
             self.evidence_refs, "owned location evidence_refs"))
-        if not self.files and not self.symbols:
-            raise ValueError("owned location needs at least one file or symbol")
+        # An overview can establish ownership from a route, data-store, or
+        # other structured candidate before it can name an implementation
+        # file.  Keep that evidence rather than inventing a file path.
+        if not self.files and not self.symbols and not self.evidence_refs:
+            raise ValueError("owned location needs a file, symbol, or evidence reference")
 
     def to_dict(self) -> dict[str, Any]:
         return {"repository_ref": self.repository_ref, "root": self.root,
@@ -268,7 +271,11 @@ class Boundary:
         if self.direction not in _DIRECTIONS:
             raise ValueError(f"boundary direction must be one of {sorted(_DIRECTIONS)}")
         _id(self.kind, "boundary kind")
-        _id(self.neighbor_id, "boundary neighbor_id")
+        # System-model node IDs are opaque handles such as ``route:abcd``.
+        # They are deliberately not ModuleScope IDs, so accepting only the
+        # latter would make a direct, evidence-backed overview boundary
+        # impossible to preserve.
+        _text(self.neighbor_id, "boundary neighbor_id", limit=128)
         _reference(self.repository_ref, "boundary repository_ref")
         object.__setattr__(self, "evidence_refs", _refs(
             self.evidence_refs, "boundary evidence_refs"))
