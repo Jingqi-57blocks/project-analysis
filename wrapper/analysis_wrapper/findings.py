@@ -215,61 +215,120 @@ def _prepare_validation(run: Path) -> tuple[dict, list, dict]:
 def _validate_row(row: Any, index: int, seen: set[str], *, run: Path, spec: TargetSpec,
                   identities: identity.IdentityMap, metric_refs: set[str],
                   metric_origins: dict[str, set[str]], allowed_views: dict[str, str],
-                  module_ids: set[str]) -> None:
-    """One finding's full validation — raises on the first problem, exactly
-    as the pre-57B-116 inline loop body did. ``seen`` accumulates finding_ids
-    across sequential calls (both callers below invoke this in document
-    order), so duplicate detection is unchanged either way it is driven."""
+                  module_ids: set[str], problems: list[str] | None = None) -> None:
+    """One finding's full validation. ``seen`` accumulates finding_ids across
+    sequential calls (both callers below invoke this in document order), so
+    duplicate detection is unchanged either way it is driven.
+
+    Two modes running the IDENTICAL checks in the identical order:
+
+    - ``problems is None`` (default): raises on the first problem, exactly as
+      the pre-57B-116 inline loop body did — :func:`validate` is unaffected.
+    - ``problems`` given: every INDEPENDENT problem in the row is appended to
+      it and validation continues, so a single repair pass can fix a finding
+      completely. The fail-fast surface reported only the first bad ref per
+      finding, which cost repeated repair rounds on a live acceptance run
+      (57B-116); collecting them is what makes one repair round enough.
+
+    Cascade honesty: a check whose successors depend on it (a non-dict row, an
+    unusable finding_id, a non-list evidence array, a rejected basis or ref)
+    records its own problem and SKIPS the dependent aggregate checks rather
+    than reporting derived nonsense — an undercounted ``bases`` set would
+    otherwise produce a bogus ``evidence_basis`` mismatch, and undercounted
+    ``independent_refs`` a bogus high-confidence rejection, sending a repairer
+    after problems that do not exist.
+    """
+    def fail(message: str) -> None:
+        if problems is None:
+            raise ValueError(message)
+        problems.append(message)
+
+    def checked(call) -> bool:
+        """Run one independent raising check: re-raise in fail-fast mode,
+        record its own message and report failure when collecting."""
+        try:
+            call()
+        except ValueError as exc:
+            if problems is None:
+                raise
+            problems.append(str(exc))
+            return False
+        return True
+
     if not isinstance(row, dict):
-        raise ValueError(f"findings[{index}] must be an object")
-    finding_id = _one_line(row.get("finding_id"), f"findings[{index}].finding_id")
+        fail(f"findings[{index}] must be an object")
+        return
+    try:
+        finding_id = _one_line(row.get("finding_id"), f"findings[{index}].finding_id")
+    except ValueError as exc:
+        if problems is None:
+            raise
+        problems.append(str(exc))
+        return  # nothing else in this row can be labelled, let alone checked
     if not _ID.fullmatch(finding_id) or finding_id in seen:
-        raise ValueError(f"invalid or duplicate finding_id: {finding_id}")
+        fail(f"invalid or duplicate finding_id: {finding_id}")
     seen.add(finding_id)
     for key in ("claim", "lens", "impact", "limitations", "suggested_direction"):
-        _one_line(row.get(key), f"{finding_id}.{key}")
+        checked(lambda key=key: _one_line(row.get(key), f"{finding_id}.{key}"))
     if row.get("priority") not in _PRIORITIES:
-        raise ValueError(f"{finding_id}.priority is invalid")
+        fail(f"{finding_id}.priority is invalid")
     if row.get("confidence") not in _CONFIDENCE:
-        raise ValueError(f"{finding_id}.confidence is invalid")
+        fail(f"{finding_id}.confidence is invalid")
     affected = row.get("affected_modules")
     if not isinstance(affected, list) or not affected or not all(
             isinstance(value, str) and value in module_ids for value in affected):
-        raise ValueError(f"{finding_id}.affected_modules must use finalized module IDs")
+        fail(f"{finding_id}.affected_modules must use finalized module IDs")
     evidence = row.get("evidence")
-    if not isinstance(evidence, list) or not evidence:
-        raise ValueError(f"{finding_id}.evidence must be non-empty")
     bases = set()
     independent_refs: set[str] = set()
+    bases_complete = True   # every evidence row contributed its basis
+    refs_complete = True    # every ref resolved, so the signal count is real
+    if not isinstance(evidence, list) or not evidence:
+        fail(f"{finding_id}.evidence must be non-empty")
+        evidence, bases_complete, refs_complete = [], False, False
     for evidence_index, item in enumerate(evidence):
         if not isinstance(item, dict):
-            raise ValueError(f"{finding_id}.evidence[{evidence_index}] must be an object")
-        _one_line(item.get("fact"), f"{finding_id}.evidence[{evidence_index}].fact")
+            fail(f"{finding_id}.evidence[{evidence_index}] must be an object")
+            bases_complete = refs_complete = False
+            continue
+        checked(lambda item=item, evidence_index=evidence_index: _one_line(
+            item.get("fact"), f"{finding_id}.evidence[{evidence_index}].fact"))
         basis = str(item.get("basis", ""))
         if basis not in _BASES:
-            raise ValueError(f"{finding_id}.evidence[{evidence_index}].basis is invalid")
-        if basis in {"runtime-observation", "user-confirmed"}:
-            raise ValueError(
-                f"{finding_id}.evidence[{evidence_index}].basis {basis} "
-                "has no supported provenance artifact in a static overview")
-        bases.add(basis)
+            fail(f"{finding_id}.evidence[{evidence_index}].basis is invalid")
+            bases_complete = False
+        elif basis in {"runtime-observation", "user-confirmed"}:
+            fail(f"{finding_id}.evidence[{evidence_index}].basis {basis} "
+                 "has no supported provenance artifact in a static overview")
+            bases_complete = False
+        else:
+            bases.add(basis)
         refs = item.get("refs")
         if not isinstance(refs, list) or not refs:
-            raise ValueError(f"{finding_id}.evidence[{evidence_index}].refs is empty")
+            fail(f"{finding_id}.evidence[{evidence_index}].refs is empty")
+            refs_complete = False
+            continue
         for ref in refs:
-            normalized_ref = _one_line(ref, "evidence ref")
-            _validate_ref(normalized_ref, run, spec, identities,
-                          metric_refs, allowed_views)
+            try:
+                normalized_ref = _one_line(ref, "evidence ref")
+                _validate_ref(normalized_ref, run, spec, identities,
+                              metric_refs, allowed_views)
+            except ValueError as exc:
+                if problems is None:
+                    raise
+                problems.append(str(exc))
+                refs_complete = False
+                continue
             independent_refs.update(_independent_ref_keys(
                 normalized_ref, run=run,
                 allowed_views=allowed_views, metric_origins=metric_origins))
     declared_bases = row.get("evidence_basis")
-    if not isinstance(declared_bases, list) or set(declared_bases) != bases:
-        raise ValueError(f"{finding_id}.evidence_basis must equal evidence bases")
-    if row.get("confidence") == "high" and (
+    if bases_complete and (
+            not isinstance(declared_bases, list) or set(declared_bases) != bases):
+        fail(f"{finding_id}.evidence_basis must equal evidence bases")
+    if refs_complete and row.get("confidence") == "high" and (
             len(evidence) < 2 or len(independent_refs) < 2):
-        raise ValueError(
-            f"{finding_id}.confidence high requires at least two independent signals")
+        fail(f"{finding_id}.confidence high requires at least two independent signals")
 
 
 def validate(run_dir: str | Path) -> dict:
@@ -309,8 +368,15 @@ def validate_report_failures(run_dir: str | Path) -> dict[str, list[dict]]:
 
     Reuses the exact same per-row checks :func:`validate` runs (both call
     :func:`_prepare_validation` then :func:`_validate_row`) — this changes
-    only what happens AFTER a row fails (record-and-continue instead of
+    only what happens AFTER a check fails (record-and-continue instead of
     stop-the-run), never the checks themselves or their order.
+
+    ALL of a finding's independent problems are reported, not just its first
+    (57B-116): a repairer that only ever sees the first bad ref in a finding
+    fixes it, resubmits, and is handed the next one — a live acceptance run
+    paid several avoidable rounds that way. See :func:`_validate_row`'s
+    ``problems`` mode, including why dependent aggregate checks are skipped
+    rather than reported off incomplete data.
     """
     run = Path(run_dir).expanduser().resolve()
     _doc, rows, row_context = _prepare_validation(run)
@@ -318,11 +384,11 @@ def validate_report_failures(run_dir: str | Path) -> dict[str, list[dict]]:
     seen: set[str] = set()
     for index, row in enumerate(rows):
         key = _row_key(row, index)
-        try:
-            _validate_row(row, index, seen, **row_context)
-        except ValueError as exc:
+        problems: list[str] = []
+        _validate_row(row, index, seen, **row_context, problems=problems)
+        for detail in problems:
             failures.setdefault(key, []).append({
-                "check": "finding-validation", "detail": str(exc),
+                "check": "finding-validation", "detail": detail,
                 "location": f"findings[{index}]"})
     return failures
 
