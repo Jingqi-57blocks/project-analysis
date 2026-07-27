@@ -70,6 +70,18 @@ def export_output_dir(
     )
 
 
+def module_export_output_dir(
+    skill_root: str | Path, project_key: str, module_id: str, run_id: str, fmt: str
+) -> Path:
+    """Canonical isolated export location for one module run."""
+    project = _path_segment(project_key, "project key")
+    module = _path_segment(module_id, "module id")
+    run = _path_segment(run_id, "run id")
+    format_name = _path_segment(fmt, "format")
+    return (Path(skill_root) / "exported" / f"{project}-analysis" / "modules"
+            / module / run / format_name)
+
+
 def export(
     run_dir: str | Path,
     fmt: str = DEFAULT_FORMAT,
@@ -88,11 +100,22 @@ def export(
     ok, reason = exporter.check_available()
     if not ok:
         raise ExporterUnavailable(f"format unavailable: {reason}")
-    inputs = run_inputs.load(run_dir)
+    run_path = Path(run_dir).expanduser().resolve()
+    from ..module_drill.html import (generate_module_html, is_module_run,
+                                     load_module_html_inputs)
+    if is_module_run(run_path):
+        inputs = load_module_html_inputs(run_path)
+        if out_dir is None:
+            if skill_root is None:
+                raise ValueError("export needs either out_dir or skill_root")
+            out_dir = module_export_output_dir(skill_root, str(inputs.run_state["project_key"]),
+                                        inputs.scope.module.module_id, inputs.run_id, fmt)
+        result = generate_module_html(inputs, Path(out_dir))
+        return ExportResult(fmt, Path(out_dir), detail=result)
+    inputs = run_inputs.load(run_path)
     if out_dir is None:
         if skill_root is None:
             raise ValueError("export needs either out_dir or skill_root")
-        run_path = Path(run_dir).expanduser().resolve()
         project_key = (run_path.parent.parent.name
                        if run_path.parent.name == "overview"
                        else inputs.identity_map.project.artifact_key)
@@ -110,5 +133,6 @@ __all__ = [
     "get_exporter",
     "project_name",
     "export_output_dir",
+    "module_export_output_dir",
     "export",
 ]

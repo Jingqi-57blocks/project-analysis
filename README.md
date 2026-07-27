@@ -5,10 +5,10 @@ zero target-specific configuration and produces:
 
 1. **Project overview + diagnosis** — module map, ranked problems with evidence,
    honest per-lens coverage reporting.
-2. **Module Drill (Phase 2)** — planned PM-readable module PRDs (`prd.md`) and
-   dev-facing health reports (`health.md`). Its approved MVP contract is in
-   [`references/module-drill-mvp-contract.md`](references/module-drill-mvp-contract.md);
-   it is not yet a runnable command.
+2. **Module Drill (Phase 2)** — a bounded PM-readable module PRD (`prd.md`) and
+   developer health report (`health.md`) from either a compatible overview or direct
+   standalone source scope. Its MVP contract is in
+   [`references/module-drill-mvp-contract.md`](references/module-drill-mvp-contract.md).
 
 First-class stack support in v1: **JS/TS and Go**. Other stacks are analyzed with
 explicitly disclosed reduced coverage.
@@ -105,6 +105,29 @@ $project-analysis Analyze /absolute/path/to/project --language zh-CN
 
 Use `--language en` for English output and `--run-id <label>` for a readable run label.
 The skill writes Markdown under `output/` and an offline HTML export under `exported/`.
+
+### 5. Drill into one module
+
+Use an exact selector prefix when the target needs disambiguation. A compatible accepted
+overview is used when available; `--standalone` performs bounded direct source discovery
+instead.
+
+```bash
+wrapper/.venv/bin/project-analysis-wrapper module path:src/orders /absolute/path/to/project \
+  --standalone --skill-root "$PWD" --language zh-CN
+```
+
+The module run contains `module-scope.json`, `module-evidence.json`, `prd.md`, and
+`health.md`. Export it without another analysis pass:
+
+```bash
+wrapper/.venv/bin/project-analysis-wrapper export --run /absolute/path/to/module-run \
+  --skill-root "$PWD"
+```
+
+Module HTML is written under
+`exported/<project>-analysis/modules/<module-id>/<run-id>/html/`, so separate runs
+cannot overwrite one another.
 
 ## Design
 

@@ -283,12 +283,33 @@ entry files, for their verbatim UI labels — never broad source reads. If it ru
 budget, the affected section is reported `partial`/`unknown`, never backfilled with broad
 reads; a fresh run should stay within ~20% of the current baseline wall-clock.
 
-## Module Drill (planned)
+## Module Drill
 
-Module Drill is intentionally not exposed as a partial command. Its standalone and
-overview-backed MVP contract is `references/module-drill-mvp-contract.md`. It will use
-a compatible overview as optional immutable static evidence, or perform bounded
-standalone scope discovery; neither path silently depends on the other.
+Module Drill creates one immutable, bounded code-evidence run for a selected module.
+Use the wrapper command rather than creating its output directory manually:
+
+```
+project-analysis-wrapper module <selector> <workspace> --skill-root <skill-root> \
+  [--from-run <overview-run-id>] [--standalone] [--language zh-CN|en] [--run-id <label>]
+```
+
+Selectors use `name:`, `alias:`, `path:`, `package:`, `symbol:`, `route:`, or `api:`.
+An explicit `--from-run` must match the current source snapshot. Without one, the
+wrapper uses exactly one compatible accepted overview when it exists; `--standalone`
+performs bounded direct scope discovery instead. The output is
+`output/<project-key>/modules/<module-id>/<run-id>/` and contains `module-scope.json`,
+`module-evidence.json`, `prd.md`, and `health.md`.
+
+Export a completed module run with:
+
+```
+project-analysis-wrapper export --run <module-run-dir> --skill-root <skill-root>
+```
+
+The offline HTML export is isolated at
+`exported/<project-key>-analysis/modules/<module-id>/<run-id>/html/`. It renders the
+PRD and health report losslessly, including authored Mermaid diagrams, without another
+analysis pass or network access.
 
 ## Confirmed facts
 
@@ -305,7 +326,7 @@ lenses/             lens prompt definitions (analysis dimensions)
 templates/          overview (PM primary), technical-overview, project-map
 wrapper/            Python tool-execution wrapper (see wrapper/README.md)
 state/<project-key>/     pointers.json, confirmed_facts.md   (runtime, per target)
-output/<project-key>/    overview/<run-id>/   (runtime, per target)
+output/<project-key>/    overview/<run-id>/, modules/<module-id>/<run-id>/   (runtime, per target)
 ```
 
 `<project-key>` is the portable filename form of the real workspace name. Ordinary
