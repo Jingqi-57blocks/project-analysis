@@ -390,7 +390,14 @@ class Engine:
                     detail={"result": result.to_dict()}))
 
                 if result.status == "ok":
-                    failures = schemas.validate_output(task.packet.task_type, result.output)
+                    # The packet is passed so schemas can additionally run any
+                    # cross-check registered for this task type -- an output
+                    # must answer the question it was ASKED, not merely be
+                    # self-consistent (see schemas._CROSSCHECKS).
+                    failures = schemas.validate_output(
+                        task.packet.task_type, result.output,
+                        packet_inputs={name: item.content
+                                       for name, item in task.packet.inputs.items()})
                 else:
                     failures = [{"check": "executor-status",
                                 "detail": f"executor reported status={result.status!r}",

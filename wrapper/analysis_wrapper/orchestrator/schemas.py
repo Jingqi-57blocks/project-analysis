@@ -19,8 +19,9 @@ real run, via the existing modules.
 
 from __future__ import annotations
 
+import json
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from .. import module_map
 from .contracts import TASK_TYPES
@@ -706,15 +707,75 @@ _VALIDATORS: dict[str, Callable[[Any], list[Failure]]] = {
 assert set(_VALIDATORS) == TASK_TYPES  # every task type has exactly one schema
 
 
-def validate_output(task_type: str, obj: Any) -> list[Failure]:
+# --------------------------------------------------------------------------- #
+# packet cross-checks
+#
+# A schema check can only prove an output is SELF-consistent. Some outputs
+# also have to be consistent with the PACKET THEY ANSWER, and an executor
+# that quietly narrows the question would otherwise pass: dedup-rank echoes
+# the id universe it was given, and its merge_map is checked against that
+# echo -- so an executor that drops ids from BOTH stays internally
+# consistent and validates cleanly, silently deciding those findings out of
+# existence. (Observed on a live acceptance run, 57B-116: five findings went
+# missing this way and were only caught downstream by the assembler.)
+# Cross-checks close that gap at the gate; they are skipped when the caller
+# has no packet to check against, so a bare schema call is unchanged.
+# --------------------------------------------------------------------------- #
+
+def _crosscheck_dedup_rank(obj: Any, packet_inputs: Mapping[str, str]) -> list[Failure]:
+    raw = packet_inputs.get("input-finding-ids.json")
+    if raw is None:
+        return []
+    try:
+        expected = set(json.loads(raw))
+    except ValueError:
+        return []  # a malformed packet input is not this output's failure
+    echoed = obj.get("input_finding_ids") if isinstance(obj, dict) else None
+    if not isinstance(echoed, list):
+        return []  # the schema check already reported the missing/bad field
+    failures: list[Failure] = []
+    missing = sorted(expected - set(echoed))
+    if missing:
+        failures.append({
+            "check": "dedup-input-coverage",
+            "detail": ("input_finding_ids omits ids present in the packet -- every "
+                       f"finding must be accounted for: {missing[:20]}"),
+            "location": "input_finding_ids"})
+    unknown = sorted(set(echoed) - expected)
+    if unknown:
+        failures.append({
+            "check": "dedup-input-coverage",
+            "detail": f"input_finding_ids invents ids absent from the packet: {unknown[:20]}",
+            "location": "input_finding_ids"})
+    return failures
+
+
+_CROSSCHECKS: dict[str, Callable[[Any, Mapping[str, str]], list[Failure]]] = {
+    "dedup-rank": _crosscheck_dedup_rank,
+}
+
+
+def validate_output(task_type: str, obj: Any, *,
+                    packet_inputs: Mapping[str, str] | None = None) -> list[Failure]:
     """Structurally validate one task's output against its schema.
 
     Returns a list of ``{"check", "detail", "location"}`` failures (empty =
     valid). An unknown ``task_type`` is itself reported as a failure rather
     than raising, so a caller validating a batch of heterogeneous results
     never has to special-case this function with a try/except.
+
+    ``packet_inputs`` (name -> content, as the answered packet carried them)
+    additionally runs any cross-check registered for this task type — see
+    the note above :func:`_crosscheck_dedup_rank` for why self-consistency
+    alone is not enough. Omitting it keeps the pure-schema behaviour, so a
+    caller holding only an output (a fixture, a conformance golden) is
+    unaffected.
     """
     if task_type not in _VALIDATORS:
         return [{"check": "task-type", "detail": f"unknown task_type: {task_type!r}",
                  "location": "task_type"}]
-    return _VALIDATORS[task_type](obj)
+    failures = _VALIDATORS[task_type](obj)
+    crosscheck = _CROSSCHECKS.get(task_type)
+    if crosscheck is not None and packet_inputs is not None:
+        failures = failures + crosscheck(obj, packet_inputs)
+    return failures

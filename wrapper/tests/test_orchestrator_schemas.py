@@ -1,6 +1,7 @@
 """Per-task-type output SHAPE tests (57B-114 M0) — pure structural checks,
 no run directory involved (that is validators.py's job)."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -366,3 +367,54 @@ def test_selection_fetch_accepts_both_quoted_text_states():
     assert schemas.validate_output("selection-fetch", _doc("Sign in")) == []  # fetched state
     failures = schemas.validate_output("selection-fetch", _doc(None))
     assert "selection-quoted-text" in _checks(failures)
+
+
+def test_dedup_rank_crosscheck_rejects_a_narrowed_id_universe():
+    """A dedup output that drops ids from BOTH its echo and its merge_map is
+    internally consistent and passes the schema — it just silently decides
+    those findings out of existence. The packet cross-check is what catches
+    it (57B-116: five findings went missing exactly this way on a live run)."""
+    packet_inputs = {"input-finding-ids.json": json.dumps(
+        ["finding-a", "finding-b", "finding-dropped"])}
+    narrowed = {
+        "input_finding_ids": ["finding-a", "finding-b"],
+        "merge_map": {
+            "finding-a": {"status": "surviving", "absorbed_into": None, "reason": "root cause"},
+            "finding-b": {"status": "absorbed", "absorbed_into": "finding-a",
+                          "reason": "same root cause"},
+        },
+        "rank": [{"finding_id": "finding-a", "reason": "widest blast radius"}],
+    }
+    assert schemas.validate_output("dedup-rank", narrowed) == [], (
+        "self-consistency alone must still pass — that is the gap being closed")
+
+    failures = schemas.validate_output("dedup-rank", narrowed, packet_inputs=packet_inputs)
+    assert [f["check"] for f in failures] == ["dedup-input-coverage"]
+    assert "finding-dropped" in failures[0]["detail"]
+
+
+def test_dedup_rank_crosscheck_rejects_invented_ids_and_passes_a_complete_answer():
+    packet_inputs = {"input-finding-ids.json": json.dumps(["finding-a"])}
+    complete = {
+        "input_finding_ids": ["finding-a"],
+        "merge_map": {"finding-a": {"status": "surviving", "absorbed_into": None,
+                                    "reason": "only finding"}},
+        "rank": [{"finding_id": "finding-a", "reason": "only finding"}],
+    }
+    assert schemas.validate_output("dedup-rank", complete, packet_inputs=packet_inputs) == []
+
+    invented = json.loads(json.dumps(complete))
+    invented["input_finding_ids"] = ["finding-a", "finding-ghost"]
+    invented["merge_map"]["finding-ghost"] = {
+        "status": "surviving", "absorbed_into": None, "reason": "not from this run"}
+    invented["rank"].append({"finding_id": "finding-ghost", "reason": "not from this run"})
+    failures = schemas.validate_output("dedup-rank", invented, packet_inputs=packet_inputs)
+    assert any("invents ids" in f["detail"] for f in failures)
+
+
+def test_crosschecks_are_skipped_for_task_types_that_have_none():
+    """Every other task type must be unaffected by the packet argument."""
+    section = {"section_id": "overview.md#2", "content_md": "Two words.", "word_count": 2}
+    assert schemas.validate_output("section-generate", section) == []
+    assert schemas.validate_output("section-generate", section,
+                                   packet_inputs={"anything.json": "{}"}) == []
