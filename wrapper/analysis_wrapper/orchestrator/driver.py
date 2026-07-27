@@ -232,6 +232,7 @@ def _phase_reports(state: RunState) -> bool:
                   f"{report['sections_expected']} sections, "
                   f"{report['prose_words']} prose words, "
                   f"{len(report['failures'])} floor/ceiling failure(s)")
+    reports.write_views_manifest(state.run)
     outcome.detail = f"{problems} floor/ceiling failure(s) across all documents"
     outcome.finished_at = time.monotonic()
     return True

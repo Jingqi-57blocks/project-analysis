@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .. import astgrep
 from ..exclusions import SOURCE_EXT as _SOURCE_EXT
 from ..targetspec import IntegrationCandidate
 
@@ -31,12 +32,11 @@ _JS_IMPORT = re.compile(
     r"(?:require\(\s*['\"]|from\s+['\"]|import\s*\(\s*['\"]|^import\s+['\"])"
     r"([^'\"./][^'\"]*)['\"]", re.M)
 _GO_IMPORT = re.compile(r'^\s*(?:[\w.]+\s+)?"([\w-]+\.[\w.-]+/[^"]+)"', re.M)
-# DISCLOSURE (57B-26): a declarative ast-grep equivalent exists at
-# `wrapper/rules/client-init.yml` (rule-ready, fixtured + tested), but this
-# per-file, near-an-import cross-reference is NOT yet wired to it — client_init
-# candidate detection here still uses this transparent regex. Migrating this
-# cross-reference to the rule is a follow-up; until then the rule and this regex
-# coexist and the rule is not consumed by a producer.
+# 57B-118 M4: the structural match SOURCE is `wrapper/rules/client-init.yml`
+# (ast-grep), wired below in generate(). This regex is now a FALLBACK only —
+# used when ast-grep is unavailable, so client_init coverage never silently
+# drops to zero on a machine without the binary.
+_CLIENT_INIT_RULE = "client-init.yml"
 _CLIENT_INIT = re.compile(
     r"new\s+[\w.]*Client\b|\.createClient\s*\(|\bNew\w*Client\s*\(|"
     r"createTransport\s*\(|NewSession\s*\(|\.connect\s*\(")
@@ -182,16 +182,21 @@ def _scan_env_file(collect: _Collector, rel: str, text: str, *,
                     collect.add(host, "config", f"{rel}:{i}")
 
 
-def _scan_source(collect: _Collector, rel: str, text: str, *, go: bool) -> None:
+def _scan_source(collect: _Collector, rel: str, text: str, *, go: bool,
+                  client_init_lines: set[int] | None = None) -> None:
     imports: list[str] = []
     for m in (_GO_IMPORT if go else _JS_IMPORT).finditer(text):
         key = _package_key(m.group(1), go=go)
         imports.append(key)
         collect.add(key, "import", f"{rel}:{_line_of(text, m.start())}")
     lines = text.splitlines()
-    for m in _CLIENT_INIT.finditer(text):
-        line_no = _line_of(text, m.start())
-        line = lines[line_no - 1].lower() if line_no <= len(lines) else ""
+    # `client_init_lines is None` means ast-grep was unavailable for this run —
+    # fall back to the regex. An empty set means ast-grep ran and found nothing
+    # in this file, which is a real (not degraded) answer.
+    line_numbers = ({_line_of(text, m.start()) for m in _CLIENT_INIT.finditer(text)}
+                    if client_init_lines is None else client_init_lines)
+    for line_no in sorted(line_numbers):
+        line = lines[line_no - 1].lower() if 0 < line_no <= len(lines) else ""
         for key in imports:
             segments = [s for s in re.split(r"[/@.-]", key) if len(s) >= 3]
             if any(s.lower() in line for s in segments):
@@ -230,6 +235,18 @@ def generate(repo_path: str | Path, repo_id: str,
     for module in (go_requires or []):
         collect.add(_package_key(module, go=True), "dependency", "go.mod")
 
+    # client_init structural matches, computed ONCE for the whole repo rather
+    # than per file (a single `ast-grep scan` over root vs. thousands of
+    # spawns). `None` (ast-grep unavailable) is distinguished from an empty
+    # per-file result so _scan_source can fall back to the regex honestly.
+    client_init_by_file: dict[str, set[int]] | None = None
+    if astgrep.available():
+        client_init_by_file = {}
+        for m in astgrep.scan(root, [astgrep.RULES_DIR / _CLIENT_INIT_RULE]):
+            client_init_by_file.setdefault(m.file, set()).add(m.line)
+    else:
+        notes.append("ast-grep unavailable: client_init detection used the regex fallback")
+
     tracked_env = _tracked_env_files(root)
     for path in _iter_files(root, set(tier2_exclusions or []), notes):
         rel = path.relative_to(root).as_posix()
@@ -251,7 +268,10 @@ def generate(repo_path: str | Path, repo_id: str,
                 collect.add(m.group(1), "ci_resource",
                             f"{rel}:{_line_of(text, m.start())}")
         if suffix in _SOURCE_EXT:
-            _scan_source(collect, rel, text, go=suffix == ".go")
+            file_lines = (None if client_init_by_file is None
+                         else client_init_by_file.get(rel, set()))
+            _scan_source(collect, rel, text, go=suffix == ".go",
+                        client_init_lines=file_lines)
         _scan_urls(collect, rel, text, in_config=suffix in _CONFIG_EXT or is_ci)
 
     return collect.report(notes)

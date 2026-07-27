@@ -79,12 +79,12 @@ def test_discover_emits_valid_targetspec_with_candidates(tmp_path):
     assert audit["provenance"]["is_git"] is False
 
 
-def test_datastore_facet_is_additive_only_and_never_leaks_into_legacy_stacks_block(tmp_path):
-    """57B-80 PR1: technology_facets gains datastore.* facets additively;
-    the legacy stacks block (frozen to the pre-PR language/ecosystem/
-    framework/repository-trait facet kinds — see
-    ``discovery.stacks.STACK_REPORT_FACET_KINDS``) must never see them,
-    since deterministic parity compares that block byte-for-byte."""
+def test_datastore_facet_is_additive_and_legacy_stacks_block_is_retired(tmp_path):
+    """57B-80 PR1: technology_facets gains datastore.* facets additively.
+    57B-118 M4 retired the legacy frozen "stacks" display block entirely
+    (readers now derive display names from technology_facets directly via
+    ``profiles.bundled.technology_names``) — it must no longer appear on
+    the discovery report at all."""
     _write(tmp_path / "package.json", json.dumps({"dependencies": {"sequelize": "6"}}))
     _write(tmp_path / "index.js", "module.exports = 1;\n")
 
@@ -93,7 +93,7 @@ def test_datastore_facet_is_additive_only_and_never_leaks_into_legacy_stacks_blo
     repo_report = report["repos"][0]
     facet_ids = {facet["profile_id"] for facet in repo_report["technology_facets"]}
     assert "datastore.sequelize" in facet_ids
-    assert not any("datastore" in item for item in repo_report["stacks"]["evidence"])
+    assert "stacks" not in repo_report
 
 
 # test_scan_derived_signals_record_astgrep_version (57B-37) checked that

@@ -216,62 +216,96 @@ anchored):
    and `synthesis-input.json`.
    Never invoke or relocate those producers manually. Resume by rerunning this command;
    it reuses only validated canonical checkpoints.
-3. **Run the grouped lenses** against the identical bounded
-   `synthesis-input.json` plus the signal views named there. Return findings in the
-   atomic shared shape against candidate IDs: every evidence row is one falsifiable
-   fact with its own exact refs and basis. Model effort may change diagnostic depth,
-   not deterministic capability coverage or the candidate universe.
-4. **Finalize the structured module map, then `project-map.md`.** First write
-   `module-map.json` using the contract in `synthesis.md`: module rows carry stable IDs,
-   classification, aliases, and confidence; use compact structural `candidate_rules`
-   for a large universe (or explicit dispositions for small exceptions). Run
-   `project-analysis-wrapper finalize-module-map --run <run-dir>`; it deterministically
-   expands the rules so every candidate appears exactly once, refuses overlaps or
-   incomplete accounting, materializes inferred module nodes in `system-model.json`,
-   and renders the exact `module-summary.md` block that `project-map.md` must copy. Then follow
-   `synthesis.md` step 4 for the human map: module formation from candidates,
-   classification, stable IDs + aliases, relationship labels
-   (`observed | inferred | unresolved | user-confirmed`), external systems and
-   referenced-but-not-analyzed endpoints, and the disposition of EVERY integration
-   candidate (`included | unresolved | excluded`, evidence each, none silently dropped).
-5. **Assign and finalize findings.** Re-key findings to finalized module IDs, write
-   `findings.json`, then run
-   `project-analysis-wrapper finalize-findings --run <run-dir>`. The wrapper rejects
-   unknown modules, invalid source/signal/metric refs, duplicate IDs, and unsupported
-   high-confidence findings, then writes `findings-summary.md` and
-   `findings-pm-summary.md`. These are deterministic report blocks, not editable prose.
-6. **Write `technical-overview.md` then `overview.md`** (templates:
-   `templates/technical-overview.md`, `templates/overview.md`; rules: `synthesis.md`
-   step 6). `technical-overview.md` is the full-detail companion: full provenance,
-   complete analysis scope, the exact `findings-summary.md` block (keeping `priority`
-   and `suggested_direction`), per-module health metrics, the integration-candidate
-   disposition table, the endpoint-level interface/consumer inventory and the
-   access-model / data-ownership backing, and lens coverage (per-lens aggregate +
-   per-signal detail). `overview.md` is the PRIMARY, human-facing document —
-   **diagnosis-only and current-state-only** (no fixes, directions, priorities,
-   roadmaps, recommended next modules, or suggested next analyses; it never tells the
-   reader what to do next — it presents per-module conditions so the reader decides where
-   to drill down), readable in ~10 minutes — with sixteen sections in order: (1) analysis
-   basis, (2) executive
-   diagnosis, (3) product snapshot, (4) users, roles & access model, (5) representative
-   user journeys, (6) runtime & system topology, (7) interface & consumer boundaries,
-   (8) data ownership & lifecycle, (9) background execution, (10) external systems,
-   (11) overall changeability diagnosis, (12) representative change-impact paths,
-   (13) module changeability table, (14) findings by observed impact, (15) operational
-   state, (16) coverage & unknowns. Section 14 copies the exact
-   `findings-pm-summary.md` projection. Its main text carries no source paths, raw metrics,
-   or tool jargon — claims link to technical-overview.md. Synthesis reorganizes cited
-   material — it never creates new uncited claims.
-7. **Audit before completion.** After lens outputs are checked, mark `findings`; after
-   `finalize-module-map` passes, mark `map`. Then write the reports and run
-   `project-analysis-wrapper audit-overview --run <run-dir>`. It validates structured
-   producer/consumer consistency, complete module accounting, full revision citations,
-   the exact machine-rendered capability and findings blocks, and artifact containment without
-   matching business prose. Only after it passes mark `overview` done. Then offer
-   acceptance (sets the
-   `current` pointer on the user's yes). Skip the offer
+3. **Drive the judgment pipeline as its executor.** From here you ARE the executor — the
+   wrapper owns the phase graph (judgment → module map → findings → reports → audit) and
+   hands you exactly the tasks that are ready; you claim, execute, and submit them, and
+   the wrapper decides what happens next. This replaces any earlier notion of "writing
+   the report by hand" from templates — assembly is mechanical and happens only from
+   VALIDATED task outputs (see step 6).
+
+   Repeatedly run:
+
+   ```
+   project-analysis-wrapper run-pipeline --run <run-dir> --executor external
+   ```
+
+   It executes every deterministic step itself and stops the moment a phase has tasks
+   only an LLM can do, reporting `"complete": false` and `"blocked_on": "<phase>"` in its
+   JSON summary. When it stops, drain that phase:
+
+   ```
+   project-analysis-wrapper next-task --run <run-dir> --claim <N> \
+       --executor-kind anthropic --model <actual-model-id>
+   ```
+
+   claims up to `<N>` ready task packets (claim several at once when they are
+   independent — that is the whole point of the task DAG). Each packet carries
+   `instructions` (what to produce), `inputs` (its own bounded evidence slice — never
+   more than the task needs), and `output_schema_id` (the shape the output must match).
+   Follow the packet's own instructions to produce `output`; the packet is
+   self-contained — it is not a pointer back into `synthesis.md`/`lenses/`, though those
+   files describe the judgment rules (accuracy rules, coverage discipline, the six
+   changeability questions, etc.) that should inform how you reason about the content.
+   Then submit each result:
+
+   ```
+   project-analysis-wrapper submit-task --run <run-dir> --task <task_id> --result -
+   ```
+
+   (`--result -` reads the JSON from stdin; a file path also works) with a JSON object
+   shaped like:
+
+   ```json
+   {"task_id": "<task_id>", "status": "ok", "output": { /* per output_schema_id */ },
+    "executor": {"kind": "anthropic", "model": "<actual-model-id>", "params": {}},
+    "timing": {"started_at": "<ISO8601>", "finished_at": "<ISO8601>", "wall_clock_s": 0},
+    "tokens": null,
+    "validation": {"passed": true, "failures": []},
+    "attempt": <attempt from next-task>}
+   ```
+
+   The wrapper re-validates `output` independently against its schema and — for
+   dedup-rank and section-generate — cross-checks it against the packet's own inputs
+   (e.g. a section below its floor word count fails here, before it can ever be marked
+   validated); a failed submission is retried through the engine's normal attempt path,
+   never patched by hand. Once `next-task` returns no more ready tasks for the phase,
+   re-run `run-pipeline --executor external` to advance. Repeat the whole
+   claim/execute/submit cycle until it reports `"complete": true`.
+4. **What the phases are producing.** `judgment` claims lens-findings (plus, for
+   `source_reads` lenses, a paired selection-fetch/finalize step) and one independent
+   module-formation-proposal task — every finding stays candidate-keyed here, never
+   module-keyed. `module-map`/`findings` are then MECHANICAL (the wrapper expands the
+   validated formation proposal into `module-map.json`, dedups/ranks/re-keys findings
+   from the validated dedup-rank task) — no tasks to claim, just deterministic
+   application of judgment already captured upstream. `reports` claims one
+   `section-generate` task per authored section of `technical-overview.md`/`overview.md`
+   /`project-map.md`, wave by wave (a later wave's packets are composed from sections
+   earlier waves already produced); rendered sections (tables, coverage blocks) are never
+   tasks — the wrapper produces those deterministically at assembly time. Mark the
+   `map`/`findings` run-state stages (see Run lifecycle commands) as soon as
+   `run-pipeline`'s JSON summary shows those phases completed with no failure detail —
+   there is no longer a dedicated `finalize-module-map`/`finalize-findings` call to hang
+   the mark on.
+5. **Never author a report document directly.** `technical-overview.md` is the
+   full-detail companion (provenance, findings-summary block, per-module health metrics,
+   integration-candidate disposition, endpoint inventory, lens coverage);
+   `overview.md` is the PRIMARY, human-facing, **diagnosis-only and current-state-only**
+   document (no fixes, directions, priorities, roadmaps, or recommended next steps —
+   the reader decides where to drill down) in its fixed sixteen-section order. Both are
+   produced by `run-pipeline`'s `reports` phase from validated `section-generate` outputs
+   plus deterministic renderers — never write their prose directly. If a section reads
+   wrong, that means either its packet's instructions or its evidence inputs need
+   attention, addressed through the next `section-generate` attempt, never a hand edit of
+   the assembled document.
+6. **Completion.** `run-pipeline`'s last phase runs the audit itself
+   (`audit-overview`'s checks — structured producer/consumer consistency, complete module
+   accounting, full revision citations, the exact machine-rendered capability and
+   findings blocks, artifact containment) and reports its pass/fail in the JSON summary;
+   there is no separate manual audit step. Once `run-pipeline` reports `"complete":
+   true` with the audit phase's detail showing no failing checks, mark `overview` done
+   and offer acceptance (sets the `current` pointer on the user's yes). Skip the offer
    for inspection-only runs.
-8. **Export the HTML report (default).** After the markdown reports are written, run
+7. **Export the HTML report (default).** After the markdown reports are written, run
    `project-analysis-wrapper export --run <run-dir> --skill-root <skill-root>` (format
    defaults to `html`) to render the offline, self-contained HTML report into
    `<skill-root>/exported/{project}-analysis/{run-id}/html/` (gitignored, regenerable).
@@ -281,14 +315,16 @@ anchored):
    fully offline (no network, no LLM), and adds no analysis passes; `export --format`
    with no value lists the available formats.
 
-Target wall-clock is 10–15 minutes; quality is the gate, not the clock.
+Quality is the gate, not the clock — there is no fixed wall-clock target. `run-pipeline`
+writes `tasks/pipeline-timing.json` with a real per-phase breakdown of every run (the
+honest number the task-driven driver exists to produce, per 57B-113/117); use that file,
+not a remembered figure, when the user asks how long a run took.
 
-**Generation budget (no new analysis passes).** Synthesis adds no extra LLM stage: it
-works from the bounded structured summaries already produced (lens findings, signal
-views, discovery report) plus a FEW targeted bounded reads — only the 2–3 user-journey
-entry files, for their verbatim UI labels — never broad source reads. If it runs past
-budget, the affected section is reported `partial`/`unknown`, never backfilled with broad
-reads; a fresh run should stay within ~20% of the current baseline wall-clock.
+**Generation budget (bounded, not budget-free).** No stage reads broad source beyond
+what a task's own `inputs` provides plus a FEW targeted bounded reads — only the 2–3
+user-journey entry files, for their verbatim UI labels — never broad source reads. If a
+`section-generate` task runs past its own context budget, the affected section is
+reported `partial`/`unknown`, never backfilled with broad reads.
 
 ## Module drill-down
 

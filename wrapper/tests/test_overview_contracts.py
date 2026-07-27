@@ -19,13 +19,13 @@ def _prepared(run):
     signals.mkdir()
     manifest_name = "structure-api.manifest.json"
     (signals / manifest_name).write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "tool": "structure", "status": "complete",
         "repos": [{"repository_ref": "api"}],
     }), "utf-8")
     (signals / "x.view.txt").write_text("items: 1\n", "utf-8")
     (signals / "run-summary.json").write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "aggregate_status": "complete",
         "signals": [{"tool": "structure", "repository_ref": "api",
                      "status": "complete", "reason": "", "view": "x.view.txt",
@@ -37,7 +37,7 @@ def _prepared(run):
     imports.mkdir(exist_ok=True)
     maps = sorted(imports.glob("*.json"))
     (imports / "depmap-coverage.json").write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "scan_date": "2026-02-02",
         "repos": [{"repository_ref": "web", "lane": "js",
                    "status": "complete", "map_file": maps[0].name, "units": 1}]
@@ -269,7 +269,7 @@ def test_workspace_metrics_are_scoped_deterministic_and_audited(tmp_path):
         name = f"scc-{repository.artifact_key}.manifest.json"
         code = 60 if index == 0 else 40
         (run / "signals" / name).write_text(json.dumps({
-            "schema_version": "2.0.0", "tool": "scc", "status": "complete",
+            "schema_version": "3.0.0", "tool": "scc", "status": "complete",
             "repos": [{"repository_ref": repository.reference}],
             "structured_metrics": {"kind": "scc", "totals": {
                 "files": 1, "lines": code, "code": code,
@@ -279,7 +279,7 @@ def test_workspace_metrics_are_scoped_deterministic_and_audited(tmp_path):
                         "status": "complete", "reason": "", "view": "x.view.txt",
                         "manifest": name})
     (run / "signals" / "run-summary.json").write_text(json.dumps({
-        "schema_version": "2.0.0", "aggregate_status": "complete",
+        "schema_version": "3.0.0", "aggregate_status": "complete",
         "signals": signals}), "utf-8")
 
     first = workspace_metrics.write(run).read_bytes()

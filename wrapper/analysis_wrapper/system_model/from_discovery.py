@@ -21,6 +21,7 @@ nodes + ``boundary`` edges, and ``deployable-unit`` nodes. Containment
 from __future__ import annotations
 
 from ..identity import IdentityMap, RepositoryIdentity
+from ..profiles.bundled import technology_names
 from ..targetspec import TargetSpec
 from . import ids
 from .builder import ModelBuilder
@@ -102,12 +103,16 @@ def load(builder: ModelBuilder, spec: TargetSpec, report: dict,
 def _repository(builder: ModelBuilder, target, block: dict,
                 repo_identity: RepositoryIdentity, access: dict) -> str:
     prov = block.get("provenance", {})
-    stacks = block.get("stacks", {})
     head = target.git.head or ""
     attrs = {
         "name": repo_identity.display_name,
         "stacks": list(target.stacks),
-        "frameworks": stacks.get("frameworks", []),
+        # Facet-derived (57B-112 §4 / 57B-118 M4): the legacy per-repo
+        # "stacks" display block (frozen to a fixed kind set, `discovery/
+        # stacks.py`) is retired as this attr's source. Same derivation
+        # (registry display name for each RESOLVED technology_facets row),
+        # read directly from the current facet list instead.
+        "frameworks": technology_names(block.get("technology_facets", []), "framework"),
         "analysis_roots": list(target.analysis_roots),
         "is_git": prov.get("is_git", target.git.is_git),
         "head": head,

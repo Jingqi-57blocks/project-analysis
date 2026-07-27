@@ -25,13 +25,12 @@ from pathlib import Path
 
 from .. import identity
 from ..executor import write_new_text
-from ..profiles.bundled import bundled_registry
 from ..profiles import detection as profile_detection
 from ..sanitize import redact
 from ..targetspec import (RepoTarget, TargetSpec, overlapping_repo_pairs,
                           path_contains, stable_repo_id)
 from . import (candidates, generated, inventory, modules, pm,
-               provenance, self_exclusion, stacks)
+               provenance, self_exclusion)
 
 
 def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
@@ -54,7 +53,7 @@ def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
     gomod = repo_path / "go.mod"
     if gomod.is_file():
         # Structured `go mod edit -json` (OSS parser), direct requires only.
-        requires = stacks.gomod_requires(gomod, include_indirect=False)
+        requires = profile_detection.gomod_requires(gomod, include_indirect=False)
     return deps, requires
 
 
@@ -74,8 +73,8 @@ def _non_git_projects(
     workspace is a container and direct child projects become targets.
 
     The third list (57B-112 §3) is neither of those: a child folder with no
-    bundled language profile detected (``stacks.detect`` would report it
-    empty), yet not empty either — a bounded walk finds files no language
+    bundled language profile detected (``profile_detection.detect`` would
+    report it empty), yet not empty either — a bounded walk finds files no language
     profile's source-extension fingerprint claims (e.g. a Swift-only package:
     no bundled Swift profile, so ``Package.swift``/``*.swift`` never match
     anything). Extending targeting to cover it is out of scope; the caller
@@ -98,11 +97,9 @@ def _non_git_projects(
         resolved = path.resolve()
         if resolved in git_roots:
             continue
-        # Same detector ``stacks.detect().stacks`` wraps (language facets
-        # only — see ``stacks.py``); called directly so the SAME pass also
-        # yields ``unclassified_inventory`` (the bounded extension sniff
-        # ``profiles/detection.py`` already computes for every detect() call)
-        # for the disclosure case below, at no extra cost.
+        # This same detect() call also yields ``unclassified_inventory`` (the
+        # bounded extension sniff ``profiles/detection.py`` already computes
+        # for every call) for the disclosure case below, at no extra cost.
         detected = profile_detection.detect(resolved)
         if any(facet.kind == "language" for facet in detected.facets):
             child_projects.append(resolved)
@@ -119,30 +116,6 @@ def _non_git_projects(
 def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     """Run every per-repo producer for one target."""
     detected = profile_detection.detect(path)
-    registry = bundled_registry()
-    stack_report = stacks.StackReport(
-        stacks=sorted(
-            registry.profile(facet.profile_id).display_name
-            for facet in detected.facets if facet.kind == "language"
-        ),
-        analysis_roots=list(detected.analysis_roots),
-        frameworks=sorted(
-            registry.profile(facet.profile_id).display_name
-            for facet in detected.facets if facet.kind == "framework"
-        ),
-        # This legacy display block's evidence surface is FROZEN to
-        # stacks.STACK_REPORT_FACET_KINDS (language/ecosystem/framework/
-        # repository-trait). New facet kinds (datastore in 57B-80; more in
-        # later migrations) are additive in technology_facets ONLY — they
-        # must never alter this legacy stacks block, which deterministic
-        # parity compares byte-for-byte.
-        evidence=sorted({
-            f"{facet.profile_id}: {item}"
-            for facet in detected.facets
-            if facet.kind in stacks.STACK_REPORT_FACET_KINDS
-            for item in facet.evidence
-        }),
-    )
     pm_report = pm.identify(path)
     tier2 = generated.derive(path)
     prov_block = provenance.repo_provenance(path, repo_id)
@@ -155,7 +128,7 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     target = RepoTarget(
         repo_id=repo_id, path=str(path),
         facets=list(detected.facets),
-        analysis_roots=stack_report.analysis_roots,
+        analysis_roots=list(detected.analysis_roots),
         tier2_exclusions=tier2.exclusions,
         pm=pm_report,
         git=provenance.git_provenance(path),
@@ -163,10 +136,6 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     report = {
         "repo_id": repo_id,
         "provenance": prov_block.to_dict(),
-        "stacks": {"stacks": stack_report.stacks,
-                   "analysis_roots": stack_report.analysis_roots,
-                   "frameworks": stack_report.frameworks,
-                   "evidence": stack_report.evidence},
         "technology_facets": [asdict(facet) for facet in detected.facets],
         "unclassified_file_inventory": list(detected.unclassified_inventory),
         "technology_detection_notes": list(detected.notes),

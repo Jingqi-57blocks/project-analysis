@@ -25,6 +25,20 @@ its predecessor. It is deliberately NOT a cache, a replay engine, an LLM
 consumer, or a cross-run store — it reads two directories and reports; it
 keeps no state and consults no history beyond the two runs given to it.
 
+Artifact contract version (``contract_version.CONTRACT_VERSION``, written as
+each document's own ``schema_version`` field) is a FORMAT marker, not
+semantic content: every ``_xxx`` projection below extracts a specific named
+sub-structure (``repos``, ``nodes``, capability records, ...) and none of
+them ever reads a document's top-level ``schema_version`` — the same
+exclusion-by-construction that already applies to any other field a
+projection simply does not name. A base run taken under one contract version
+compared against a candidate taken under a newer one (e.g. the 57B-118 M4
+2.0.0 -> 3.0.0 break) therefore reports the SAME sections it would if both
+were on the same contract version; the version bump itself never appears as
+a manufactured difference here. (This module's own two ``schema_version``
+fields above, `SCHEMA_VERSION`/`SEMANTIC_SCHEMA_VERSION`, are this
+comparator's own report contract — unrelated to the artifacts it reads.)
+
 ``compare()`` is pure: it only reads files under the two given run
 directories. The CLI (`` compare-runs``, wired in :mod:`analysis_wrapper.cli`)
 is the only caller that writes anything, and only when ``--report`` is given.

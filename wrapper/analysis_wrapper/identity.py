@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote
 
+from .contract_version import CONTRACT_VERSION
 from .executor import write_new_text
 from .targetspec import TargetSpec, stable_repo_id
 
@@ -478,12 +479,26 @@ def externalize_discovery_report(report: dict[str, Any],
         if isinstance(row, dict):
             replace_field(row, "repo_id", "repository_ref")
             row["notes"] = _externalize_notes(row.get("notes", []), replacements)
+            # The top-level rename above never reached this NESTED copy of
+            # the same internal id: discovery/provenance.py's RepoProvenance
+            # carries its own `repo_id` inside `row["provenance"]`, invisible
+            # to `replace_field`'s row-top-level lookup. This was the
+            # REMAINING HALF of the external-identity-boundary audit failure
+            # (57B-112 §1; the synthesis-input half was fixed by #26) — 5-7
+            # occurrences per run, one per repo, always this exact field.
+            provenance_block = row.get("provenance")
+            if isinstance(provenance_block, dict):
+                replace_field(provenance_block, "repo_id", "repository_ref")
 
-    role_catalog = projected.pop("role_catalog_by_repo", {})
-    projected["role_catalog_by_repository"] = {
-        replacements.get(str(key), str(key)): value
-        for key, value in role_catalog.items()
-    }
+    # `role_catalog_by_repo` -> `role_catalog_by_repository` removed here
+    # (57B-112 §4 / 57B-118 M4): the source discovery ever populated this
+    # from was retired in #24, so this projection had written an
+    # unconditionally empty `{}` on every run since -- confirmed against a
+    # real run before removal. `synthesis_input.py` carries its OWN
+    # independently-derived `role_catalog_by_repository` (from the current
+    # access-model providers, not from this field), so nothing downstream
+    # ever read the discovery-report copy.
+    projected.pop("role_catalog_by_repo", None)
 
     # route_inventory/ui_route_linkage externalization retired here (57B-84
     # B2): the stage-1 report never carries these fields any more (see
@@ -496,7 +511,7 @@ def externalize_discovery_report(report: dict[str, Any],
     # UNCHANGED — it still guards a stale pre-57B-84-B2 run directory whose
     # discovery-report.json was written before this field moved.
 
-    projected["schema_version"] = "2.0.0"
+    projected["schema_version"] = CONTRACT_VERSION
     return projected
 
 
@@ -523,7 +538,7 @@ def load_discovery_report(run_dir: str | Path,
     if not isinstance(value, dict):
         raise ValueError("discovery-report.json must contain an object")
     identities = mapping or load(run)
-    if value.get("schema_version") != "2.0.0":
+    if value.get("schema_version") != CONTRACT_VERSION:
         raise ValueError("discovery-report.json uses an unsupported contract version")
     legacy_locations: list[str] = []
     for field in ("project_id", "role_catalog_by_repo", "route_liveness"):

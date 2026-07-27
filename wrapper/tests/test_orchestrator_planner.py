@@ -55,7 +55,7 @@ def _build_run(tmp_path, *, repo_ids=("api-11111111", "web-22222222"),
 
     head = "a" * 40
     targets = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "repos": [
             {"repo_id": repo_ids[0], "path": str(repo_roots["api"]),
              "git": {"head": head, "branch": "main", "commit_count": 1}},
@@ -102,11 +102,11 @@ def _build_run(tmp_path, *, repo_ids=("api-11111111", "web-22222222"),
                       "reason": "network lane not authorized", "view": "", "manifest": ""})
 
     (signals / "run-summary.json").write_text(json.dumps({
-        "schema_version": "2.0.0", "aggregate_status": "complete", "signals": view_rows,
+        "schema_version": "3.0.0", "aggregate_status": "complete", "signals": view_rows,
     }), "utf-8")
 
     (run / "module-candidates.json").write_text(json.dumps({
-        "schema_version": "2.0.0", "project_ref": mapping.project.reference,
+        "schema_version": "3.0.0", "project_ref": mapping.project.reference,
         "candidate_count": 2,
         "candidates": [
             {"candidate_id": "mc-api-folder", "repository_ref": "api",
@@ -560,11 +560,11 @@ def test_split_bounded_list_separates_counts_from_items():
 
 def test_split_capabilities_keeps_non_capabilities_fields_in_meta():
     from analysis_wrapper.orchestrator.planner import _split_capabilities
-    doc = {"schema_version": "2.0.0", "project_ref": "proj", "aggregate_status": "complete",
+    doc = {"schema_version": "3.0.0", "project_ref": "proj", "aggregate_status": "complete",
           "capabilities": [{"capability_id": "routing", "status": "complete"}]}
     rows, meta = _split_capabilities(doc)
     assert rows == [{"capability_id": "routing", "status": "complete"}]
-    assert meta == {"schema_version": "2.0.0", "project_ref": "proj",
+    assert meta == {"schema_version": "3.0.0", "project_ref": "proj",
                     "aggregate_status": "complete"}
 
 

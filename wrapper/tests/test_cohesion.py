@@ -34,13 +34,13 @@ def _add_signals_and_depmap_coverage(run):
     signals.mkdir()
     manifest_name = "structure-api.manifest.json"
     (signals / manifest_name).write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "tool": "structure", "status": "complete",
         "repos": [{"repository_ref": "api"}],
     }), "utf-8")
     (signals / "x.view.txt").write_text("items: 1\n", "utf-8")
     (signals / "run-summary.json").write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "aggregate_status": "complete",
         "signals": [{"tool": "structure", "repository_ref": "api",
                      "status": "complete", "reason": "", "view": "x.view.txt",
@@ -50,7 +50,7 @@ def _add_signals_and_depmap_coverage(run):
     imports.mkdir(exist_ok=True)
     maps = sorted(imports.glob("*.json"))
     (imports / "depmap-coverage.json").write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "scan_date": "2026-02-02",
         "repos": [{"repository_ref": "web", "lane": "js",
                    "status": "complete", "map_file": maps[0].name, "units": 1}]
@@ -345,7 +345,7 @@ def test_co_change_clusters_parse_the_coupling_section_and_map_via_folder_prefix
     expected_line = view_text.splitlines().index("coupling:") + 2
     (run / "signals" / "history-api.view.txt").write_text(view_text, "utf-8")
     (run / "signals" / "run-summary.json").write_text(json.dumps({
-        "schema_version": "2.0.0", "aggregate_status": "complete",
+        "schema_version": "3.0.0", "aggregate_status": "complete",
         "signals": [{"tool": "git-history", "repository_ref": "api",
                     "status": "complete", "reason": "", "view": "history-api.view.txt",
                     "manifest": "history-api.manifest.json"}],
@@ -368,7 +368,7 @@ def test_co_change_is_absent_when_no_git_history_view_exists(tmp_path):
     run = tmp_path / "run"
     (run / "signals").mkdir(parents=True)
     (run / "signals" / "run-summary.json").write_text(json.dumps({
-        "schema_version": "2.0.0", "aggregate_status": "complete", "signals": [],
+        "schema_version": "3.0.0", "aggregate_status": "complete", "signals": [],
     }), "utf-8")
     rows, available, reason = cohesion._co_change_clusters(run, [])
     assert rows == []

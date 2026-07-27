@@ -39,7 +39,7 @@ def _build_run(tmp_path) -> Path:
     (web_root / "index.js").write_text("console.log('hi');\n", "utf-8")
 
     targets = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "repos": [
             {"repo_id": "api-11111111", "path": str(api_root),
              "git": {"head": CLEAN_HEAD, "branch": "main", "commit_count": 1}},

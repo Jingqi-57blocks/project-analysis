@@ -32,7 +32,7 @@ def _write_text(run: Path, relpath: str, text: str) -> None:
 
 def _capabilities(*, scan_date="2026-07-23", status="complete", details=None):
     return {
-        "schema_version": "2.0.0", "project_ref": "proj", "scan_date": scan_date,
+        "schema_version": "3.0.0", "project_ref": "proj", "scan_date": scan_date,
         "aggregate_status": "complete",
         "capabilities": [{
             "capability_id": "callgraph", "applicable": True, "status": status,
@@ -69,7 +69,7 @@ def _evidence_catalog():
 
 def _system_model(*, generator="analysis-system-model/0.4.0", scan_date="2026-07-23"):
     return {
-        "schema_version": "2.0.0", "generator": generator, "scan_date": scan_date,
+        "schema_version": "3.0.0", "generator": generator, "scan_date": scan_date,
         "project_ref": "proj", "stats": {},
         "coverage": {
             "repositories": {
@@ -91,7 +91,7 @@ def _system_model(*, generator="analysis-system-model/0.4.0", scan_date="2026-07
 
 def _callgraph_coverage(*, tool_version="v1"):
     return {
-        "schema_version": "2.0.0", "scan_date": "2026-07-23", "determinism": "x",
+        "schema_version": "3.0.0", "scan_date": "2026-07-23", "determinism": "x",
         "repos": [{
             "repository_ref": "api", "lang": "go", "status": "complete",
             "tool": "callgraph", "tool_version": tool_version, "algorithm": "vta",
@@ -106,7 +106,7 @@ def _callgraph_coverage(*, tool_version="v1"):
 
 def _signals(*, status="complete"):
     return {
-        "schema_version": "2.0.0", "aggregate_status": status,
+        "schema_version": "3.0.0", "aggregate_status": status,
         "signals": [{"tool": "scc", "repository_ref": "api", "status": status,
                     "reason": "", "view": "x.view.txt", "manifest": "x.manifest.json"}],
     }
@@ -114,7 +114,7 @@ def _signals(*, status="complete"):
 
 def _discovery(*, workspace_root="/ws-a", not_targeted=None, facet_state="resolved"):
     return {
-        "schema_version": "2.0.0", "project_ref": "proj", "workspace_root": workspace_root,
+        "schema_version": "3.0.0", "project_ref": "proj", "workspace_root": workspace_root,
         "repos": [{
             "repository_ref": "api",
             "provenance": {"is_git": True, "head": "a" * 40,
@@ -1038,12 +1038,12 @@ def _finding_row(finding_id, *, lens="architecture", priority="high", confidence
 
 
 def _findings_doc(rows):
-    return {"schema_version": "2.0.0", "project_ref": "proj", "scan_date": "2026-07-23",
+    return {"schema_version": "3.0.0", "project_ref": "proj", "scan_date": "2026-07-23",
             "findings": rows}
 
 
 def _module_map_doc(dispositions, modules):
-    return {"schema_version": "2.0.0", "project_ref": "proj",
+    return {"schema_version": "3.0.0", "project_ref": "proj",
             "candidate_dispositions": dispositions, "modules": modules}
 
 

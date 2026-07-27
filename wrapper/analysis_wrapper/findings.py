@@ -20,7 +20,7 @@ from .lifecycle import RunState
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec
 
-SCHEMA_VERSION = "2.0.0"
+from .contract_version import CONTRACT_VERSION as SCHEMA_VERSION  # noqa: single shared contract version (57B-118, M4)
 FINDINGS_FILE = "findings.json"
 TECHNICAL_FILE = "findings-summary.md"
 PM_FILE = "findings-pm-summary.md"

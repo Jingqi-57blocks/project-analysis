@@ -19,7 +19,7 @@ from .executor import replace_artifact_text
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec, overlapping_repo_pairs
 
-SCHEMA_VERSION = "2.0.0"
+from .contract_version import CONTRACT_VERSION as SCHEMA_VERSION  # noqa: single shared contract version (57B-118, M4)
 _FENCE = re.compile(r"```.*?```", re.S)
 _MERMAID_FENCE = re.compile(r"```mermaid\s*\n(.*?)```", re.S | re.IGNORECASE)
 _HTML_ENTITY = re.compile(r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);")
@@ -197,7 +197,7 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
         if version != SCHEMA_VERSION:
             version_problems.append(f"{path.relative_to(run)}: {version!r}")
     check("artifact-contract-versions", not version_problems,
-          "all machine evidence uses the current 2.0.0 contract"
+          f"all machine evidence uses the current {SCHEMA_VERSION} contract"
           if not version_problems else
           "unsupported artifact contracts: " + "; ".join(version_problems[:20]))
 

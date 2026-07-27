@@ -25,7 +25,7 @@ def _build_run(tmp_path) -> Path:
 
     head = "a" * 40
     targets = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "repos": [
             {"repo_id": "api-11111111", "path": str(api_root),
              "git": {"head": head, "branch": "main", "commit_count": 1}},
@@ -47,12 +47,12 @@ def _build_run(tmp_path) -> Path:
     signals.mkdir()
     (signals / "x.view.txt").write_text("first line\nsecond line has needle\n", "utf-8")
     (signals / "run-summary.json").write_text(json.dumps({
-        "schema_version": "2.0.0", "aggregate_status": "complete",
+        "schema_version": "3.0.0", "aggregate_status": "complete",
         "signals": [{"tool": "structure", "repository_ref": "api", "status": "complete",
                     "reason": "", "view": "x.view.txt", "manifest": "x.manifest.json"}],
     }), "utf-8")
     (run / "workspace-metrics.json").write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "metrics": [{"metric_ref": "code.analyzed-scope.total", "value": 100}],
     }), "utf-8")
     return run

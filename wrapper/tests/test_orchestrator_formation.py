@@ -35,7 +35,7 @@ def _build_run(tmp_path) -> Path:
     web_root.mkdir(parents=True)
 
     targets = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "repos": [
             {"repo_id": "api-11111111", "path": str(api_root),
              "git": {"head": "a" * 40, "branch": "main", "commit_count": 1}},
@@ -53,7 +53,7 @@ def _build_run(tmp_path) -> Path:
     (run / "discovery-report.json").write_text(
         json.dumps({"project_ref": mapping.project.reference}), "utf-8")
     (run / "module-candidates.json").write_text(json.dumps({
-        "schema_version": "2.0.0", "project_ref": mapping.project.reference,
+        "schema_version": "3.0.0", "project_ref": mapping.project.reference,
         "candidate_count": 2,
         "candidates": [
             {"candidate_id": "mc-api-folder", "repository_ref": "api",

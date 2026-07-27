@@ -15,7 +15,7 @@ from .executor import replace_artifact_text
 from . import identity
 from .sanitize import sanitize_text
 
-SCHEMA_VERSION = "2.0.0"
+from .contract_version import CONTRACT_VERSION as SCHEMA_VERSION  # noqa: single shared contract version (57B-118, M4)
 FILENAME = "workspace-metrics.json"
 
 

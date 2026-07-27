@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from ..sanitize import sanitize_text
-from . import renders, sections as catalog
+from . import renders, schemas, sections as catalog
 from .composer import compose
 from .engine import Engine
 from .results import validated_outputs
@@ -140,6 +140,20 @@ def _section_inputs(run: Path, section: catalog.Section,
             if section_doc is not None:
                 inputs[f"{name}.json"] = json.dumps(section_doc, sort_keys=True)
             continue
+        if name == "system-model.json":
+            # NEVER pass this file whole: it is the raw graph (tens of MB,
+            # every symbol/file/edge in the workspace) and no author section
+            # needs more than a bounded slice of it. §8's own question --
+            # data ownership -- is exactly what `renders.shared_persistence`
+            # already answers for the analogous RENDERED section
+            # (projectmap.persistence); reuse it rather than hand the model
+            # the graph to re-derive the same projection itself. A future
+            # author section needing a different graph slice should add its
+            # own bounded case here, never fall through to a raw file read
+            # (57B-117 M3 acceptance: this file dumped whole made an 8.16M
+            # estimated-token packet needing 56 shards for a 110-word floor).
+            inputs["shared-persistence.md"] = renders.shared_persistence(run)
+            continue
         if name.endswith("/"):
             # A capability artifact directory: pass its files' contents,
             # bounded by the composer if large.
@@ -213,12 +227,21 @@ def plan_reports(run_dir: str | Path, *, document: str | None = None,
                 continue  # its wave has not come yet
             budget_words = budgets.get(section.section_id, section.min_words)
             inputs = _section_inputs(run, section, produced)
+            # The floor is enforced at SUBMIT time via schemas.py's
+            # section-generate crosscheck, reading this same structured
+            # value -- not just stated in prose and hoped for. Carrying it as
+            # an input (rather than parsing it back out of `instructions`)
+            # also means changing the floor changes the packet's digest, so
+            # a floor edit correctly starts a new task generation.
+            inputs["floor.json"] = json.dumps({"min_words": section.min_words},
+                                              sort_keys=True)
             instructions = _instructions(section, budget_words)
             built = compose(
                 task_id=section_task_id(section.section_id),
                 template_id=f"section-{section.section_id}",
                 template_version=content_digest(_PREAMBLE, section.heading,
-                                                section.note, str(budget_words)),
+                                                section.note, str(budget_words),
+                                                str(section.min_words)),
                 task_type="section-generate", instructions=instructions,
                 inputs=inputs, output_schema_id=SECTION_OUTPUT_SCHEMA_ID,
                 context_budget_tokens=context_budget_tokens)
@@ -252,6 +275,38 @@ def collected_sections(run: Path) -> dict[str, str]:
         if section_id in catalog.BY_ID:
             bodies[section_id] = str(output.get("content_md", ""))
     return bodies
+
+
+def write_views_manifest(run_dir: str | Path) -> Path:
+    """Additive observability artifact (57B-118 M4 / 57B-112 §6): catalogs
+    every distinct BOUNDED view name ``_section_inputs`` produces across the
+    whole section catalog, with a content digest and the section(s) that
+    consume it.
+
+    This does not retire ``synthesis-input.json`` or introduce a second data
+    source — it calls the SAME ``_section_inputs`` every section's packet
+    already goes through (using whatever sections have validated so far, via
+    ``collected_sections``), so the manifest can never drift from what a
+    section actually received. Nothing reads this file; it exists so a human
+    (or a future audit check) can see which bounded projection backed a
+    section's evidence without re-deriving ``_section_inputs``' own logic.
+    """
+    run = Path(run_dir).expanduser().resolve()
+    produced = collected_sections(run)
+    views: dict[str, dict[str, Any]] = {}
+    for section in catalog.authored():
+        inputs = _section_inputs(run, section, produced)
+        for name, content in inputs.items():
+            entry = views.setdefault(
+                name, {"content_digest": content_digest(content), "consumers": []})
+            entry["consumers"].append(section.section_id)
+    for entry in views.values():
+        entry["consumers"] = sorted(entry["consumers"])
+    manifest = {"views": views}
+    path = run / "views-manifest.json"
+    path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=1, sort_keys=True), "utf-8")
+    return path
 
 
 def assemble_document(run_dir: str | Path, document: str, *,
@@ -360,10 +415,12 @@ def document_floors(run_dir: str | Path, document: str, *,
                 "detail": f"{document} does not contain {section.heading!r}"})
         if section.kind != "render" and body and words < section.min_words:
             # A short section is only acceptable when it is honestly saying
-            # the category is inapplicable or unavailable.
-            honest = any(marker in body.lower() for marker in
-                         ("not applicable", "no evidence", "unavailable",
-                          "did not run", "unknown", "not found in the analyzed"))
+            # the category is inapplicable or unavailable -- the SAME marker
+            # list schemas.py's submit-time floor crosscheck accepts, so a
+            # section cannot pass one check and fail the other on identical
+            # wording.
+            honest = any(marker in body.lower()
+                         for marker in schemas.HONEST_INAPPLICABILITY_MARKERS)
             if not honest:
                 failures.append({
                     "check": "floor-section-thin", "location": section.section_id,

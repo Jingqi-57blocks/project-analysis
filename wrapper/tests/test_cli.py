@@ -41,7 +41,7 @@ def _targets(tmp_path: Path, target) -> Path:
     spec.save(stage1 / "targets.json")
     identity.write_mapping(stage1, mapping)
     (stage1 / "discovery-report.json").write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "project_ref": mapping.project.reference,
     }), "utf-8")
     return stage1 / "targets.json"
@@ -432,7 +432,7 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
         view = Path(out) / f"fixture-{repository.artifact_key}.view.txt"
         view.write_text("items: 0\n", "utf-8")
         (Path(out) / f"fixture-{repository.artifact_key}.manifest.json").write_text(json.dumps({
-            "schema_version": "2.0.0",
+            "schema_version": "3.0.0",
             "tool": "fixture", "status": "complete",
             "repos": [{"repository_ref": repository.reference}],
         }), "utf-8")

@@ -750,8 +750,55 @@ def _crosscheck_dedup_rank(obj: Any, packet_inputs: Mapping[str, str]) -> list[F
     return failures
 
 
+# The same honest-inapplicability markers ``reports.document_floors`` accepts
+# in place of real substance -- kept here, in sync, rather than re-derived,
+# so a section cannot pass one check and fail the other on the same wording.
+HONEST_INAPPLICABILITY_MARKERS = (
+    "not applicable", "no evidence", "unavailable", "did not run", "unknown",
+    "not found in the analyzed")
+
+
+def _crosscheck_section_generate(obj: Any, packet_inputs: Mapping[str, str]) -> list[Failure]:
+    """A section's completeness FLOOR, enforced at submit time.
+
+    Before this existed, a section could pass its (self-consistency-only)
+    schema check while sitting below the floor ``report-floors`` checks
+    later -- and once a task is ``validated`` the ledger's digest-keyed
+    generations mean it is never silently revised, so the gap surfaced only
+    at document assembly, with no path back to the section short of a new
+    generation. Checking the floor HERE closes it at the place a thin
+    submission can still be retried through the engine's own attempt/retry
+    path, the same as any other schema failure (57B-117 M3 acceptance:
+    overview.s5 validated at 117 words against its 140-word floor and was
+    only caught by ``report-floors``, by which point it was un-revisable).
+    """
+    raw = packet_inputs.get("floor.json")
+    if raw is None:
+        return []
+    try:
+        floor = json.loads(raw)
+        min_words = int(floor["min_words"])
+    except (ValueError, KeyError, TypeError):
+        return []  # a malformed packet input is not this output's failure
+    content = obj.get("content_md") if isinstance(obj, dict) else None
+    if not isinstance(content, str):
+        return []  # the schema check already reported this
+    if len(content.split()) >= min_words:
+        return []
+    lowered = content.lower()
+    if any(marker in lowered for marker in HONEST_INAPPLICABILITY_MARKERS):
+        return []  # short is fine when it is an honest inapplicability line
+    return [{
+        "check": "floor-section-thin", "location": "content_md",
+        "detail": (f"{len(content.split())} words is below this section's floor of "
+                   f"{min_words}, and it does not state an honest inapplicability "
+                   "line (not applicable / no evidence / unavailable / did not run / "
+                   "unknown / not found in the analyzed)")}]
+
+
 _CROSSCHECKS: dict[str, Callable[[Any, Mapping[str, str]], list[Failure]]] = {
     "dedup-rank": _crosscheck_dedup_rank,
+    "section-generate": _crosscheck_section_generate,
 }
 
 

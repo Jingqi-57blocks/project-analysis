@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
 
+from .contract_version import CONTRACT_VERSION
 from .executor import (SignalResult, WrapperSafetyError,
                        prepare_output_directory, run_tool,
                        use_existing_run_directory)
@@ -36,7 +37,7 @@ def _record_summary(out: Path, results: list[SignalResult]) -> None:
         except (OSError, ValueError, KeyError, IndexError):
             continue
     payload = {
-        "schema_version": "2.0.0",
+        "schema_version": CONTRACT_VERSION,
         "aggregate_status": aggregate([x.status for x in results]).value,
         "signals": [
             {"tool": x.tool, "repository_ref": x.repository_ref,

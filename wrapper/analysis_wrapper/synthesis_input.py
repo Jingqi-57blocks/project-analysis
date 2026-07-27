@@ -15,8 +15,9 @@ from pathlib import Path
 from .sanitize import sanitize_text
 from .executor import replace_artifact_text
 from . import identity
+from .profiles.bundled import technology_names
 
-SCHEMA_VERSION = "2.0.0"
+from .contract_version import CONTRACT_VERSION as SCHEMA_VERSION  # noqa: single shared contract version (57B-118, M4)
 _LIST_LIMIT = 200
 _HUB_LIMIT = 100
 _VIEW_LINE_LIMIT = 120
@@ -233,11 +234,18 @@ def build(run_dir: str | Path) -> dict:
         repos.append({
             "repository_ref": repo_identity.reference,
             "display_name": repo_identity.display_name,
-            "stacks": repo.get("stacks", []),
+            # "stacks" removed (57B-112 §4 / 57B-118 M4): this read
+            # targets.json's per-repo "stacks" key, which RepoTarget has
+            # never serialized (it writes "facets" instead) -- always `[]`
+            # since inception, confirmed against a real run before removal.
             "analysis_roots": repo.get("analysis_roots", []),
             "tier2_exclusions": repo.get("tier2_exclusions", []),
             "git": repo.get("git", {}),
-            "frameworks": block.get("stacks", {}).get("frameworks", []),
+            # Facet-derived (57B-112 §4 / 57B-118 M4), same helper and same
+            # derivation as system_model/from_discovery.py's identical fix --
+            # the legacy "stacks" display block is retired as this field's
+            # source.
+            "frameworks": technology_names(block.get("technology_facets", []), "framework"),
             "package_manager": block.get("package_manager", {}),
             "access_model": access_model_by_repo.get(repo_identity.reference, {}),
             "deployable_units": deploy_units_by_repo.get(repo_identity.reference, {}),
