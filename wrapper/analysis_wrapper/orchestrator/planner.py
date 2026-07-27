@@ -48,8 +48,8 @@ Four verbs, four CLI subcommands (``plan-judgment``, ``plan-dedup``,
   Every lens task ALSO gets, deterministically read straight from the
   workspace at composition time (Part A, 57B-116): for safety-net and
   open-lens specifically, a ``test-ci-evidence.json`` input per repo (test-
-  file inventory, CI config file contents, package.json scripts, go.mod
-  module line) -- see ``_test_ci_evidence_row``'s own docstring. This is
+  file inventory, CI config file contents, package.json scripts AND
+  dependency blocks, go.mod module line) -- see ``_test_ci_evidence_row``'s own docstring. This is
   NOT a signal-sweep tool result; it is read fresh here because no signal
   tool covers it, but it is fully deterministic given a pinned workspace
   state, and citations into it are ordinary ``repo@revision:path:line``
@@ -477,7 +477,19 @@ def _ci_config_relative_paths(target: RepoTarget) -> list[str]:
     return found
 
 
-def _package_json_scripts(target: RepoTarget) -> dict | None:
+def _package_json_evidence(target: RepoTarget) -> dict | None:
+    """A repo's declared npm scripts AND its dependency blocks.
+
+    Scripts alone were not enough, and the gap was measurable: a lens asked to
+    judge installed-but-unused test tooling, or declared-vs-used dependencies,
+    cannot see either without the declarations — it was reasoning about
+    packages that were never in its packet, so those findings stayed
+    structurally unreachable no matter how the lens prompt was worded
+    (57B-116, round-3 acceptance evidence: two losses traced to this, not to
+    methodology). Declared dependencies are exactly the committed declarative
+    data this evidence input exists to carry, and the blocks are small enough
+    to pass whole.
+    """
     path = Path(target.path).expanduser().resolve() / "package.json"
     if not path.is_file():
         return None
@@ -485,8 +497,16 @@ def _package_json_scripts(target: RepoTarget) -> dict | None:
         doc = json.loads(path.read_text("utf-8", errors="replace"))
     except ValueError:
         return None
-    scripts = doc.get("scripts") if isinstance(doc, dict) else None
-    return scripts if isinstance(scripts, dict) else {}
+    if not isinstance(doc, dict):
+        return None
+
+    def block(name: str) -> dict:
+        value = doc.get(name)
+        return value if isinstance(value, dict) else {}
+
+    return {name: block(name) for name in (
+        "scripts", "dependencies", "devDependencies",
+        "peerDependencies", "optionalDependencies")}
 
 
 def _go_mod_module_line(target: RepoTarget) -> str | None:
@@ -521,7 +541,7 @@ def _test_ci_evidence_row(target: RepoTarget, repository_ref: str) -> dict:
             "paths": capped,
         },
         "ci_configs": ci_configs,
-        "package_json_scripts": _package_json_scripts(target),
+        "package_json": _package_json_evidence(target),
         "go_mod_module": _go_mod_module_line(target),
     }
 
