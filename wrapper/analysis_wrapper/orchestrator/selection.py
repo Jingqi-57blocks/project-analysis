@@ -17,6 +17,14 @@ disclosed ``"NOT FETCHED: <reason>"`` string instead of real content. Never
 a silently dropped row, never a raised exception for a single bad selection
 -- see ``planner.plan_lens_finalize``, the next step that consumes this
 file.
+
+Three independent size guards apply to every excerpt, each catching a
+different pathological input: ``MAX_LINE_CHARS`` bounds any ONE line;
+``MAX_EXCERPT_BYTES`` bounds the WHOLE excerpt regardless (a file whose
+lines are each individually long -- a minified or generated file -- can
+still blow well past a sane single-excerpt size even with every line
+individually under its own cap); ``MAX_TOTAL_BYTES`` bounds the sum across
+every selection in one fetch-selections call.
 """
 
 from __future__ import annotations
@@ -36,9 +44,37 @@ MAX_SELECTIONS = 12          # matches the select task's own "up to 12" request
 CONTEXT_LINES = 40           # +/- this many lines of surrounding context
 MAX_LINE_CHARS = 2000        # per-line truncation guard (mirrors synthesis_input.py's own cap)
 MAX_TOTAL_BYTES = 200_000    # total fetched-evidence.json excerpt budget for one run
+# A hard cap on ONE excerpt, independent of MAX_LINE_CHARS and MAX_TOTAL_BYTES:
+# +/-40 lines of a file whose lines are each individually long (a minified or
+# generated file -- not hypothetical; this is a real live hazard, just not
+# the one that actually fired) would still total up to
+# ~81 * MAX_LINE_CHARS well past a sane single-excerpt size even though each
+# INDIVIDUAL line stayed under its own cap. Applied AFTER sanitize_text (never
+# truncate before redaction -- a secret split across the cut could survive
+# half-redacted) and byte-safe (never splits a multi-byte UTF-8 character).
+MAX_EXCERPT_BYTES = 8192
+_TRUNCATION_MARKER = "\n... [truncated: excerpt exceeds the {cap}-byte per-excerpt cap]"
 
 _ENV_FILE_PREFIX = ".env"
 _SKIP_PREFIX = "NOT FETCHED: "
+
+
+def _truncate_to_byte_cap(text: str, cap: int) -> str:
+    """``text``, unchanged if it already fits ``cap`` bytes (UTF-8); else
+    truncated to fit alongside a disclosed marker, never splitting a
+    multi-byte character."""
+    marker = _TRUNCATION_MARKER.format(cap=cap)
+    encoded = text.encode("utf-8")
+    if len(encoded) <= cap:
+        return text
+    budget = max(0, cap - len(marker.encode("utf-8")))
+    truncated = encoded[:budget]
+    while truncated:
+        try:
+            return truncated.decode("utf-8") + marker
+        except UnicodeDecodeError:
+            truncated = truncated[:-1]
+    return marker.lstrip("\n")
 
 
 class SelectionFetchError(ValueError):
@@ -97,7 +133,8 @@ def _fetch_source_excerpt(ref: str, spec: TargetSpec, identities: identity.Ident
     start = max(1, line - CONTEXT_LINES)
     end = min(len(lines), line + CONTEXT_LINES)
     window = [entry[:MAX_LINE_CHARS] for entry in lines[start - 1:end]]
-    return sanitize_text("\n".join(window))
+    excerpt = sanitize_text("\n".join(window))
+    return _truncate_to_byte_cap(excerpt, MAX_EXCERPT_BYTES)
 
 
 def fetch(run_dir: str | Path, select_task_id: str, *,

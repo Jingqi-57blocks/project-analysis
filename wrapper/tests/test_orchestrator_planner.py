@@ -642,12 +642,16 @@ def test_a_tiny_context_budget_forces_composer_sharding(tmp_path):
                        output_schema_id="lens-findings.v1", context_budget_tokens=200_000)
     assert len(generous) == 1
 
+    # 6000, not 2000: at 2000 the fixed cost leaves so little per shard that
+    # the composer's own MAX_SHARD_COUNT sanity guard (57B-116 hardening)
+    # now correctly refuses rather than emitting ~78 shards -- 6000 still
+    # forces real sharding while staying a sane, realistic shard count.
     tight = compose(task_id="t", template_id="t", template_version=template.version,
                     task_type="lens-findings", instructions=instructions, inputs=inputs,
-                    output_schema_id="lens-findings.v1", context_budget_tokens=2000)
+                    output_schema_id="lens-findings.v1", context_budget_tokens=6000)
     assert len(tight) > 1, "expected the inflated view to force composer sharding"
     assert all("-shard-" in packet.task_id for packet in tight)
-    assert all(_packet_tokens(packet) <= 2000 for packet in tight)
+    assert all(_packet_tokens(packet) <= 6000 for packet in tight)
 
 
 # --------------------------------------------------------------------------- #
@@ -881,6 +885,28 @@ def test_plan_dedup_is_idempotent(tmp_path):
 # plan_lens_finalize -- phase 2 of the source_reads select/finalize pair
 # --------------------------------------------------------------------------- #
 
+def test_select_shard_task_ids_returns_empty_when_nothing_created(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    assert planner._select_shard_task_ids(run, "lens-open-lens-select") == []
+
+
+def test_select_shard_task_ids_returns_the_bare_id_when_never_sharded(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planner.plan_judgment(run)  # default 96000 budget -- nothing needs sharding
+    assert planner._select_shard_task_ids(run, "lens-open-lens-select") == [
+        "lens-open-lens-select"]
+
+
+def test_select_shard_task_ids_finds_and_sorts_shards_numerically(tmp_path):
+    run, _ = _build_run(tmp_path, inflate_lizard_lines=2000)
+    planner.plan_judgment(run, context_budget_tokens=6000)
+    shard_ids = planner._select_shard_task_ids(run, "lens-open-lens-select")
+    assert len(shard_ids) >= 2
+    assert shard_ids == sorted(shard_ids, key=lambda tid: int(tid.rsplit("-", 1)[1]))
+    assert all(tid.startswith("lens-open-lens-select-shard-") for tid in shard_ids)
+
+
 def test_plan_lens_finalize_raises_for_an_unknown_lens_task_id(tmp_path):
     run, _ = _build_run(tmp_path)
     planner.plan_judgment(run)
@@ -899,7 +925,7 @@ def test_plan_lens_finalize_raises_for_a_non_source_reads_lens(tmp_path):
 def test_plan_lens_finalize_raises_when_select_task_not_yet_validated(tmp_path):
     run, _ = _build_run(tmp_path)
     planner.plan_judgment(run)
-    with pytest.raises(planner.PlannerError, match="has not validated yet"):
+    with pytest.raises(planner.PlannerError, match="not yet validated"):
         planner.plan_lens_finalize(run, "lens-open-lens")
 
 
@@ -986,6 +1012,94 @@ def test_plan_lens_finalize_is_idempotent(tmp_path):
     assert first.created is True
     second = planner.plan_lens_finalize(run, "lens-open-lens")
     assert second.created is False
+
+
+def test_plan_lens_finalize_aggregates_a_sharded_select_task(tmp_path):
+    """57B-116 hardening: a select task's own packet can ALSO be composer-
+    sharded (it carries the SAME inputs the lens task itself would) --
+    plan_lens_finalize must discover every shard, require ALL validated and
+    fetched, and merge their evidence in shard order, rather than looking up
+    the (in this case never-created) bare select_task_id and failing closed
+    even though every shard had validated and been fetched."""
+    run, _ = _build_run(tmp_path, inflate_lizard_lines=2000)
+    planner.plan_judgment(run, context_budget_tokens=6000)
+    engine = Engine(run)
+    created = {rec.task_id for rec in engine._read_records() if rec.event == "created"}
+    shard_ids = sorted(
+        (tid for tid in created if tid.startswith("lens-open-lens-select-shard-")),
+        key=lambda tid: int(tid.rsplit("-", 1)[1]))
+    assert len(shard_ids) >= 2, "expected the inflated view to force select-task sharding too"
+    assert "lens-open-lens-select" not in created
+
+    from analysis_wrapper.orchestrator import selection
+
+    def _shard_output(index):
+        return {"selections": [{
+            "selection_id": f"verify-shard-{index}",
+            "purpose": "confirm a fact from this shard",
+            "ref": "api@" + "a" * 40 + ":internal/service.go:1",
+            "quoted_text": "",
+        }]}
+
+    remaining_shards = set(shard_ids)
+    while True:
+        ready = engine.ready_task_ids()
+        if not ready:
+            break
+        claimed = engine.claim(len(ready), executor_kind="manual", model="test")
+        for item in claimed:
+            task_id = item.packet.task_id
+            if task_id in remaining_shards:
+                index = int(task_id.rsplit("-", 1)[1])
+                _submit(engine, item, _shard_output(index))
+                remaining_shards.discard(task_id)
+            elif item.packet.task_type == "lens-findings":
+                _submit(engine, item, _lens_output(task_id))
+            elif item.packet.task_type == "formation-proposal":
+                _submit(engine, item, _FORMATION_PLACEHOLDER_OUTPUT)
+            elif item.packet.task_type == "selection-fetch":
+                _submit(engine, item, _SELECT_OUTPUT)
+    assert not remaining_shards, f"never validated: {remaining_shards}"
+
+    for shard_id in shard_ids:
+        fetched_path = selection.fetch(run, shard_id)
+        assert fetched_path == planner.fetch_selections_output_path(run, shard_id)
+
+    task = planner.plan_lens_finalize(run, "lens-open-lens")
+    assert task.created is True
+
+    records = engine._read_records()
+    created_record = next(rec for rec in records
+                         if rec.event == "created" and rec.task_id == "lens-open-lens")
+    packet = created_record.detail["task"]
+    assert set(packet["depends_on"]) == set(shard_ids)
+    fetched_evidence = json.loads(packet["inputs"]["fetched-evidence.json"]["content"])
+    assert [row["selection_id"] for row in fetched_evidence] == [
+        f"verify-shard-{int(tid.rsplit('-', 1)[1])}" for tid in shard_ids]
+
+
+def test_plan_lens_finalize_raises_when_only_some_select_shards_validated(tmp_path):
+    run, _ = _build_run(tmp_path, inflate_lizard_lines=2000)
+    planner.plan_judgment(run, context_budget_tokens=6000)
+    engine = Engine(run)
+    created = {rec.task_id for rec in engine._read_records() if rec.event == "created"}
+    shard_ids = sorted(
+        (tid for tid in created if tid.startswith("lens-open-lens-select-shard-")),
+        key=lambda tid: int(tid.rsplit("-", 1)[1]))
+    assert len(shard_ids) >= 2
+
+    # Claim EVERY ready task in one batch (formation, other lens/select
+    # tasks, and every open-lens select shard); submit ONLY the first
+    # shard -- everything else, including the other open-lens shards,
+    # stays claimed-but-outstanding, deliberately never submitted.
+    ready = engine.ready_task_ids()
+    claimed = engine.claim(len(ready), executor_kind="manual", model="test")
+    for item in claimed:
+        if item.packet.task_id == shard_ids[0]:
+            _submit(engine, item, _SELECT_OUTPUT)
+
+    with pytest.raises(planner.PlannerError, match="not yet validated"):
+        planner.plan_lens_finalize(run, "lens-open-lens")
 
 
 def test_formation_instructions_carry_synthesis_md_granularity_rules(tmp_path):

@@ -16,8 +16,11 @@ packet is ever built:
     packet carrying a ``sharding`` note input identifying its slice — so a
     downstream consumer can always tell it is looking at a partial view. A
     packet that cannot be made to fit (no inputs to shard, or the largest
-    input is neither a JSON array nor line-oriented text) fails closed with
-    :class:`ComposerError` rather than silently truncating anything.
+    input is neither a JSON array nor line-oriented text, or the computed
+    shard count exceeds :data:`MAX_SHARD_COUNT` -- a sign the budget is far
+    too small for this task's fixed cost, not that the largest input needs
+    slicing thinner) fails closed with :class:`ComposerError` rather than
+    silently truncating anything or producing hundreds of shard packets.
 """
 
 from __future__ import annotations
@@ -30,6 +33,17 @@ from ..sanitize import sanitize_text
 from .contracts import TaskPacket
 
 CHARS_PER_TOKEN = 4  # a documented ESTIMATE, not a real tokenizer count
+
+# A sane upper bound on how many shards one oversized input may be split
+# into. Past this point the real problem is not "the largest input needs
+# slicing thinner" -- it is that context_budget_tokens is far too small for
+# this task's FIXED cost (instructions + every non-sharded input). A live
+# run hit this exactly: plan-lens-finalize's default 96k budget against a
+# ~95.9k fixed cost left ~100 tokens per shard, which for a large array/view
+# computed out to 428 shard packets (an estimated 39M tokens total) instead
+# of failing closed -- the same "fail closed rather than silently produce
+# something absurd" spirit as this module's other ComposerError cases.
+MAX_SHARD_COUNT = 32
 
 
 class ComposerError(ValueError):
@@ -149,6 +163,15 @@ def compose(*, task_id: str, template_id: str, template_version: str, task_type:
         return packets
 
     while shard_count <= splittable_units:
+        if shard_count > MAX_SHARD_COUNT:
+            raise ComposerError(
+                f"task {task_id!r}: sharding {largest_name!r} to fit within the context "
+                f"budget would need {shard_count} shard(s) -- fixed cost (instructions + "
+                f"non-sharded inputs) is {fixed_cost} of {context_budget_tokens} estimated "
+                f"tokens, leaving only {remaining_for_shard} per shard for {largest_name!r} "
+                f"({largest_tokens} estimated tokens); exceeds the sane shard-count bound "
+                f"({MAX_SHARD_COUNT}) -- raise context_budget_tokens or reduce this task's "
+                "fixed-cost inputs instead of sharding around it")
         packets = build(shard_count)
         if packets is not None:
             return packets

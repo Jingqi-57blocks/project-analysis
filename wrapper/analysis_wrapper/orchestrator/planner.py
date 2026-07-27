@@ -895,6 +895,26 @@ def plan_dedup(run_dir: str | Path, *,
 # plan_lens_finalize -- phase 2 of the source_reads select/finalize pair
 # --------------------------------------------------------------------------- #
 
+def _select_shard_task_ids(run: Path, select_task_id: str) -> list[str]:
+    """Every CREATED ledger task_id for this select task's own packet --
+    either ``select_task_id`` itself (the composer never needed to shard
+    it) or its ``<select_task_id>-shard-<N>`` siblings (it did; see
+    composer.py's own sharding), discovered from the ledger rather than
+    assumed, sorted by shard number. Empty when nothing was ever created
+    for this select task_id at all."""
+    engine = Engine(run)
+    if not engine.ledger_exists():
+        return []
+    created_ids = {record.task_id for record in engine._read_records()
+                   if record.event == "created"}
+    if select_task_id in created_ids:
+        return [select_task_id]
+    prefix = f"{select_task_id}-shard-"
+    shard_ids = [task_id for task_id in created_ids if task_id.startswith(prefix)
+                and task_id[len(prefix):].isdigit()]
+    return sorted(shard_ids, key=lambda task_id: int(task_id[len(prefix):]))
+
+
 def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
                        context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS,
                        skill_root: str | Path | None = None) -> PlannedTask:
@@ -906,11 +926,32 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
     parsed, since a repository_ref's task_id fragment is an unreversible
     hash suffix.
 
-    Fails closed when: ``lens_task_id`` names no known lens task;
-    that lens is not source_reads (nothing to finalize -- plan_judgment
-    already created it directly); its select task has not validated yet;
-    or ``fetch-selections`` has not written fetched-evidence.json for that
-    select task yet.
+    A select task's own packet may itself have been composer-sharded (its
+    inputs are the SAME size as the lens task's own, so it is just as
+    liable to need sharding) into ``<select_task_id>-shard-1..K`` --
+    ``_select_shard_task_ids`` discovers however many shards actually exist;
+    EVERY one must be validated and separately ``fetch-selections``-ed
+    (once per shard task_id) before this call proceeds, and their fetched-
+    evidence arrays are concatenated in shard order into one
+    ``fetched-evidence.json`` input. ``depends_on`` names every real shard
+    task_id (never the possibly-fictional bare ``select_task_id`` -- when
+    sharded, that id was never itself created, and depends_on must
+    reference an existing task_id or ``Engine.create_tasks`` fails closed).
+
+    Fails closed when: ``lens_task_id`` names no known lens task; that lens
+    is not source_reads (nothing to finalize -- plan_judgment already
+    created it directly); its select task (or any of its shards) has not
+    been created or validated yet; or ``fetch-selections`` has not written
+    fetched-evidence.json for every shard yet.
+
+    ``context_budget_tokens`` should match whatever was passed to
+    ``plan_judgment`` for this same run: the select task's packet size is a
+    function of that budget (composer sharding), and a MISMATCHED budget
+    here changes this task's own packet composition (a new digest -> a new
+    generation) without changing the select task it depends on. The CLI
+    default (96000) fits typical runs; the real workspace this fix was
+    written against needed 180000 -- pass ``--context-budget`` consistently
+    across every ``plan-judgment``/``plan-lens-finalize`` call in one run.
     """
     run = Path(run_dir).expanduser().resolve()
     identities = identity.load(run)
@@ -926,24 +967,34 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
             "created it directly; there is nothing for plan_lens_finalize to do")
 
     select_task_id = _select_task_id(lens_task_id)
-    select_outputs = validated_outputs(run, task_type="selection-fetch")
-    if select_task_id not in select_outputs:
+    shard_task_ids = _select_shard_task_ids(run, select_task_id)
+    if not shard_task_ids:
         raise PlannerError(
-            f"{select_task_id!r} has not validated yet -- run its executor to "
-            "completion before plan-lens-finalize")
+            f"{select_task_id!r} has not been created yet -- run plan-judgment "
+            "before plan-lens-finalize")
 
-    fetched_path = fetch_selections_output_path(run, select_task_id)
-    if not fetched_path.is_file():
+    select_outputs = validated_outputs(run, task_type="selection-fetch")
+    not_validated = [task_id for task_id in shard_task_ids if task_id not in select_outputs]
+    if not_validated:
         raise PlannerError(
-            f"no fetched evidence at {fetched_path} -- run "
-            f"'fetch-selections --run <dir> --task {select_task_id}' before "
-            "plan-lens-finalize")
-    try:
-        fetched_evidence = json.loads(fetched_path.read_text("utf-8"))
-    except ValueError as exc:
-        raise PlannerError(f"{fetched_path}: invalid JSON: {exc}") from exc
-    if not isinstance(fetched_evidence, list):
-        raise PlannerError(f"{fetched_path} must contain a JSON array")
+            f"select task(s) not yet validated: {', '.join(not_validated)} -- run "
+            "their executor(s) to completion before plan-lens-finalize")
+
+    fetched_evidence: list[Any] = []
+    for task_id in shard_task_ids:
+        fetched_path = fetch_selections_output_path(run, task_id)
+        if not fetched_path.is_file():
+            raise PlannerError(
+                f"no fetched evidence at {fetched_path} -- run "
+                f"'fetch-selections --run <dir> --task {task_id}' before "
+                "plan-lens-finalize")
+        try:
+            shard_evidence = json.loads(fetched_path.read_text("utf-8"))
+        except ValueError as exc:
+            raise PlannerError(f"{fetched_path}: invalid JSON: {exc}") from exc
+        if not isinstance(shard_evidence, list):
+            raise PlannerError(f"{fetched_path} must contain a JSON array")
+        fetched_evidence.extend(shard_evidence)
 
     run_summary = _load_json(run / "signals" / "run-summary.json")
     synthesis_doc = _load_json(run / "synthesis-input.json")
@@ -960,7 +1011,7 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
         task_id=lens_task_id, template_id=f"lens-{spec.lens_id}",
         template_version=spec.template.version, task_type="lens-findings",
         instructions=instructions, inputs=inputs, output_schema_id=tpl.LENS_OUTPUT_SCHEMA_ID,
-        context_budget_tokens=context_budget_tokens, depends_on=(select_task_id,))
+        context_budget_tokens=context_budget_tokens, depends_on=tuple(shard_task_ids))
     created_ids = set(Engine(run).create_tasks(built))
     return PlannedTask(
         task_id=lens_task_id, task_type="lens-findings", lens_id=spec.lens_id,
