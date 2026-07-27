@@ -102,11 +102,18 @@ SOURCE_VERIFIED_ADDENDUM = (
 # reading; quoted_text stays empty here (schemas.py's request state).
 SELECTION_FETCH_OUTPUT_SCHEMA_ID = "selection-fetch.v1"
 
-SELECTION_FETCH_PREAMBLE = (
+# 57B-116 round 2: the "up to N" cap is now PER LENS (a lens's own
+# frontmatter max_selections field), not a flat "up to 12" for every lens --
+# open-lens's cross-repo systemic-condition catches structurally needed more
+# than 12 (round-2 spot-check evidence; see open-lens.md's frontmatter
+# comment). ``{max_selections}`` is filled in by ``selection_fetch_preamble``
+# below, called with the SAME template a lens task's own instructions use --
+# never a second, independently-typed number.
+_SELECTION_FETCH_PREAMBLE_TEMPLATE = (
     "Return a single JSON object matching the selection-fetch output schema: "
-    '{"selections": [...]}. This is a REQUEST, not a fetch -- a later, '
+    '{{"selections": [...]}}. This is a REQUEST, not a fetch -- a later, '
     "separate step reads the actual source and fills in quoted_text; leave "
-    'quoted_text EMPTY ("") on every row here. Name UP TO 12 source '
+    'quoted_text EMPTY ("") on every row here. Name UP TO {max_selections} source '
     "locations (repo@revision:path:line -- take revision from the "
     "repositories.json input's own git block: the commit hash when clean, "
     '"WORKTREE" when dirty, "NON-GIT" for a non-git target, exactly as '
@@ -118,6 +125,17 @@ SELECTION_FETCH_PREAMBLE = (
     "what you are trying to confirm. Return ONLY this JSON object -- no "
     "prose outside it."
 )
+
+
+def selection_fetch_preamble(max_selections: int) -> str:
+    """The selection-fetch task's output-contract preamble, parameterized by
+    THIS lens's own ``max_selections`` cap. ``render_selection_instructions``
+    uses it to build a select task's instructions; ``selection.py``'s
+    ``fetch`` uses the SAME lens's ``max_selections`` (looked up via the
+    select task's own ``template_id``, never re-typed) to enforce the
+    matching cap -- so the number the model was asked for and the number
+    fetch-selections enforces can never independently drift."""
+    return _SELECTION_FETCH_PREAMBLE_TEMPLATE.format(max_selections=max_selections)
 
 
 class TemplateError(ValueError):
@@ -139,8 +157,9 @@ def _parse_frontmatter(text: str, label: str) -> tuple[dict[str, object], str]:
     Frontmatter comment lines (``#...``) may appear standalone between
     fields; a value's own trailing ``# ...`` comment is also stripped. A
     bracketed value (``[a, b]``) parses as a list of strings; a bare ``true``/
-    ``false`` (any case) parses as a Python bool; anything else is a bare
-    string."""
+    ``false`` (any case) parses as a Python bool; a bare non-negative integer
+    (``24``) parses as a Python int (57B-116 round 2: ``max_selections``);
+    anything else is a bare string."""
     match = _FRONTMATTER.match(text)
     if not match:
         raise TemplateError(f"{label}: missing YAML frontmatter (expected a "
@@ -162,6 +181,8 @@ def _parse_frontmatter(text: str, label: str) -> tuple[dict[str, object], str]:
                 if inner else []
         elif raw_value.lower() in ("true", "false"):
             value = raw_value.lower() == "true"
+        elif raw_value.isdigit():
+            value = int(raw_value)
         else:
             value = raw_value
         if key in fields:
@@ -184,6 +205,14 @@ class LensTemplate:
                                 # flow) -- see each flagged lens file's own
                                 # frontmatter comment for why; defaults False
                                 # (absent in frontmatter = no source reads)
+    max_selections: int = 12    # 57B-116 round 2: this lens's own selection-fetch
+                                # cap (the number its select task's instructions
+                                # ask for, and the number fetch-selections
+                                # enforces -- selection._max_selections_for looks
+                                # this up so the two can never drift apart).
+                                # Default matches the prior flat global; a lens
+                                # that structurally needs more overrides it in
+                                # its own frontmatter (see open-lens.md's comment).
 
     def __post_init__(self) -> None:
         if self.shard not in SHARD_KINDS:
@@ -198,6 +227,11 @@ class LensTemplate:
             raise TemplateError(
                 f"{self.lens_id}: frontmatter source_reads must be true or false, "
                 f"got {self.source_reads!r}")
+        if isinstance(self.max_selections, bool) or not isinstance(self.max_selections, int) \
+                or self.max_selections < 1:
+            raise TemplateError(
+                f"{self.lens_id}: frontmatter max_selections must be a positive integer, "
+                f"got {self.max_selections!r}")
 
 
 def discover_lens_ids(skill_root: str | Path | None = None) -> tuple[str, ...]:
@@ -240,6 +274,7 @@ def load_lens_templates(skill_root: str | Path | None = None) -> dict[str, LensT
             body_md=body,
             version=content_digest(text, shared_text),
             source_reads=fields.get("source_reads", False),
+            max_selections=fields.get("max_selections", 12),
         )
     return templates
 
@@ -266,7 +301,8 @@ def render_selection_instructions(template: LensTemplate, shared_body: str) -> s
     ``render_instructions``, just a different (selection-specific)
     preamble."""
     return "\n\n".join(
-        (SELECTION_FETCH_PREAMBLE, shared_body.strip(), template.body_md.strip())
+        (selection_fetch_preamble(template.max_selections), shared_body.strip(),
+         template.body_md.strip())
     ) + "\n"
 
 

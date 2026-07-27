@@ -28,6 +28,11 @@ jscpd views (clone corroboration).
 Look for, with evidence:
 - **Hotspots** — high-churn files that are also complex (churn × complexity):
   cite both views; these are the first drill-down candidates.
+- **Churn concentration by directory** — when a large share of the repo's
+  own top-churn files cluster in one directory, that CONCENTRATION is itself
+  a finding, distinct from and in addition to naming the individual hotspot
+  files: state the share (e.g. N of the top-churn files) directly from the
+  history view, not an eyeballed estimate.
 - **Co-change coupling** — file pairs that keep changing together across
   commits, especially ACROSS module boundaries (bulk changesets are already
   excluded by the wrapper; say so when quoting pair counts).

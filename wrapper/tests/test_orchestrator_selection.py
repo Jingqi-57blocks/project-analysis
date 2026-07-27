@@ -59,10 +59,12 @@ def _build_run(tmp_path) -> Path:
     return run
 
 
-def _register_and_validate_select(run: Path, task_id: str, selections: list[dict]) -> None:
+def _register_and_validate_select(run: Path, task_id: str, selections: list[dict], *,
+                                  template_id: str = "t") -> None:
     engine = Engine(run)
     packets = compose(
-        task_id=task_id, template_id="t", template_version="1", task_type="selection-fetch",
+        task_id=task_id, template_id=template_id, template_version="1",
+        task_type="selection-fetch",
         instructions="request", inputs={"a": "x"},
         output_schema_id="selection-fetch.v1", context_budget_tokens=8000)
     engine.create_tasks(packets)
@@ -245,15 +247,80 @@ def test_fetch_never_raises_and_never_drops_a_row_across_mixed_outcomes(tmp_path
 
 def test_fetch_caps_at_max_selections_disclosing_the_rest(tmp_path):
     run = _build_run(tmp_path)
+    # template_id="t" (see _register_and_validate_select) does not resolve to
+    # a known lens, so this falls back to DEFAULT_MAX_SELECTIONS -- the
+    # per-lens override path is covered separately below.
     selections = [_selection(f"s{i}", f"api@{CLEAN_HEAD}:internal/service.go:1")
-                 for i in range(selection.MAX_SELECTIONS + 3)]
+                 for i in range(selection.DEFAULT_MAX_SELECTIONS + 3)]
     _register_and_validate_select(run, "lens-x-select", selections)
     rows = json.loads(selection.fetch(run, "lens-x-select").read_text("utf-8"))
-    assert len(rows) == selection.MAX_SELECTIONS + 3
+    assert len(rows) == selection.DEFAULT_MAX_SELECTIONS + 3
     fetched = [row for row in rows if not row["excerpt"].startswith("NOT FETCHED")]
     capped = [row for row in rows if "per-run selection cap" in row["excerpt"]]
-    assert len(fetched) == selection.MAX_SELECTIONS
+    assert len(fetched) == selection.DEFAULT_MAX_SELECTIONS
     assert len(capped) == 3
+
+
+# --------------------------------------------------------------------------- #
+# 57B-116 round 2: the per-run selection cap is now PER LENS -- recovered
+# from the select task's own template_id (planner.py's "lens-{id}-select"
+# convention), never a single flat number. These tests use the REAL lens
+# templates (default skill_root) since they are pinning down actual shipped
+# behavior: open-lens's frontmatter override to 24 vs. every other lens's
+# default of 12.
+# --------------------------------------------------------------------------- #
+
+def test_fetch_enforces_open_lens_own_higher_cap_via_its_template_id(tmp_path):
+    run = _build_run(tmp_path)
+    selections = [_selection(f"s{i}", f"api@{CLEAN_HEAD}:internal/service.go:1")
+                 for i in range(30)]
+    _register_and_validate_select(run, "lens-open-lens-select", selections,
+                                  template_id="lens-open-lens-select")
+    rows = json.loads(selection.fetch(run, "lens-open-lens-select").read_text("utf-8"))
+    fetched = [row for row in rows if not row["excerpt"].startswith("NOT FETCHED")]
+    capped = [row for row in rows if "per-run selection cap (24)" in row["excerpt"]]
+    assert len(fetched) == 24
+    assert len(capped) == 6
+
+
+def test_fetch_uses_the_flat_default_for_a_lens_that_never_overrides_it(tmp_path):
+    run = _build_run(tmp_path)
+    selections = [_selection(f"s{i}", f"api@{CLEAN_HEAD}:internal/service.go:1")
+                 for i in range(15)]
+    _register_and_validate_select(run, "lens-safety-net-select", selections,
+                                  template_id="lens-safety-net-select")
+    rows = json.loads(selection.fetch(run, "lens-safety-net-select").read_text("utf-8"))
+    fetched = [row for row in rows if not row["excerpt"].startswith("NOT FETCHED")]
+    capped = [row for row in rows if "per-run selection cap (12)" in row["excerpt"]]
+    assert len(fetched) == 12
+    assert len(capped) == 3
+
+
+def test_lens_id_for_select_task_recovers_the_lens_id_from_template_id(tmp_path):
+    run = _build_run(tmp_path)
+    ref = f"api@{CLEAN_HEAD}:internal/service.go:1"
+    _register_and_validate_select(run, "lens-open-lens-select", [_selection("s1", ref)],
+                                  template_id="lens-open-lens-select")
+    assert selection._lens_id_for_select_task(run, "lens-open-lens-select") == "open-lens"
+
+
+def test_lens_id_for_select_task_returns_none_for_a_non_matching_template_id(tmp_path):
+    run = _build_run(tmp_path)
+    ref = f"api@{CLEAN_HEAD}:internal/service.go:1"
+    _register_and_validate_select(run, "lens-x-select", [_selection("s1", ref)])  # template_id="t" default
+    assert selection._lens_id_for_select_task(run, "lens-x-select") is None
+
+
+def test_lens_id_for_select_task_returns_none_when_task_was_never_created(tmp_path):
+    run = _build_run(tmp_path)
+    assert selection._lens_id_for_select_task(run, "lens-open-lens-select") is None
+
+
+def test_max_selections_for_falls_back_to_default_when_lens_id_unresolved(tmp_path):
+    run = _build_run(tmp_path)
+    ref = f"api@{CLEAN_HEAD}:internal/service.go:1"
+    _register_and_validate_select(run, "lens-x-select", [_selection("s1", ref)])
+    assert selection._max_selections_for(run, "lens-x-select") == selection.DEFAULT_MAX_SELECTIONS
 
 
 def test_fetch_enforces_the_total_byte_budget(tmp_path, monkeypatch):
