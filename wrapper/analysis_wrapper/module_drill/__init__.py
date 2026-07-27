@@ -32,6 +32,7 @@ from .evidence import (MODULE_EVIDENCE_VERSION, ModuleEvidence, ModuleFact, Sour
                        VerifiedBoundary, build_module_evidence, load_module_evidence,
                        write_module_evidence)
 from .prd import render_module_prd, write_module_prd
+from .health import render_module_health, write_module_health
 
 __all__ = [
     "MODULE_RUN_VERSION",
@@ -62,6 +63,8 @@ __all__ = [
     "write_module_evidence",
     "render_module_prd",
     "write_module_prd",
+    "render_module_health",
+    "write_module_health",
     "Selector",
     "create_module_run",
     "mint_module_run_id",

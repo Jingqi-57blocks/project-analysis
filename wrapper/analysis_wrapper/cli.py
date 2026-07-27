@@ -355,7 +355,7 @@ def _module(args) -> int:
     from .module_drill import (ModuleRunLayout, ModuleScopeRequest, Selector,
                                build_module_evidence, create_module_run,
                                mint_module_run_id, resolve_scope, write_module_evidence,
-                               write_module_prd)
+                               write_module_health, write_module_prd)
     provider, spec, identities, snapshot, project_key = _module_provider(args)
     selector_kinds = ("name", "alias", "path", "package", "symbol", "route", "api")
     kind = next((item for item in selector_kinds
@@ -372,16 +372,19 @@ def _module(args) -> int:
     write_module_evidence(layout.evidence_path, evidence)
     write_module_prd(layout.scope_path, layout.evidence_path, layout.prd_path,
                      language=args.language)
+    write_module_health(layout.scope_path, layout.evidence_path, layout.health_path,
+                        language=args.language)
     state = json.loads(layout.run_state_path.read_text("utf-8"))
     state["stages"]["evidence"] = "done"
     state["stages"]["prd"] = "done"
+    state["stages"]["health"] = "done"
     layout.run_state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", "utf-8")
     print(f"source_mode: {scope.source_mode}")
     print(f"snapshot: {scope.snapshot_id} · inspection_only: {scope.project.inspection_only}")
     print(f"module: {scope.module.module_id} ({scope.module.name})")
     print(f"run: {layout.run_dir}")
     print(f"coverage: {evidence.coverage['module_evidence']['status']}")
-    print("next: generate health.md from module-evidence.json")
+    print("reports: prd.md, health.md")
     return 0
 
 
