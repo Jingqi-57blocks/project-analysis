@@ -14,7 +14,10 @@ from analysis_wrapper.lifecycle import Pointers, RunState
 from analysis_wrapper.module_drill import (
     MODULE_SCOPE_VERSION,
     Boundary,
+    MODULE_EVIDENCE_VERSION,
     ModuleCoverage,
+    build_module_evidence,
+    write_module_evidence,
     ModuleIdentity,
     ModuleRunLayout,
     ModuleScope,
@@ -208,6 +211,32 @@ def test_module_run_refuses_a_layout_inside_analyzed_source(target):
     layout = ModuleRunLayout(target.path, "sample-project", "billing", "unsafe-run")
     with pytest.raises(WrapperSafetyError, match="inside target"):
         create_module_run(layout, TargetSpec([target]), _scope(), language="en")
+
+
+def test_module_evidence_reads_only_owned_files_and_preserves_boundary_coverage(tmp_path):
+    root = tmp_path / "api"
+    (root / "internal" / "billing").mkdir(parents=True)
+    (root / "internal" / "other").mkdir()
+    (root / "internal" / "billing" / "service.go").write_text("package billing\n", "utf-8")
+    (root / "internal" / "other" / "secret.go").write_text("package other\n", "utf-8")
+    scope = _scope()
+    evidence = build_module_evidence(scope, {"api": root})
+    assert evidence.contract_version == MODULE_EVIDENCE_VERSION
+    assert [fact.fact.data["path"] for fact in evidence.facts] == ["internal/billing/service.go"]
+    assert evidence.boundaries[0].neighbor_id == "payments"
+    assert evidence.coverage["module_evidence"]["status"] == "complete"
+    persisted = write_module_evidence(tmp_path / "module-evidence.json", evidence)
+    assert json.loads(persisted.read_text("utf-8"))["finding_hints"] == []
+
+
+def test_module_evidence_keeps_overview_hints_out_of_facts_and_discloses_missing_owned_files(tmp_path):
+    scope = _scope("overview")
+    evidence = build_module_evidence(scope, {"api": tmp_path})
+    assert not evidence.facts
+    assert evidence.finding_hints == ()
+    assert evidence.source_reads[0].status == "missing"
+    assert evidence.coverage["module_evidence"]["status"] == "partial"
+    assert evidence.unknowns
 
 
 def _overview_run(tmp_path, monkeypatch):
