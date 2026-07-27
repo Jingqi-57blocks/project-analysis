@@ -161,3 +161,53 @@ def test_finalize_findings_cli_report_failures_mode_exit_zero_when_clean(tmp_pat
     assert main(["finalize-findings", "--run", str(run),
                 "--report-failures", str(report_path)]) == 0
     assert json.loads(report_path.read_text()) == {}
+
+
+def test_report_failures_gathers_every_problem_within_one_finding(tmp_path):
+    """A repairer must be able to fix a finding in ONE pass: reporting only
+    its first bad ref cost a live acceptance run several avoidable repair
+    rounds (57B-116)."""
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    _complete_map(run)
+    row = _valid_finding("finding-many-problems")
+    row["priority"] = "urgent"                      # independent problem 1
+    row["affected_modules"] = ["no-such-module"]    # independent problem 2
+    row["evidence"] = [{
+        "fact": "Two refs in one row are both unusable.",
+        "refs": ["signals/nope-a.view.txt:1", "signals/nope-b.view.txt:1"],
+        "basis": "static-reference",
+    }]                                              # independent problems 3 and 4
+    _write_findings(run, [row])
+
+    details = [entry["detail"]
+               for entry in findings.validate_report_failures(run)["finding-many-problems"]]
+    assert any("priority" in detail for detail in details)
+    assert any("finalized module" in detail for detail in details)
+    assert sum("nope-a" in detail for detail in details) == 1
+    assert sum("nope-b" in detail for detail in details) == 1, (
+        "the SECOND bad ref must be reported too, not hidden behind the first")
+
+
+def test_report_failures_skips_aggregate_checks_that_would_report_derived_nonsense(tmp_path):
+    """An unresolvable ref undercounts the independent-signal set, and a
+    rejected basis undercounts the basis set: neither may be turned into a
+    bogus high-confidence rejection or evidence_basis mismatch, which would
+    send a repairer after a problem that does not exist."""
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    _complete_map(run)
+    row = _valid_finding("finding-cascade")
+    row["confidence"] = "high"
+    row["evidence"] = [
+        {"fact": "One resolvable ref.", "refs": ["signals/x.view.txt:1"],
+         "basis": "static-reference"},
+        {"fact": "One unresolvable ref.", "refs": ["signals/nope.view.txt:1"],
+         "basis": "declaration"},
+    ]
+    row["evidence_basis"] = ["declaration", "static-reference"]
+    _write_findings(run, [row])
+
+    details = [entry["detail"]
+               for entry in findings.validate_report_failures(run)["finding-cascade"]]
+    assert any("nope" in detail for detail in details)
+    assert not any("two independent signals" in detail for detail in details)
+    assert not any("evidence_basis" in detail for detail in details)
