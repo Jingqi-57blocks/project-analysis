@@ -79,6 +79,46 @@ LENS_OUTPUT_CONTRACT_PREAMBLE = (
     "input you read, not a citable location inside it."
 )
 
+# Appended (57B-116) ONLY to a source_reads lens's FINAL lens-findings
+# instructions -- once its paired selection-fetch task has validated and
+# fetch-selections has fetched real source excerpts for it (see planner.py's
+# two-phase select/finalize flow: plan_judgment composes only the select
+# task for a source_reads lens; a later plan-lens-finalize step composes
+# this final task, adding fetched-evidence.json as an input and this
+# addendum to the instructions -- a normal, non-source_reads lens task
+# never sees either).
+SOURCE_VERIFIED_ADDENDUM = (
+    "fetched-evidence.json below contains the verified source excerpts you "
+    "requested in this lens's own paired selection-fetch task, each row "
+    "carrying the exact ref you asked for (repo@revision:path:line) plus "
+    "roughly 80 lines of surrounding context -- or, when a location could "
+    'not be read, a disclosed reason in the excerpt field itself, starting '
+    '"NOT FETCHED:". Cite these using the SAME ref given in each row -- do '
+    "not re-derive a different line number for the same fact."
+)
+
+# selection-fetch: a source_reads lens's REQUEST for source locations to
+# verify -- a separate, later step (fetch-selections) does the actual
+# reading; quoted_text stays empty here (schemas.py's request state).
+SELECTION_FETCH_OUTPUT_SCHEMA_ID = "selection-fetch.v1"
+
+SELECTION_FETCH_PREAMBLE = (
+    "Return a single JSON object matching the selection-fetch output schema: "
+    '{"selections": [...]}. This is a REQUEST, not a fetch -- a later, '
+    "separate step reads the actual source and fills in quoted_text; leave "
+    'quoted_text EMPTY ("") on every row here. Name UP TO 12 source '
+    "locations (repo@revision:path:line -- take revision from the "
+    "repositories.json input's own git block: the commit hash when clean, "
+    '"WORKTREE" when dirty, "NON-GIT" for a non-git target, exactly as '
+    "_shared.md's citation rules describe) that you need to read IN FULL to "
+    "VERIFY a lens-critical fact the bounded signal views only hint at -- "
+    "the locations that would most change a confidence or priority call if "
+    "confirmed, not a mechanical sample. One selection per location; "
+    "selection_id is a stable kebab-case slug; purpose is one line stating "
+    "what you are trying to confirm. Return ONLY this JSON object -- no "
+    "prose outside it."
+)
+
 
 class TemplateError(ValueError):
     """A malformed lens file: missing/invalid frontmatter. Fail closed --
@@ -98,8 +138,9 @@ def _parse_frontmatter(text: str, label: str) -> tuple[dict[str, object], str]:
     """``({"shard": ..., "signals": [...]}, body_after_frontmatter)``.
     Frontmatter comment lines (``#...``) may appear standalone between
     fields; a value's own trailing ``# ...`` comment is also stripped. A
-    bracketed value (``[a, b]``) parses as a list of strings; anything else
-    is a bare string."""
+    bracketed value (``[a, b]``) parses as a list of strings; a bare ``true``/
+    ``false`` (any case) parses as a Python bool; anything else is a bare
+    string."""
     match = _FRONTMATTER.match(text)
     if not match:
         raise TemplateError(f"{label}: missing YAML frontmatter (expected a "
@@ -119,6 +160,8 @@ def _parse_frontmatter(text: str, label: str) -> tuple[dict[str, object], str]:
             inner = raw_value[1:-1].strip()
             value: object = [item.strip() for item in inner.split(",") if item.strip()] \
                 if inner else []
+        elif raw_value.lower() in ("true", "false"):
+            value = raw_value.lower() == "true"
         else:
             value = raw_value
         if key in fields:
@@ -136,6 +179,11 @@ class LensTemplate:
                                 # never "no tool"; see open-lens.md's frontmatter)
     body_md: str                # the lens file's content AFTER its frontmatter
     version: str                # content_digest(raw lens file text, _shared.md text)
+    source_reads: bool = False  # 57B-116: this lens gets a paired selection-fetch
+                                # task (planner.py's two-phase select/finalize
+                                # flow) -- see each flagged lens file's own
+                                # frontmatter comment for why; defaults False
+                                # (absent in frontmatter = no source reads)
 
     def __post_init__(self) -> None:
         if self.shard not in SHARD_KINDS:
@@ -146,6 +194,10 @@ class LensTemplate:
                 isinstance(item, str) and item for item in self.signals):
             raise TemplateError(
                 f"{self.lens_id}: frontmatter signals must be a list of non-empty strings")
+        if not isinstance(self.source_reads, bool):
+            raise TemplateError(
+                f"{self.lens_id}: frontmatter source_reads must be true or false, "
+                f"got {self.source_reads!r}")
 
 
 def discover_lens_ids(skill_root: str | Path | None = None) -> tuple[str, ...]:
@@ -187,16 +239,34 @@ def load_lens_templates(skill_root: str | Path | None = None) -> dict[str, LensT
             signals=tuple(signals),
             body_md=body,
             version=content_digest(text, shared_text),
+            source_reads=fields.get("source_reads", False),
         )
     return templates
 
 
-def render_instructions(template: LensTemplate, shared_body: str) -> str:
+def render_instructions(template: LensTemplate, shared_body: str, *,
+                        source_verified: bool = False) -> str:
     """``_shared.md`` + this lens's own body + the fixed output-contract
     preamble, in that order -- the ONE way a lens task's full instructions
-    are assembled, so every lens task and every test builds them identically."""
+    are assembled, so every lens task and every test builds them identically.
+    ``source_verified=True`` (57B-116) appends ``SOURCE_VERIFIED_ADDENDUM``
+    -- only ``plan_lens_finalize`` (planner.py) ever passes it, for a
+    source_reads lens's FINAL task, once fetched-evidence.json exists."""
+    parts = [LENS_OUTPUT_CONTRACT_PREAMBLE, shared_body.strip(), template.body_md.strip()]
+    if source_verified:
+        parts.append(SOURCE_VERIFIED_ADDENDUM)
+    return "\n\n".join(parts) + "\n"
+
+
+def render_selection_instructions(template: LensTemplate, shared_body: str) -> str:
+    """The paired selection-fetch task's instructions for a source_reads
+    lens: the selection-fetch output contract + _shared.md + the lens's own
+    body (so it can judge which facts are lens-critical enough to need
+    verification) -- structurally identical assembly to
+    ``render_instructions``, just a different (selection-specific)
+    preamble."""
     return "\n\n".join(
-        (LENS_OUTPUT_CONTRACT_PREAMBLE, shared_body.strip(), template.body_md.strip())
+        (SELECTION_FETCH_PREAMBLE, shared_body.strip(), template.body_md.strip())
     ) + "\n"
 
 

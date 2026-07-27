@@ -31,6 +31,21 @@ EXPECTED_SHARD = {
     "open-lens": "workspace",
 }
 
+# 57B-116: source_reads flags a paired selection-fetch task (planner.py's
+# two-phase select/finalize flow) -- see each flagged lens file's own
+# frontmatter comment for the justification.
+EXPECTED_SOURCE_READS = {
+    "structure-inventory": True,
+    "complexity": False,
+    "dead-code": False,
+    "duplication": False,
+    "dependencies-cycles": True,
+    "hotspots-change-friction": False,
+    "safety-net": True,
+    "dependency-risk": False,
+    "open-lens": True,
+}
+
 
 def _write_synthetic_lens_dir(tmp_path: Path, *, lens_frontmatter: str) -> Path:
     lenses = tmp_path / "lenses"
@@ -59,6 +74,13 @@ def test_all_nine_real_lens_files_parse_with_valid_frontmatter():
 def test_shard_classification_matches_the_documented_design():
     loaded = tpl.load_lens_templates(REAL_SKILL_ROOT)
     assert {lens_id: t.shard for lens_id, t in loaded.items()} == EXPECTED_SHARD
+
+
+def test_source_reads_classification_matches_the_documented_design():
+    loaded = tpl.load_lens_templates(REAL_SKILL_ROOT)
+    assert {lens_id: t.source_reads for lens_id, t in loaded.items()} == EXPECTED_SOURCE_READS
+    for lens_id, template in loaded.items():
+        assert isinstance(template.source_reads, bool), lens_id
 
 
 def test_open_lens_signals_is_deliberately_empty_meaning_every_tool():
@@ -121,6 +143,50 @@ def test_output_contract_preamble_forbids_candidate_ids_and_input_names_as_refs(
     assert "NEVER a candidate_id" in preamble
     assert "NEVER an input" in preamble
     assert "module-candidates.json" in preamble  # a real input NAME, cited as a bad example
+
+
+# --------------------------------------------------------------------------- #
+# 57B-116: source_reads select/finalize instruction assembly
+# --------------------------------------------------------------------------- #
+
+def test_render_instructions_appends_source_verified_addendum_only_when_asked():
+    loaded = tpl.load_lens_templates(REAL_SKILL_ROOT)
+    shared = tpl.load_shared_body(REAL_SKILL_ROOT)
+    plain = tpl.render_instructions(loaded["safety-net"], shared)
+    verified = tpl.render_instructions(loaded["safety-net"], shared, source_verified=True)
+    assert tpl.SOURCE_VERIFIED_ADDENDUM not in plain
+    assert tpl.SOURCE_VERIFIED_ADDENDUM in verified
+    assert verified.startswith(plain.rstrip("\n"))  # addendum is appended, not inserted
+    assert "fetched-evidence.json" in tpl.SOURCE_VERIFIED_ADDENDUM
+
+
+def test_render_selection_instructions_uses_the_selection_preamble_not_the_lens_one():
+    loaded = tpl.load_lens_templates(REAL_SKILL_ROOT)
+    shared = tpl.load_shared_body(REAL_SKILL_ROOT)
+    instructions = tpl.render_selection_instructions(loaded["open-lens"], shared)
+    assert instructions.index(tpl.SELECTION_FETCH_PREAMBLE) == 0
+    assert tpl.LENS_OUTPUT_CONTRACT_PREAMBLE not in instructions
+    assert "# Lens: open-lens" in instructions  # still carries the lens's own body
+    assert "quoted_text" in instructions and 'EMPTY ("")' in instructions
+    assert "up to 12" in instructions.lower() or "UP TO 12" in instructions
+
+
+def test_frontmatter_parses_bare_true_false_as_python_bool(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    root = _write_synthetic_lens_dir(tmp_path / "a", lens_frontmatter=(
+        "---\nshard: repo\nsignals: []\nsource_reads: true\n---\n"))
+    assert tpl.load_lens_templates(root)["sample-lens"].source_reads is True
+
+    root2 = _write_synthetic_lens_dir(tmp_path / "b", lens_frontmatter=(
+        "---\nshard: repo\nsignals: []\nsource_reads: FALSE\n---\n"))
+    assert tpl.load_lens_templates(root2)["sample-lens"].source_reads is False
+
+
+def test_source_reads_defaults_false_when_absent_from_frontmatter(tmp_path):
+    root = _write_synthetic_lens_dir(
+        tmp_path, lens_frontmatter="---\nshard: repo\nsignals: []\n---\n")
+    assert tpl.load_lens_templates(root)["sample-lens"].source_reads is False
 
 
 # --------------------------------------------------------------------------- #
