@@ -104,35 +104,49 @@ def test_ci_config_relative_paths_empty_when_none_present(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# _package_json_scripts / _go_mod_module_line
+# _package_json_evidence / _go_mod_module_line
 # --------------------------------------------------------------------------- #
 
-def test_package_json_scripts_returns_the_scripts_block(tmp_path):
+def test_package_json_evidence_returns_scripts_and_every_dependency_block(tmp_path):
+    """Dependency declarations ride along with scripts: a lens judging
+    installed-but-unused tooling or declared-vs-used dependencies cannot see
+    either without them (57B-116 round-3 evidence)."""
     root = tmp_path / "repo"
     root.mkdir()
-    (root / "package.json").write_text(
-        json.dumps({"name": "x", "scripts": {"test": "jest", "build": "tsc"}}), "utf-8")
-    assert planner._package_json_scripts(_target(root)) == {"test": "jest", "build": "tsc"}
+    (root / "package.json").write_text(json.dumps({
+        "name": "x",
+        "scripts": {"test": "jest", "build": "tsc"},
+        "dependencies": {"react": "^18.0.0"},
+        "devDependencies": {"jest": "^29.0.0", "@testing-library/react": "^14.0.0"},
+    }), "utf-8")
+    evidence = planner._package_json_evidence(_target(root))
+    assert evidence["scripts"] == {"test": "jest", "build": "tsc"}
+    assert evidence["dependencies"] == {"react": "^18.0.0"}
+    assert evidence["devDependencies"] == {
+        "jest": "^29.0.0", "@testing-library/react": "^14.0.0"}
+    assert evidence["peerDependencies"] == {} and evidence["optionalDependencies"] == {}
 
 
-def test_package_json_scripts_is_none_when_file_absent(tmp_path):
+def test_package_json_evidence_is_none_when_file_absent(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
-    assert planner._package_json_scripts(_target(root)) is None
+    assert planner._package_json_evidence(_target(root)) is None
 
 
-def test_package_json_scripts_is_empty_dict_when_scripts_key_missing(tmp_path):
+def test_package_json_evidence_yields_empty_blocks_when_keys_are_missing(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     (root / "package.json").write_text(json.dumps({"name": "x"}), "utf-8")
-    assert planner._package_json_scripts(_target(root)) == {}
+    assert planner._package_json_evidence(_target(root)) == {
+        "scripts": {}, "dependencies": {}, "devDependencies": {},
+        "peerDependencies": {}, "optionalDependencies": {}}
 
 
-def test_package_json_scripts_is_none_on_malformed_json(tmp_path):
+def test_package_json_evidence_is_none_on_malformed_json(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     (root / "package.json").write_text("{not valid json", "utf-8")
-    assert planner._package_json_scripts(_target(root)) is None
+    assert planner._package_json_evidence(_target(root)) is None
 
 
 def test_go_mod_module_line_returns_the_module_declaration(tmp_path):
@@ -170,7 +184,8 @@ def test_test_ci_evidence_row_shape_and_cap_disclosure(tmp_path, monkeypatch):
     assert row["test_files"]["paths"] == ["internal/service_test.go"]
     assert row["ci_configs"] == [{"path": "bitbucket-pipelines.yml",
                                  "content": "pipelines: {}", "truncated": False}]
-    assert row["package_json_scripts"] == {"test": "jest"}
+    assert row["package_json"]["scripts"] == {"test": "jest"}
+    assert "devDependencies" in row["package_json"]
     assert row["go_mod_module"] == "module example.com/sample"
 
 
