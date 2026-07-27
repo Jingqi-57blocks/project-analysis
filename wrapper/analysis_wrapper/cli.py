@@ -242,7 +242,8 @@ def parser() -> argparse.ArgumentParser:
         "export",
         help="export a completed run in a chosen format (deterministic; no "
              "network, no LLM). Default format: html. Written to "
-             "<skill-root>/exported/{project}-analysis/{run-id}/{format}/ "
+             "<skill-root>/exported/{project}-analysis/.../{format}/ "
+             "with a separate module-id/run-id path for Module Drill runs "
              "(gitignored).")
     exp.add_argument("--run", required=True, help="completed run directory")
     exp.add_argument("--format", nargs="?", const="__list__", default="html",
