@@ -282,3 +282,70 @@ def test_fetch_truncates_an_oversized_line_per_the_char_cap(tmp_path, monkeypatc
     _register_and_validate_select(run, "lens-x-select", [_selection("s1", ref)])
     rows = json.loads(selection.fetch(run, "lens-x-select").read_text("utf-8"))
     assert rows[0]["excerpt"] == "x" * 10
+
+
+# --------------------------------------------------------------------------- #
+# per-excerpt byte cap -- independent of MAX_LINE_CHARS/MAX_TOTAL_BYTES: a
+# real hazard (not the one that actually fired), a minified/generated file
+# whose lines are each individually long enough that +/-40 of them still
+# blow past a sane single-excerpt size even with each line under its own cap.
+# --------------------------------------------------------------------------- #
+
+def test_truncate_to_byte_cap_leaves_short_text_untouched():
+    assert selection._truncate_to_byte_cap("short text", 8192) == "short text"
+
+
+def test_truncate_to_byte_cap_truncates_with_a_disclosed_marker():
+    # cap comfortably larger than the marker itself (~65 bytes) so there is
+    # room left for real content -- an unrealistically tiny cap smaller than
+    # the marker is a separate, inherent edge case (see the next test).
+    text = "y" * 500
+    truncated = selection._truncate_to_byte_cap(text, 150)
+    assert len(truncated.encode("utf-8")) <= 150
+    assert "truncated" in truncated
+    assert "150-byte" in truncated
+    assert truncated.startswith("y")
+
+
+def test_truncate_to_byte_cap_with_a_cap_smaller_than_the_marker_itself():
+    # An inherent edge case, not expected in real usage (MAX_EXCERPT_BYTES is
+    # always vastly larger than the ~65-byte marker) -- the function must
+    # still return SOMETHING sane (the bare marker) rather than raise.
+    truncated = selection._truncate_to_byte_cap("y" * 500, 10)
+    assert "truncated" in truncated
+
+
+def test_truncate_to_byte_cap_never_splits_a_multibyte_character():
+    # each euro sign is 3 bytes in UTF-8 -- a naive byte-slice at an
+    # arbitrary offset could land mid-character.
+    text = "€" * 40
+    for cap in range(20, 40):
+        truncated = selection._truncate_to_byte_cap(text, cap)
+        truncated.encode("utf-8")  # must not raise
+        assert not truncated.replace("truncated", "").count("�")
+
+
+def test_fetch_caps_a_single_excerpt_from_a_minified_style_file(tmp_path, monkeypatch):
+    """+/-40 lines, each individually long (well under MAX_LINE_CHARS on its
+    own), still total far more than MAX_EXCERPT_BYTES -- the excerpt itself
+    must be capped, disclosed, not just each line."""
+    run = _build_run(tmp_path)
+    monkeypatch.setattr(selection, "MAX_EXCERPT_BYTES", 500)
+    api_root = Path(json.loads((run / "targets.json").read_text())["repos"][0]["path"])
+    long_lines = ["z" * 300 for _ in range(120)]  # well under MAX_LINE_CHARS each
+    (api_root / "internal" / "minified.go").write_text("\n".join(long_lines) + "\n", "utf-8")
+    ref = f"api@{CLEAN_HEAD}:internal/minified.go:60"
+    _register_and_validate_select(run, "lens-x-select", [_selection("s1", ref)])
+    rows = json.loads(selection.fetch(run, "lens-x-select").read_text("utf-8"))
+    excerpt = rows[0]["excerpt"]
+    assert len(excerpt.encode("utf-8")) <= 500
+    assert "truncated" in excerpt
+    assert not excerpt.startswith("NOT FETCHED")  # still a real, if capped, excerpt
+
+
+def test_fetch_leaves_a_small_excerpt_under_the_byte_cap_untouched(tmp_path):
+    run = _build_run(tmp_path)
+    ref = f"api@{CLEAN_HEAD}:internal/service.go:1"
+    _register_and_validate_select(run, "lens-x-select", [_selection("s1", ref)])
+    rows = json.loads(selection.fetch(run, "lens-x-select").read_text("utf-8"))
+    assert "truncated" not in rows[0]["excerpt"]

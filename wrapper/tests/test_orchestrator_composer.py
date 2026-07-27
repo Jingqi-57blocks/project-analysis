@@ -9,7 +9,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # wrapper/ on path
 
-from analysis_wrapper.orchestrator.composer import ComposerError, compose, estimate_tokens
+from analysis_wrapper.orchestrator.composer import (
+    MAX_SHARD_COUNT, ComposerError, compose, estimate_tokens,
+)
 
 
 def _compose(**overrides):
@@ -92,6 +94,30 @@ def test_fixed_cost_alone_exceeding_budget_fails_closed_even_with_a_shardable_in
         _compose(instructions="x" * 400,
                 inputs={"other": "y" * 400, "candidates": json.dumps(items)},
                 context_budget_tokens=150)
+
+
+def test_pathological_shard_count_fails_closed_instead_of_exploding():
+    """The exact live-run hazard: a fixed cost close to the budget leaves
+    only a sliver per shard, which for a large splittable input computes
+    out to hundreds of shards (a real run hit 428) instead of failing
+    closed. "other" leaves only ~100 tokens/shard against a "candidates"
+    array whose per-element size forces a shard count far past
+    MAX_SHARD_COUNT."""
+    items = [{"id": i, "text": "z" * 96} for i in range(200)]  # ~25 tokens/item
+    with pytest.raises(ComposerError, match=f"exceeds the sane shard-count bound "
+                                            f"\\({MAX_SHARD_COUNT}\\)"):
+        _compose(instructions="x" * 4,
+                inputs={"other": "y" * 3600, "candidates": json.dumps(items)},
+                context_budget_tokens=1000)
+
+
+def test_shard_count_at_or_under_the_bound_still_composes_normally():
+    # A much larger budget than the pathological case above -> a small,
+    # reasonable shard count, well under MAX_SHARD_COUNT -- the new guard
+    # must never reject an ordinary sharding scenario.
+    items = [{"id": i, "text": "z" * 20} for i in range(60)]
+    packets = _compose(inputs={"candidates": json.dumps(items)}, context_budget_tokens=250)
+    assert 2 <= len(packets) <= MAX_SHARD_COUNT
 
 
 def test_redaction_is_applied_to_every_input_before_packet_assembly():
