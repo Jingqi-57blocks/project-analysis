@@ -18,6 +18,7 @@ from analysis_wrapper.module_drill import (
     ModuleCoverage,
     build_module_evidence,
     write_module_evidence,
+    write_module_health,
     write_module_prd,
     ModuleIdentity,
     ModuleRunLayout,
@@ -254,6 +255,39 @@ def test_module_prd_is_evidence_only_and_keeps_verbatim_boundary_identifiers(tmp
     assert "payments" in text  # source identifier remains verbatim in zh-CN
     assert "生产环境中已激活" in text
     assert "PTO" not in text and "approval" not in text
+
+
+def test_module_health_is_evidence_bound_and_discloses_unknown_safety_net(tmp_path):
+    root = tmp_path / "api"
+    (root / "internal" / "billing").mkdir(parents=True)
+    (root / "internal" / "billing" / "service.go").write_text("package billing\n", "utf-8")
+    scope = _scope()
+    evidence_path = write_module_evidence(
+        tmp_path / "module-evidence.json", build_module_evidence(scope, {"api": root}))
+    scope_path = write_scope(tmp_path / "module-scope.json", scope)
+    health = write_module_health(scope_path, evidence_path, tmp_path / "health.md", language="en")
+    text = health.read_text("utf-8")
+    assert "Module Health Report" in text
+    assert "payments" in text
+    assert "internal/billing/service.go" in text
+    assert "Tests, type checks, migrations, and CI" in text
+    assert "not establish production activation" in text
+    assert "PTO" not in text and "approval" not in text
+
+
+def test_module_health_zh_keeps_identifiers_and_same_evidence(tmp_path):
+    root = tmp_path / "api"
+    (root / "internal" / "billing").mkdir(parents=True)
+    (root / "internal" / "billing" / "service.go").write_text("package billing\n", "utf-8")
+    scope = _scope()
+    evidence_path = write_module_evidence(
+        tmp_path / "module-evidence.json", build_module_evidence(scope, {"api": root}))
+    scope_path = write_scope(tmp_path / "module-scope.json", scope)
+    health = write_module_health(scope_path, evidence_path, tmp_path / "health.md", language="zh-CN")
+    text = health.read_text("utf-8")
+    assert "模块健康报告" in text
+    assert "payments" in text
+    assert "生产环境中已激活" in text
 
 
 def _overview_run(tmp_path, monkeypatch):
