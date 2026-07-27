@@ -1,16 +1,21 @@
 import json
 import os
 import argparse
+import subprocess
 from pathlib import Path
 
-from analysis_wrapper.cli import PROVIDER_OWNED_SIGNAL_TOOLS, _record_summary, _sweep, main
+import pytest
+
+from analysis_wrapper.cli import (PROVIDER_OWNED_SIGNAL_TOOLS, _record_summary,
+                                  _resolve_jobs, _sweep, main)
 from analysis_wrapper.callgraph.contract import CoverageReport, RepoCoverage
 from analysis_wrapper.depmap import emit as dm_emit
 from analysis_wrapper.depmap.contract import DepMapReport, RepoDepCoverage
 from analysis_wrapper.executor import SignalResult
-from analysis_wrapper import identity, lifecycle
+from analysis_wrapper import gitinfo, identity, lifecycle
 from analysis_wrapper.status import Status
-from analysis_wrapper.targetspec import TargetSpec, stable_repo_id
+from analysis_wrapper.targetspec import (GitProvenance, TargetSpec,
+                                         TechnologyFacet, stable_repo_id)
 from analysis_wrapper.tooldefs import ToolDef
 
 
@@ -36,7 +41,7 @@ def _targets(tmp_path: Path, target) -> Path:
     spec.save(stage1 / "targets.json")
     identity.write_mapping(stage1, mapping)
     (stage1 / "discovery-report.json").write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "project_ref": mapping.project.reference,
     }), "utf-8")
     return stage1 / "targets.json"
@@ -44,6 +49,40 @@ def _targets(tmp_path: Path, target) -> Path:
 
 def _reference(target) -> str:
     return Path(target.path).name
+
+
+def _extra_target(tmp_path: Path, name: str):
+    """A second synthetic committed JS repo (57B-115) — the ``target``
+    conftest fixture only ever hands back one, and the parallel-sweep tests
+    need >= 2 repos to exercise a real (repo x tool) matrix."""
+    from analysis_wrapper.targetspec import RepoTarget
+    repo = tmp_path / name
+    repo.mkdir()
+    (repo / "index.js").write_text("module.exports = 1;\n")
+    subprocess.run(["git", "-C", str(repo), "init", "-q", "-b", "main"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "init"], check=True, capture_output=True)
+    return RepoTarget(
+        repo_id=stable_repo_id(str(repo)),
+        path=str(repo),
+        facets=[TechnologyFacet("language.javascript", "language", ["."], ["index.js"])],
+        git=GitProvenance(head=gitinfo.head(repo), branch="main",
+                          dirty_detail="no", commit_count=1),
+    )
+
+
+def _fake_tool(name: str) -> ToolDef:
+    """A fast, deterministic stand-in for a real signal tool (57B-115): no
+    dependency on scc/lizard/jscpd being installed, no network, no timing
+    variance — the parallel-sweep tests are only about ordering/collection,
+    not about any one tool's real behavior."""
+    return ToolDef(
+        name=name, binary="bash",
+        version_argv=["bash", "--version"],
+        argv_builder=lambda _t: ["bash", "-c", f"echo {name}-output"],
+    )
 
 
 def test_cli_runs_one_tool_one_repo(monkeypatch, tmp_path, target):
@@ -170,6 +209,87 @@ def test_sweep_exclude_tool_names_is_additive_and_standalone_path_ignores_it(
 
     full = _sweep(args, spec, tmp_path / "signals-b", identities)
     assert "git-history" in {r.tool for r in full}
+
+
+def test_resolve_jobs_default_and_validation():
+    """57B-115: no --jobs => min(8, cpu_count); explicit --jobs must be >= 1."""
+    assert _resolve_jobs(None) == min(8, os.cpu_count() or 1)
+    assert _resolve_jobs(1) == 1
+    assert _resolve_jobs(5) == 5
+    with pytest.raises(ValueError):
+        _resolve_jobs(0)
+
+
+def test_sweep_parallel_matches_serial_byte_for_byte(monkeypatch, tmp_path, target):
+    """57B-115: parallelizing WHEN the sweep's (repo x tool) tasks run must
+    never change WHAT gets written. Two repos x two fake tools = 4
+    independent tasks; running with --jobs 1 (today's exact serial path) and
+    with a real thread pool (--jobs 4) must produce byte-identical
+    run-summary.json, per-signal normalized manifests, and views."""
+    second = _extra_target(tmp_path, "second-repo")
+    spec = TargetSpec([target, second])
+    identities = identity.build(
+        spec, workspace_root=tmp_path, project_id=stable_repo_id(str(tmp_path)))
+
+    monkeypatch.setattr("analysis_wrapper.cli.local_tools",
+                        lambda _target: [_fake_tool("alpha"), _fake_tool("beta")])
+    monkeypatch.setattr("analysis_wrapper.cli.network_tools", lambda _target: [])
+    # Cross-family jscpd is out of scope for THIS test (it would need a real
+    # jscpd binary); the ordering/collection mechanism it shares with the
+    # per-repo matrix is exercised by the matrix itself.
+    monkeypatch.setattr("analysis_wrapper.cli._family_groups", lambda _repos: {})
+
+    common = dict(since="2020-01-01", coupling_sample_cap=0,
+                 scan_date="2026-07-26", include_network=False)
+    args_serial = argparse.Namespace(jobs=1, **common)
+    args_parallel = argparse.Namespace(jobs=4, **common)
+
+    out_serial = tmp_path / "signals-serial"
+    out_parallel = tmp_path / "signals-parallel"
+    results_serial = _sweep(args_serial, spec, out_serial, identities)
+    results_parallel = _sweep(args_parallel, spec, out_parallel, identities)
+
+    assert len(results_serial) == 4
+    key = lambda r: (r.tool, r.repository_ref, r.status.value, r.reason)
+    # Collection order (not just content) is identical regardless of worker
+    # count — the invariant ``_run_tasks`` documents.
+    assert [key(r) for r in results_serial] == [key(r) for r in results_parallel]
+
+    _record_summary(out_serial, results_serial)
+    _record_summary(out_parallel, results_parallel)
+    assert (out_serial / "run-summary.json").read_text("utf-8") == \
+        (out_parallel / "run-summary.json").read_text("utf-8")
+
+    # normalized_json() already strips wall_time_s/scan_date and reduces cwd/
+    # output paths to basenames, so it is the byte-level parity artifact.
+    for pattern in ("*.manifest.normalized.json", "*.view.txt"):
+        serial_names = sorted(p.name for p in out_serial.glob(pattern))
+        parallel_names = sorted(p.name for p in out_parallel.glob(pattern))
+        assert serial_names == parallel_names and len(serial_names) == 4
+        for name in serial_names:
+            assert (out_serial / name).read_text("utf-8") == \
+                (out_parallel / name).read_text("utf-8")
+
+
+def test_sweep_jobs_1_never_constructs_a_thread_pool(monkeypatch, tmp_path, target):
+    """--jobs 1 must be exactly today's serial path, not a thread pool of
+    size one: fail loudly if ``ThreadPoolExecutor`` is even constructed."""
+    monkeypatch.setattr("analysis_wrapper.cli.local_tools",
+                        lambda _target: [_fake_tool("alpha"), _fake_tool("beta")])
+    monkeypatch.setattr("analysis_wrapper.cli.network_tools", lambda _target: [])
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("ThreadPoolExecutor must not be constructed for --jobs 1")
+    monkeypatch.setattr("analysis_wrapper.cli.ThreadPoolExecutor", _boom)
+
+    spec = TargetSpec([target])
+    identities = identity.build(
+        spec, workspace_root=tmp_path, project_id=stable_repo_id(str(tmp_path)))
+    args = argparse.Namespace(since="2020-01-01", coupling_sample_cap=0,
+                              scan_date="2026-07-26", include_network=False, jobs=1)
+    results = _sweep(args, spec, tmp_path / "signals", identities)
+    assert len(results) == 2
+    assert {r.status for r in results} == {Status.COMPLETE}
 
 
 def test_prepare_overview_signals_merge_includes_provider_owned_tools(tmp_path, target):
@@ -312,7 +432,7 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
         view = Path(out) / f"fixture-{repository.artifact_key}.view.txt"
         view.write_text("items: 0\n", "utf-8")
         (Path(out) / f"fixture-{repository.artifact_key}.manifest.json").write_text(json.dumps({
-            "schema_version": "2.0.0",
+            "schema_version": "3.0.0",
             "tool": "fixture", "status": "complete",
             "repos": [{"repository_ref": repository.reference}],
         }), "utf-8")

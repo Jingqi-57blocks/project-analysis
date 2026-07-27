@@ -20,7 +20,7 @@ from pathlib import Path
 
 
 _SAFE_REPO_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-SCHEMA_VERSION = "2.0.0"
+from .contract_version import CONTRACT_VERSION as SCHEMA_VERSION  # noqa: single shared contract version (57B-118, M4)
 _FACET_STATES = {"resolved", "conflicting", "unknown"}
 _CONFIDENCE = {"high", "medium", "low"}
 _REPO_FIELDS = {

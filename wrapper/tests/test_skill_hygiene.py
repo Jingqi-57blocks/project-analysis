@@ -86,13 +86,25 @@ def test_lens_coverage_catalog_matches_installed_lenses_and_tools():
     assert mapped <= known_tools
 
 
+def _body_after_frontmatter(text: str) -> str:
+    """Strip a leading ``---\\n...\\n---\\n`` YAML frontmatter block (57B-116's
+    per-lens shard/signals planning metadata) before checking the lens PROSE
+    itself -- the frontmatter is additive planning-layer metadata; every
+    check below is about the markdown body the old skill flow still reads
+    unchanged."""
+    if not text.startswith("---\n"):
+        return text
+    end = text.find("\n---\n", 4)
+    return text[end + 5:] if end != -1 else text
+
+
 def test_every_lens_reminds_the_finding_shape_or_defers_to_shared():
     shared = (SKILL_ROOT / "lenses" / "_shared.md").read_text("utf-8")
     assert "suggested_direction" in shared and "confidence" in shared
     for path in sorted((SKILL_ROOT / "lenses").glob("*.md")):
         if path.stem in {"README", "_shared"}:
             continue
-        text = path.read_text("utf-8")
+        text = _body_after_frontmatter(path.read_text("utf-8"))
         assert "evidence" in text.lower(), f"{path.name}: no evidence discipline"
         assert "group " in text.splitlines()[0].lower() or "(group" in text.splitlines()[0], \
             f"{path.name}: first line must state its group"

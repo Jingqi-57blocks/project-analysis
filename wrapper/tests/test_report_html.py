@@ -117,7 +117,7 @@ graph TB
 
 def _system_model() -> dict:
     return {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "project_ref": "DEMO-1",
         "scan_date": "2026-01-01",
         "generator": "test",
@@ -211,7 +211,7 @@ def make_run(tmp_path: Path, *, full: bool = True, drilldown: bool = False,
     }
     (run / "run-state.json").write_text(json.dumps(run_state), encoding="utf-8")
     (run / "discovery-report.json").write_text(json.dumps(
-        {"schema_version": "2.0.0", "project_ref": "DEMO-1",
+        {"schema_version": "3.0.0", "project_ref": "DEMO-1",
          "workspace_root": "/Users/demo/secret",
          "repos": [{"repository_ref": "svc-a"}],
          "not_targeted": ["/Users/demo/secret/analyzer (owned checkout)"]}),
@@ -219,11 +219,11 @@ def make_run(tmp_path: Path, *, full: bool = True, drilldown: bool = False,
     if full:
         (run / "system-model.json").write_text(json.dumps(_system_model()), encoding="utf-8")
         (run / "callgraph-coverage.json").write_text(json.dumps(
-            {"schema_version": "2.0.0", "repos": [{"repository_ref": "svc-a", "status": "complete", "tool": "callgraph",
+            {"schema_version": "3.0.0", "repos": [{"repository_ref": "svc-a", "status": "complete", "tool": "callgraph",
                         "edges_emitted": 5}]}), encoding="utf-8")
         (run / "imports").mkdir(exist_ok=True)
         (run / "imports" / "depmap-coverage.json").write_text(json.dumps(
-            {"schema_version": "2.0.0", "repos": [{"repository_ref": "svc-a", "status": "complete", "tool": "go list",
+            {"schema_version": "3.0.0", "repos": [{"repository_ref": "svc-a", "status": "complete", "tool": "go list",
                         "units": 3}]}), encoding="utf-8")
     if drilldown:
         mod = run / "drilldown" / "module-one"

@@ -1,3 +1,25 @@
+---
+shard: repo
+# shard: every bullet (coverage asymmetry, test wiring, assertion-quality
+#   sampling, type/migration nets, operational-state signals) is a per-repo
+#   observation. The Rules section's "Non-git targets: this lens is
+#   unavailable" is itself a PER-REPO fact -- some workspace repos may be
+#   non-git while siblings are git -- which a repo shard represents
+#   naturally (one shard reports unavailable, siblings report their own
+#   findings), corrected from an initial workspace guess inherited from the
+#   old README grouping (shared history-lane invocation with
+#   hotspots-change-friction, not a shared need for cross-repo comparison).
+signals: [git-history, scc]
+# signals: lenses/coverage-map.json requires only {scc}; this file's own
+#   "Signals:" line additionally names git-history ("do tests change
+#   alongside the code they cover?"), so it is added.
+source_reads: true
+# source_reads: this lens's own body requires reading actual file content no
+#   signal view carries -- "Assertion quality sampling -- read a SAMPLE of
+#   tests in the hottest modules... cite the specific test files sampled"
+#   and "Type/migration nets... (read tsconfig/migration files as data)"
+#   both name a real file read, not a tool-summarized count.
+---
 # Lens: safety-net (group B)
 
 **Question:** when someone changes this code, what actually catches mistakes —
@@ -23,12 +45,27 @@ Look for, with evidence:
   sample size.
 - **Type/migration nets** — TypeScript strictness settings, DB migration
   discipline (read tsconfig/migration files as data) — supporting evidence
-  for or against safety, always cited.
+  for or against safety, always cited. Compiler/type-safety settings are
+  often not set in the file you'd naively read: FOLLOW config inheritance
+  chains (a tsconfig's own `extends`, a base config it points to) to the
+  file that actually SETS the flag, and request that file via selection if
+  it isn't already in front of you — a strictness claim about a config that
+  merely inherits, without reading what it inherits FROM, is unverified.
+- **Installed-vs-used test tooling** — a test dependency or config block
+  present in the manifest with zero tests in the sampled set importing or
+  invoking it is itself a finding: tooling that is declared but dormant is
+  not a safety net, whatever the manifest implies.
 - **Operational-state signals (for the overview's operational-state section)** —
   while reading CI and config, record the PRESENCE/ABSENCE and LOCATION only (never
   a reliability verdict) of: health-check endpoints, logging config, DB migration
   directories, rollback/deploy hints, metrics/tracing/alert wiring. Absence is
   `unknown`, not "unreliable".
+
+A present, correctly-wired safety net is itself a finding, exactly as much
+as its absence — do not let the bullets above read as a hunt for gaps only;
+a positive result on any of them (tooling installed AND used, strictness set
+AND inherited correctly, tests genuinely covering a hot module) is evidence
+worth stating plainly, with the same citation discipline.
 
 Rules:
 - NEVER report a coverage percentage — no coverage tool runs in v1. Claims

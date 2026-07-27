@@ -24,9 +24,15 @@ def _write(run: Path, relpath: str, obj) -> None:
     path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", "utf-8")
 
 
+def _write_text(run: Path, relpath: str, text: str) -> None:
+    path = run / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, "utf-8")
+
+
 def _capabilities(*, scan_date="2026-07-23", status="complete", details=None):
     return {
-        "schema_version": "2.0.0", "project_ref": "proj", "scan_date": scan_date,
+        "schema_version": "3.0.0", "project_ref": "proj", "scan_date": scan_date,
         "aggregate_status": "complete",
         "capabilities": [{
             "capability_id": "callgraph", "applicable": True, "status": status,
@@ -63,7 +69,7 @@ def _evidence_catalog():
 
 def _system_model(*, generator="analysis-system-model/0.4.0", scan_date="2026-07-23"):
     return {
-        "schema_version": "2.0.0", "generator": generator, "scan_date": scan_date,
+        "schema_version": "3.0.0", "generator": generator, "scan_date": scan_date,
         "project_ref": "proj", "stats": {},
         "coverage": {
             "repositories": {
@@ -85,7 +91,7 @@ def _system_model(*, generator="analysis-system-model/0.4.0", scan_date="2026-07
 
 def _callgraph_coverage(*, tool_version="v1"):
     return {
-        "schema_version": "2.0.0", "scan_date": "2026-07-23", "determinism": "x",
+        "schema_version": "3.0.0", "scan_date": "2026-07-23", "determinism": "x",
         "repos": [{
             "repository_ref": "api", "lang": "go", "status": "complete",
             "tool": "callgraph", "tool_version": tool_version, "algorithm": "vta",
@@ -100,7 +106,7 @@ def _callgraph_coverage(*, tool_version="v1"):
 
 def _signals(*, status="complete"):
     return {
-        "schema_version": "2.0.0", "aggregate_status": status,
+        "schema_version": "3.0.0", "aggregate_status": status,
         "signals": [{"tool": "scc", "repository_ref": "api", "status": status,
                     "reason": "", "view": "x.view.txt", "manifest": "x.manifest.json"}],
     }
@@ -108,7 +114,7 @@ def _signals(*, status="complete"):
 
 def _discovery(*, workspace_root="/ws-a", not_targeted=None, facet_state="resolved"):
     return {
-        "schema_version": "2.0.0", "project_ref": "proj", "workspace_root": workspace_root,
+        "schema_version": "3.0.0", "project_ref": "proj", "workspace_root": workspace_root,
         "repos": [{
             "repository_ref": "api",
             "provenance": {"is_git": True, "head": "a" * 40,
@@ -846,3 +852,397 @@ def test_capability_applicable_flag_change_is_reclassified(tmp_path):
     changed = report["sections"]["capability_records"]["changed"]
     assert len(changed) == 1
     assert changed[0]["reclassified"] is True
+
+
+# ---------------------------------------------------------------------------
+# 9. 57B-112 §2 regressions: mixed-era row-key collapse + totals off-by-one.
+# ---------------------------------------------------------------------------
+
+
+def test_lane_coverage_legacy_repo_id_rows_stay_distinct():
+    """A pre-57B-88 callgraph-coverage.json row carries `repo_id`, not
+    `repository_ref` (17f7bb3's rename) -- keying purely by `repository_ref`
+    reads every row as the same empty string, collapsing two different
+    repos sharing `lang` onto one dict key."""
+    doc = {"scan_date": "2026-01-01", "determinism": "x", "repos": [
+        {"repo_id": "api", "lang": "go", "status": "complete"},
+        {"repo_id": "worker", "lang": "go", "status": "complete"},
+    ]}
+
+    result = parity._lane_coverage(doc, None)
+
+    assert len(result) == 2
+    assert {key[1] for key in result} == {"api", "worker"}
+
+
+def test_signals_legacy_repo_id_rows_stay_distinct():
+    """Same rename affected signals/run-summary.json rows."""
+    doc = {"aggregate_status": "complete", "signals": [
+        {"tool": "scc", "repo_id": "api", "status": "complete", "reason": ""},
+        {"tool": "scc", "repo_id": "worker", "status": "complete", "reason": ""},
+    ]}
+
+    result = parity._signals(doc)
+
+    repo_keys = {key for key in result if key != ("__aggregate__",)}
+    assert len(repo_keys) == 2
+    assert {key[1] for key in repo_keys} == {"api", "worker"}
+
+
+def _legacy_callgraph_row(repo_id: str, status: str) -> dict:
+    return {"repo_id": repo_id, "lang": "go", "status": status, "tool": "callgraph",
+            "tool_version": "v1", "algorithm": "vta", "warm_cache": "n/a", "reason": "",
+            "candidates_by_ext": {}, "analyzed_by_ext": {}, "excluded_by_reason": {},
+            "parse_load_failures": 0,
+            "call_sites": {"resolved": 0, "ambiguous": 0, "external": 0, "unresolved": 0,
+                          "total": 0},
+            "edges_emitted": 0, "notes": ""}
+
+
+def test_lane_coverage_two_legacy_repos_sharing_lang_do_not_collapse(tmp_path):
+    """The actual danger of the collapse this fixes: TWO distinct pre-88
+    repos sharing `lang` key to the SAME (kind, "", lang) tuple without the
+    fallback, so the second row silently overwrites the first in the
+    projected dict -- a real status change on the first repo ("api") would
+    never surface as a difference at all, not even a wrong one."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "callgraph-coverage.json", {
+        "scan_date": "2026-07-23", "determinism": "x",
+        "repos": [_legacy_callgraph_row("api", "complete"),
+                 _legacy_callgraph_row("worker", "complete")]})
+    _write(b, "callgraph-coverage.json", {
+        "scan_date": "2026-07-23", "determinism": "x",
+        "repos": [_legacy_callgraph_row("api", "partial"),
+                 _legacy_callgraph_row("worker", "failed")]})
+
+    report = parity.compare(a, b)
+
+    section = report["sections"]["lane_coverage"]
+    assert section["added"] == [] and section["removed"] == []
+    assert {row["key"] for row in section["changed"]} == {
+        "callgraph / api / go", "callgraph / worker / go"}
+
+
+def test_signals_two_legacy_repos_sharing_tool_do_not_collapse(tmp_path):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "signals/run-summary.json", {"aggregate_status": "complete", "signals": [
+        {"tool": "scc", "repo_id": "api", "status": "complete", "reason": ""},
+        {"tool": "scc", "repo_id": "worker", "status": "complete", "reason": ""}]})
+    _write(b, "signals/run-summary.json", {"aggregate_status": "partial", "signals": [
+        {"tool": "scc", "repo_id": "api", "status": "partial", "reason": "x"},
+        {"tool": "scc", "repo_id": "worker", "status": "failed", "reason": "y"}]})
+
+    report = parity.compare(a, b)
+
+    section = report["sections"]["signals"]
+    assert section["added"] == [] and section["removed"] == []
+    changed_keys = {row["key"] for row in section["changed"]}
+    assert "scc / api" in changed_keys and "scc / worker" in changed_keys
+
+
+def _legacy_discovery_repo(repo_id: str, facet_state: str) -> dict:
+    """A pre-57B-88 discovery-report.json repo row: `repo_id`, not
+    `repository_ref` (identity.externalize_discovery_report's own rename,
+    same 57B-88 migration as callgraph/depmap/signals)."""
+    return {
+        "repo_id": repo_id,
+        "provenance": {"is_git": True, "head": "a" * 40, "path": f"/ws/{repo_id}"},
+        "stacks": {"stacks": ["go"], "frameworks": [], "analysis_roots": [], "evidence": []},
+        "technology_facets": [{
+            "profile_id": "language.go", "kind": "language", "scope_roots": ["."],
+            "evidence": ["go.mod"], "confidence": "high", "state": facet_state,
+        }],
+        "unclassified_file_inventory": [], "technology_detection_notes": [],
+        "package_manager": {"name": "go", "lockfile": "", "evidence": ""},
+        "tier2_exclusions": {"dirs": [], "evidence": ""},
+        "module_signals": {"folders": [], "routes": [], "tables": [], "api_configs": [],
+                          "notes": []},
+        "candidate_notes": [], "integration_evidence": {"available": True, "notes": []},
+        "access_model": {"available": True, "notes": []}, "notes": [],
+    }
+
+
+def test_discovery_facets_two_legacy_repos_sharing_profile_do_not_collapse(tmp_path):
+    """Same 57B-112 §2 class of bug as lane_coverage/signals, found while
+    fixing those: discovery-report.json repo rows had the identical pre-88
+    repo_id -> repository_ref rename, so _discovery_facets keying by
+    (repository_ref, profile_id) alone collapsed two repos sharing a
+    profile_id (both "language.go") onto one dict key."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+
+    def _legacy_discovery_doc(api_state: str, worker_state: str) -> dict:
+        return {
+            "project_ref": "proj", "workspace_root": "/ws",
+            "repos": [_legacy_discovery_repo("api", api_state),
+                     _legacy_discovery_repo("worker", worker_state)],
+            "not_targeted": [], "reduced_coverage_targets": [],
+            "integration_candidate_count": 0,
+        }
+
+    _write(a, "discovery-report.json", _legacy_discovery_doc("resolved", "resolved"))
+    _write(b, "discovery-report.json", _legacy_discovery_doc("conflicting", "unresolved"))
+
+    report = parity.compare(a, b)
+
+    section = report["sections"]["discovery_facets"]
+    assert section["added"] == [] and section["removed"] == []
+    assert {row["key"] for row in section["changed"]} == {
+        "api / language.go", "worker / language.go"}
+
+
+def test_summary_total_differences_always_equals_sum_of_by_section(tmp_path):
+    """57B-112 §2: summary.total_differences must be COMPUTED FROM
+    summary.by_section (never a second, independently-accumulated number) so
+    the two can never diverge again -- previously `total` also added the
+    prose lanes' contribution while `by_section` silently omitted them
+    entirely (98,475 vs 98,474 on a real mainline comparison, traced to a
+    single `not_targeted` addition nobody could find in the per-section
+    breakdown)."""
+    a = _write_minimal_run(tmp_path / "a", workspace_root="/ws-a")
+    b = _write_minimal_run(
+        tmp_path / "b", workspace_root="/ws-b",
+        not_targeted=["/ws-b/vendor (excluded by operator flag)"])
+
+    report = parity.compare(a, b)
+
+    by_section = report["summary"]["by_section"]
+    assert report["summary"]["total_differences"] == sum(by_section.values())
+    # The ONLY actual difference here is the prose addition -- by_section
+    # must itself carry it (not just the total), or this assertion is
+    # trivially satisfied by an empty report.
+    assert report["summary"]["total_differences"] == 1
+    assert by_section.get("prose/not_targeted") == 1
+    assert all(count == 0 for name, count in by_section.items()
+              if name != "prose/not_targeted")
+
+
+# ---------------------------------------------------------------------------
+# 10. 57B-114: --semantic mode.
+# ---------------------------------------------------------------------------
+
+
+def _finding_row(finding_id, *, lens="architecture", priority="high", confidence="medium",
+                 affected_modules=None, refs=None):
+    return {
+        "finding_id": finding_id, "claim": f"claim for {finding_id}", "lens": lens,
+        "priority": priority, "confidence": confidence,
+        "affected_modules": affected_modules or ["mod-a"],
+        "evidence": [{"fact": "observed", "basis": "static-reference",
+                     "refs": refs or ["api@NON-GIT:internal/handlers/foo.go:10"]}],
+        "evidence_basis": ["static-reference"],
+        "impact": "impact text", "limitations": "none", "suggested_direction": "investigate",
+    }
+
+
+def _findings_doc(rows):
+    return {"schema_version": "3.0.0", "project_ref": "proj", "scan_date": "2026-07-23",
+            "findings": rows}
+
+
+def _module_map_doc(dispositions, modules):
+    return {"schema_version": "3.0.0", "project_ref": "proj",
+            "candidate_dispositions": dispositions, "modules": modules}
+
+
+def test_findings_matched_by_evidence_overlap_tolerates_differing_ids(tmp_path):
+    """--semantic must match the SAME underlying finding across a migration
+    that renumbers finding_ids, by evidence overlap (same repo+file,
+    overlapping line ranges, same lens) -- not by id."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "findings.json", _findings_doc([
+        _finding_row("finding-base-shared", priority="high",
+                    refs=["api@NON-GIT:internal/handlers/foo.go:10",
+                          "api@NON-GIT:internal/handlers/foo.go:15"]),
+        _finding_row("finding-base-only", lens="performance",
+                    refs=["api@NON-GIT:internal/other.go:1"]),
+    ]))
+    _write(b, "findings.json", _findings_doc([
+        _finding_row("finding-candidate-shared", priority="critical",
+                    refs=["api@NON-GIT:internal/handlers/foo.go:12",
+                          "api@NON-GIT:internal/handlers/foo.go:20"]),
+        _finding_row("finding-candidate-only", lens="security",
+                    refs=["api@NON-GIT:internal/new.go:1"]),
+    ]))
+
+    report = parity.compare_semantic(a, b)
+
+    findings = report["findings"]
+    assert findings["unmatched_left"] == ["finding-base-only"]
+    assert findings["unmatched_right"] == ["finding-candidate-only"]
+    assert len(findings["matched"]) == 1
+    pair = findings["matched"][0]
+    assert pair["base_finding_id"] == "finding-base-shared"
+    assert pair["candidate_finding_id"] == "finding-candidate-shared"
+    assert pair["deltas"] == {"priority": {"base": "high", "candidate": "critical"}}
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_findings_pure_id_churn_has_zero_semantic_differences(tmp_path):
+    """The whole point of --semantic: identical substance under a different
+    finding_id must compare clean."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    refs = ["api@NON-GIT:internal/handlers/foo.go:10"]
+    _write(a, "findings.json", _findings_doc([_finding_row("finding-old-id", refs=refs)]))
+    _write(b, "findings.json", _findings_doc([_finding_row("finding-new-id", refs=refs)]))
+
+    report = parity.compare_semantic(a, b)
+
+    findings = report["findings"]
+    assert findings["unmatched_left"] == [] and findings["unmatched_right"] == []
+    assert len(findings["matched"]) == 1
+    assert findings["matched"][0]["deltas"] == {}
+    assert not parity.has_semantic_mode_differences(report)
+
+
+def test_module_map_classification_and_membership_diffs(tmp_path):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "module-map.json", _module_map_doc(
+        [{"candidate_id": "mc-1", "disposition": "standalone", "module_ids": ["mod-a"],
+          "reason": ""}],
+        [{"module_id": "mod-a", "name": "Mod A", "classification": "business",
+          "aliases": [], "confidence": "high"}]))
+    _write(b, "module-map.json", _module_map_doc(
+        [{"candidate_id": "mc-1", "disposition": "standalone", "module_ids": ["mod-a"],
+          "reason": ""},
+         {"candidate_id": "mc-2", "disposition": "standalone", "module_ids": ["mod-b"],
+          "reason": ""}],
+        [{"module_id": "mod-a", "name": "Mod A", "classification": "platform",
+          "aliases": [], "confidence": "high"},
+         {"module_id": "mod-b", "name": "Mod B", "classification": "business",
+          "aliases": [], "confidence": "high"}]))
+
+    report = parity.compare_semantic(a, b)
+
+    module_map = report["module_map"]
+    assert module_map["added"] == ["mod-b"]
+    assert module_map["removed"] == []
+    assert len(module_map["changed"]) == 1
+    changed = module_map["changed"][0]
+    assert changed["module_id"] == "mod-a"
+    assert changed["base"]["classification"] == "business"
+    assert changed["candidate"]["classification"] == "platform"
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_disposition_totals_mismatch_is_flagged(tmp_path):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    _write(a, "module-map.json", _module_map_doc(
+        [{"candidate_id": "mc-1", "disposition": "standalone", "module_ids": ["mod-a"],
+          "reason": ""}],
+        [{"module_id": "mod-a", "name": "Mod A", "classification": "business",
+          "aliases": [], "confidence": "high"}]))
+    _write(b, "module-map.json", _module_map_doc(
+        [{"candidate_id": "mc-1", "disposition": "excluded", "module_ids": [], "reason": "dup"}],
+        []))
+
+    report = parity.compare_semantic(a, b)
+
+    disposition = report["disposition_totals"]
+    assert not disposition["equal"]
+    assert disposition["base"]["standalone"] == 1
+    assert disposition["candidate"]["excluded"] == 1
+    assert "standalone" in disposition["differing_classes"]
+    assert "excluded" in disposition["differing_classes"]
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_citations_and_section_completeness(tmp_path):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    base_overview = (
+        "## Executive summary\n"
+        "This finding is backed by `api@NON-GIT:internal/handlers/foo.go:10` "
+        "and also cites api@NON-GIT:internal/handlers/bar.go:5 directly.\n\n"
+        "## Analysis scope\n"
+        "Short section.\n"
+    )
+    candidate_overview = (
+        "## Executive summary\n"
+        "This finding is backed by `api@NON-GIT:internal/handlers/foo.go:10` "
+        "and a NEW citation api@NON-GIT:internal/handlers/baz.go:9 as well, "
+        "with quite a lot more words describing the same evidence in depth.\n\n"
+    )
+    _write_text(a, "overview.md", base_overview)
+    _write_text(b, "overview.md", candidate_overview)
+
+    report = parity.compare_semantic(a, b)
+
+    citations = report["citations"]["overview.md"]
+    assert citations["removed"] == ["api@NON-GIT:internal/handlers/bar.go:5"]
+    assert citations["added"] == ["api@NON-GIT:internal/handlers/baz.go:9"]
+    assert report["citations"]["technical-overview.md"] == "not present in both runs"
+
+    completeness = report["section_completeness"]["overview.md"]
+    exec_summary = completeness["sections"]["Executive summary"]
+    assert exec_summary["equal_or_greater"] is True
+    scope = completeness["sections"]["Analysis scope"]
+    assert scope["candidate_present"] is False
+    assert scope["equal_or_greater"] is False
+    assert report["section_completeness"]["technical-overview.md"] == "not present in both runs"
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_semantic_coverage_reflects_byte_level_capability_and_signal_sections(tmp_path):
+    """`coverage` is a semantic READING of compare()'s own sections, not a
+    second implementation of the same check."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b", capability_status="partial")
+
+    report = parity.compare_semantic(a, b)
+
+    coverage = report["coverage"]
+    assert coverage["capability_records"]["equal"] is False
+    assert coverage["capability_records"]["difference_count"] == 1
+    assert coverage["lane_coverage"]["equal"] is True
+    assert coverage["signals"]["equal"] is True
+    assert parity.has_semantic_mode_differences(report)
+
+
+def test_semantic_mode_degrades_gracefully_when_narrative_artifacts_absent(tmp_path):
+    """Deterministic-only runs have no findings.json/module-map.json/
+    narrative reports at all -- every section depending on one must degrade
+    to the literal 'not present in both runs' marker, never crash, and never
+    count as a difference."""
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+
+    report = parity.compare_semantic(a, b)
+
+    assert report["findings"] == "not present in both runs"
+    assert report["module_map"] == "not present in both runs"
+    assert report["disposition_totals"] == "not present in both runs"
+    for name in ("overview.md", "technical-overview.md"):
+        assert report["citations"][name] == "not present in both runs"
+        assert report["section_completeness"][name] == "not present in both runs"
+    assert not parity.has_semantic_mode_differences(report)
+
+
+def test_cli_compare_runs_semantic_writes_default_report_and_prints_summary(
+        tmp_path, capsys, monkeypatch):
+    a = _write_minimal_run(tmp_path / "a")
+    b = _write_minimal_run(tmp_path / "b")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["compare-runs", str(a), str(b), "--semantic"]) == 0
+    default_path = tmp_path / "parity-semantic.json"
+    assert default_path.is_file()
+    written = json.loads(default_path.read_text("utf-8"))
+    assert written["schema_version"] == parity.SEMANTIC_SCHEMA_VERSION
+    out = capsys.readouterr().out
+    assert "findings: not present in both runs" in out
+
+    b_mutated = _write_minimal_run(tmp_path / "b-mutated", capability_status="partial")
+    custom_path = tmp_path / "custom-semantic.json"
+    assert main([
+        "compare-runs", str(a), str(b_mutated), "--semantic", "--report", str(custom_path),
+    ]) == 3
+    assert custom_path.is_file()
+    assert json.loads(custom_path.read_text("utf-8"))["coverage"]["capability_records"][
+        "equal"] is False

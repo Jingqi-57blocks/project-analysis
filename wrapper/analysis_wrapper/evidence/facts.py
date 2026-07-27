@@ -118,7 +118,7 @@ class Fact:
         }
 
 
-def make_fact_id(capability_id: str, repo_id: str, kind: str,
+def make_fact_id(capability_id: str, repository_ref: str, kind: str,
                  natural_key: tuple[str, ...]) -> str:
     """Deterministic fact identifier for cross-artifact traceability.
 
@@ -127,8 +127,15 @@ def make_fact_id(capability_id: str, repo_id: str, kind: str,
     same ID is incidental to this being a pure function of its inputs, not a
     cache key, replay token, or content-addressed lookup that anything here
     honors.
+
+    ``repository_ref`` is the STABLE human-readable identity reference, not
+    the internal ``repo_id`` (a hash derived from the analyzed machine's
+    absolute path — 57B-112 §5 / 57B-118 M4). The internal id is fine for
+    same-machine parity chains but would make this id diverge across
+    machines for byte-identical evidence of the same repository; the
+    reference is what stays stable there.
     """
     digest = hashlib.sha1(
-        "|".join([capability_id, repo_id, kind, *natural_key]).encode("utf-8")
+        "|".join([capability_id, repository_ref, kind, *natural_key]).encode("utf-8")
     ).hexdigest()[:16]
     return f"fact:{digest}"

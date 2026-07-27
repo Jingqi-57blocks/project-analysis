@@ -178,3 +178,35 @@ BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
 
 def bundled_registry() -> ProfileRegistry:
     return ProfileRegistry(BUNDLED_PROFILES, BUNDLED_PROVIDERS)
+
+
+def technology_names(technology_facets: list, kind: str) -> list[str]:
+    """Sorted, deduplicated display names for the RESOLVED facets of one
+    ``kind`` (e.g. ``"framework"``) in a repo's ``technology_facets`` list.
+
+    Direct replacement for the legacy per-repo "stacks" display block's
+    identical ``registry.profile(facet.profile_id).display_name`` derivation
+    (``discovery/stacks.py``'s frozen ``StackReport`` -- same values, same
+    sort) -- but reads the CURRENT facet list directly, so it picks up every
+    facet kind bundled since that block was frozen (e.g. ``datastore``,
+    57B-80) rather than the fixed kind set ``STACK_REPORT_FACET_KINDS`` froze
+    for byte-identical legacy parity (57B-112 §4 / 57B-118 M4). Only
+    ``state == "resolved"`` facets count as a confirmed technology; a
+    ``conflicting`` or otherwise unresolved facet is not a name the reader
+    should see stated as fact.
+    """
+    registry = bundled_registry()
+    names: set[str] = set()
+    for facet in technology_facets:
+        if not isinstance(facet, dict):
+            continue
+        if facet.get("kind") != kind or facet.get("state") != "resolved":
+            continue
+        profile_id = facet.get("profile_id")
+        if not isinstance(profile_id, str):
+            continue
+        try:
+            names.add(registry.profile(profile_id).display_name)
+        except KeyError:
+            continue  # a facet naming a profile this registry build doesn't carry
+    return sorted(names)

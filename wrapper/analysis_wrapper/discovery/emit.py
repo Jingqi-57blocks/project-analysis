@@ -25,13 +25,12 @@ from pathlib import Path
 
 from .. import identity
 from ..executor import write_new_text
-from ..profiles.bundled import bundled_registry
 from ..profiles import detection as profile_detection
 from ..sanitize import redact
 from ..targetspec import (RepoTarget, TargetSpec, overlapping_repo_pairs,
                           path_contains, stable_repo_id)
 from . import (candidates, generated, inventory, modules, pm,
-               provenance, self_exclusion, stacks)
+               provenance, self_exclusion)
 
 
 def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
@@ -54,7 +53,7 @@ def _manifest_inputs(repo_path: Path) -> tuple[dict, list[str]]:
     gomod = repo_path / "go.mod"
     if gomod.is_file():
         # Structured `go mod edit -json` (OSS parser), direct requires only.
-        requires = stacks.gomod_requires(gomod, include_indirect=False)
+        requires = profile_detection.gomod_requires(gomod, include_indirect=False)
     return deps, requires
 
 
@@ -63,15 +62,29 @@ def _has_direct_project_manifest(path: Path) -> bool:
     return any((path / name).is_file() for name in _DIRECT_PROJECT_MANIFESTS)
 
 
-def _non_git_projects(root: Path, repo_paths: list[str]) -> tuple[list[Path], list[Path]]:
-    """Return canonical non-git projects and contained child projects.
+def _non_git_projects(
+    root: Path, repo_paths: list[str],
+) -> tuple[list[Path], list[Path], list[Path]]:
+    """Return canonical non-git projects, contained child projects, and
+    unrecognized-but-non-empty child folders.
 
     A direct root project owns its source tree, so stack-bearing child projects
     are disclosed rather than executed again.  Without a root manifest the
     workspace is a container and direct child projects become targets.
+
+    The third list (57B-112 §3) is neither of those: a child folder with no
+    bundled language profile detected (``profile_detection.detect`` would
+    report it empty), yet not empty either — a bounded walk finds files no language
+    profile's source-extension fingerprint claims (e.g. a Swift-only package:
+    no bundled Swift profile, so ``Package.swift``/``*.swift`` never match
+    anything). Extending targeting to cover it is out of scope; the caller
+    (``discover``) only discloses it in ``not_targeted`` instead of leaving it
+    completely unmentioned (previously its only trace was the generic
+    workspace-container note, which never named it).
     """
     git_roots = {Path(path).expanduser().resolve() for path in repo_paths}
     child_projects: list[Path] = []
+    unrecognized: list[Path] = []
     try:
         children = sorted(
             p for p in root.iterdir()
@@ -84,43 +97,25 @@ def _non_git_projects(root: Path, repo_paths: list[str]) -> tuple[list[Path], li
         resolved = path.resolve()
         if resolved in git_roots:
             continue
-        if stacks.detect(resolved).stacks:
+        # This same detect() call also yields ``unclassified_inventory`` (the
+        # bounded extension sniff ``profiles/detection.py`` already computes
+        # for every call) for the disclosure case below, at no extra cost.
+        detected = profile_detection.detect(resolved)
+        if any(facet.kind == "language" for facet in detected.facets):
             child_projects.append(resolved)
+        elif detected.unclassified_inventory:
+            unrecognized.append(resolved)
 
     resolved_root = root.resolve()
     if _has_direct_project_manifest(resolved_root):
         selected = [] if resolved_root in git_roots else [resolved_root]
-        return selected, child_projects
-    return child_projects, []
+        return selected, child_projects, unrecognized
+    return child_projects, [], unrecognized
 
 
 def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     """Run every per-repo producer for one target."""
     detected = profile_detection.detect(path)
-    registry = bundled_registry()
-    stack_report = stacks.StackReport(
-        stacks=sorted(
-            registry.profile(facet.profile_id).display_name
-            for facet in detected.facets if facet.kind == "language"
-        ),
-        analysis_roots=list(detected.analysis_roots),
-        frameworks=sorted(
-            registry.profile(facet.profile_id).display_name
-            for facet in detected.facets if facet.kind == "framework"
-        ),
-        # This legacy display block's evidence surface is FROZEN to
-        # stacks.STACK_REPORT_FACET_KINDS (language/ecosystem/framework/
-        # repository-trait). New facet kinds (datastore in 57B-80; more in
-        # later migrations) are additive in technology_facets ONLY — they
-        # must never alter this legacy stacks block, which deterministic
-        # parity compares byte-for-byte.
-        evidence=sorted({
-            f"{facet.profile_id}: {item}"
-            for facet in detected.facets
-            if facet.kind in stacks.STACK_REPORT_FACET_KINDS
-            for item in facet.evidence
-        }),
-    )
     pm_report = pm.identify(path)
     tier2 = generated.derive(path)
     prov_block = provenance.repo_provenance(path, repo_id)
@@ -133,7 +128,7 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     target = RepoTarget(
         repo_id=repo_id, path=str(path),
         facets=list(detected.facets),
-        analysis_roots=stack_report.analysis_roots,
+        analysis_roots=list(detected.analysis_roots),
         tier2_exclusions=tier2.exclusions,
         pm=pm_report,
         git=provenance.git_provenance(path),
@@ -141,10 +136,6 @@ def _produce_target(path: Path, repo_id: str) -> tuple[RepoTarget, list, dict]:
     report = {
         "repo_id": repo_id,
         "provenance": prov_block.to_dict(),
-        "stacks": {"stacks": stack_report.stacks,
-                   "analysis_roots": stack_report.analysis_roots,
-                   "frameworks": stack_report.frameworks,
-                   "evidence": stack_report.evidence},
         "technology_facets": [asdict(facet) for facet in detected.facets],
         "unclassified_file_inventory": list(detected.unclassified_inventory),
         "technology_detection_notes": list(detected.notes),
@@ -209,7 +200,7 @@ def discover(workspace_root: str | Path,
         return False
 
     git_paths = [hit.path for hit in inv.repos]
-    raw_non_git, contained_non_git = _non_git_projects(
+    raw_non_git, contained_non_git, unrecognized_non_git = _non_git_projects(
         Path(inv.workspace_root), git_paths)
     non_git_paths: list[Path] = []
     for path in raw_non_git:
@@ -219,6 +210,18 @@ def discover(workspace_root: str | Path,
             disclosed.append(f"{path} (excluded by operator flag)")
             continue
         non_git_paths.append(path)
+
+    # 57B-112 §3: never targeted (extending targeting is out of scope here),
+    # but no longer silently invisible either — a factual not_targeted row
+    # replaces what used to be nothing but the generic workspace-container
+    # note (which never named the specific folder).
+    for path in unrecognized_non_git:
+        if self_excluded(path):
+            continue
+        if path.name in excluded:
+            disclosed.append(f"{path} (excluded by operator flag)")
+            continue
+        disclosed.append(f"{path} (source files present, no supported manifest)")
 
     for hit in inv.repos:
         if self_excluded(hit.path):

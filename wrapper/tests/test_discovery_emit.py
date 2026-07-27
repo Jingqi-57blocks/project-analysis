@@ -79,12 +79,12 @@ def test_discover_emits_valid_targetspec_with_candidates(tmp_path):
     assert audit["provenance"]["is_git"] is False
 
 
-def test_datastore_facet_is_additive_only_and_never_leaks_into_legacy_stacks_block(tmp_path):
-    """57B-80 PR1: technology_facets gains datastore.* facets additively;
-    the legacy stacks block (frozen to the pre-PR language/ecosystem/
-    framework/repository-trait facet kinds — see
-    ``discovery.stacks.STACK_REPORT_FACET_KINDS``) must never see them,
-    since deterministic parity compares that block byte-for-byte."""
+def test_datastore_facet_is_additive_and_legacy_stacks_block_is_retired(tmp_path):
+    """57B-80 PR1: technology_facets gains datastore.* facets additively.
+    57B-118 M4 retired the legacy frozen "stacks" display block entirely
+    (readers now derive display names from technology_facets directly via
+    ``profiles.bundled.technology_names``) — it must no longer appear on
+    the discovery report at all."""
     _write(tmp_path / "package.json", json.dumps({"dependencies": {"sequelize": "6"}}))
     _write(tmp_path / "index.js", "module.exports = 1;\n")
 
@@ -93,7 +93,7 @@ def test_datastore_facet_is_additive_only_and_never_leaks_into_legacy_stacks_blo
     repo_report = report["repos"][0]
     facet_ids = {facet["profile_id"] for facet in repo_report["technology_facets"]}
     assert "datastore.sequelize" in facet_ids
-    assert not any("datastore" in item for item in repo_report["stacks"]["evidence"])
+    assert "stacks" not in repo_report
 
 
 # test_scan_derived_signals_record_astgrep_version (57B-37) checked that
@@ -143,6 +143,35 @@ def test_non_git_workspace_container_targets_children_once(tmp_path):
     assert all(Path(repo.path).resolve() != ws.resolve() for repo in spec.repos)
     assert len(report["repos"]) == len(spec.repos) == 2
     assert any("workspace container" in line for line in report["not_targeted"])
+
+
+def test_non_git_container_discloses_unrecognized_source_folder(tmp_path):
+    """57B-112 §3: a non-git folder with source files but no recognized
+    manifest (e.g. only Package.swift — no bundled Swift profile) used to be
+    silently neither inventoried nor disclosed; the workspace-container note
+    was the only trace, and it never named the folder. It must now appear
+    in ``not_targeted`` with a factual reason, without becoming a target."""
+    ws = tmp_path / "container"
+    _write(ws / "web" / "package.json", "{}")
+    _write(ws / "web" / "index.js", "export const web = true\n")
+    _write(ws / "unsupported-lib" / "Package.swift",
+           "// swift-tools-version:5.9\n")
+    _write(ws / "unsupported-lib" / "Sources" / "Lib" / "Lib.swift",
+           "public struct Lib {}\n")
+    (ws / "empty-dir").mkdir(parents=True)  # truly empty: no content at all
+
+    spec, report = emit.discover(ws)
+
+    assert {Path(repo.path).name for repo in spec.repos} == {"web"}
+    assert any(
+        "unsupported-lib" in line and "no supported manifest" in line
+        for line in report["not_targeted"]
+    )
+    # A folder already targeted, or one with no discoverable content at all,
+    # is unaffected — no spurious extra row.
+    assert not any("web" in line and "no supported manifest" in line
+                   for line in report["not_targeted"])
+    assert not any("empty-dir" in line for line in report["not_targeted"])
 
 
 def test_direct_non_git_root_subsumes_child_projects(tmp_path):

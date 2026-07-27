@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = "2.0.0"
+from ..contract_version import CONTRACT_VERSION as SCHEMA_VERSION  # noqa: single shared contract version (57B-118, M4)
 
 # What a node can be. Only materialized where evidence exists (issue: "external
 # boundaries when evidence exists"); a kind with no evidence yields no nodes and

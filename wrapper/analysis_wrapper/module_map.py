@@ -20,8 +20,11 @@ from .system_model import ids
 from .system_model.builder import ModelBuilder
 from .targetspec import TargetSpec
 
-CANDIDATE_SCHEMA_VERSION = "2.0.0"
-MAP_SCHEMA_VERSION = "2.0.0"
+from .contract_version import CONTRACT_VERSION
+# Single shared contract version (57B-118, M4) -- both this module's
+# artifacts (module-candidates.json, module-map.json) carry it.
+CANDIDATE_SCHEMA_VERSION = CONTRACT_VERSION
+MAP_SCHEMA_VERSION = CONTRACT_VERSION
 DISPOSITIONS = (
     "standalone", "merged", "platform", "shared-infrastructure",
     "excluded", "unresolved",

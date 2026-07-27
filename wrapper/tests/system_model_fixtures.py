@@ -24,7 +24,7 @@ _PROJECT = stable_repo_id("/ws")
 
 def _targets() -> dict:
     return {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "repos": [
             {"repo_id": _API, "path": "/ws/api", "facets": [
                 {"profile_id": "ecosystem.go-module", "kind": "ecosystem",
@@ -231,7 +231,7 @@ def _write_callgraph(run: Path) -> None:
     coverage = {
         "scan_date": "2026-02-02",
         "determinism": "edges sorted; identical inputs yield identical bytes",
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "repos": [{"repository_ref": "api", "lang": "go", "status": "complete",
                    "tool": "callgraph", "tool_version": "v0.48.0",
                    "call_sites": {"resolved": 2, "ambiguous": 0, "external": 1,

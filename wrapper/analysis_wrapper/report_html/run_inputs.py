@@ -10,6 +10,8 @@ identity/derived fields are read, so no absolute machine path can reach the UI.
 from __future__ import annotations
 
 import json
+
+from ..contract_version import CONTRACT_VERSION
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -152,7 +154,7 @@ def _read_json(path: Path) -> dict | None:
 
 def _read_current_contract(path: Path) -> dict | None:
     data = _read_json(path)
-    if data is not None and data.get("schema_version") != "2.0.0":
+    if data is not None and data.get("schema_version") != CONTRACT_VERSION:
         raise ValueError(
             f"{path.name} uses an unsupported artifact contract; regenerate the run")
     return data

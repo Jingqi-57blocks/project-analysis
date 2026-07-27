@@ -18,7 +18,7 @@ from .profiles.selection import is_node_target
 from .sanitize import sanitize_text
 from .targetspec import TargetSpec
 
-SCHEMA_VERSION = "2.0.0"
+from .contract_version import CONTRACT_VERSION as SCHEMA_VERSION  # noqa: single shared contract version (57B-118, M4)
 STATES = ("complete", "partial", "unavailable", "not-applicable", "failed")
 _SEVERITY = {
     "complete": 0,

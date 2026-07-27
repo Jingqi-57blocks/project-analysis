@@ -10,6 +10,8 @@ sits alongside. The wrapper writes manifests; nothing in v1 validates them
 from __future__ import annotations
 
 import json
+
+from .contract_version import CONTRACT_VERSION
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -52,7 +54,7 @@ class Manifest:
     structured_metrics: dict = field(default_factory=dict)
 
     def to_json(self) -> str:
-        return json.dumps({"schema_version": "2.0.0", **asdict(self)},
+        return json.dumps({"schema_version": CONTRACT_VERSION, **asdict(self)},
                           indent=2, sort_keys=True) + "\n"
 
     def normalized_json(self) -> str:
@@ -63,7 +65,7 @@ class Manifest:
         compare byte-for-byte. The full manifest remains the provenance record.
         """
         data = asdict(self)
-        data["schema_version"] = "2.0.0"
+        data["schema_version"] = CONTRACT_VERSION
         data.pop("wall_time_s", None)
         data.pop("scan_date", None)
         cwd = Path(self.cwd).expanduser().resolve() if self.cwd else None

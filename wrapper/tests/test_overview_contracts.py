@@ -19,13 +19,13 @@ def _prepared(run):
     signals.mkdir()
     manifest_name = "structure-api.manifest.json"
     (signals / manifest_name).write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "tool": "structure", "status": "complete",
         "repos": [{"repository_ref": "api"}],
     }), "utf-8")
     (signals / "x.view.txt").write_text("items: 1\n", "utf-8")
     (signals / "run-summary.json").write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "aggregate_status": "complete",
         "signals": [{"tool": "structure", "repository_ref": "api",
                      "status": "complete", "reason": "", "view": "x.view.txt",
@@ -37,7 +37,7 @@ def _prepared(run):
     imports.mkdir(exist_ok=True)
     maps = sorted(imports.glob("*.json"))
     (imports / "depmap-coverage.json").write_text(json.dumps({
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "scan_date": "2026-02-02",
         "repos": [{"repository_ref": "web", "lane": "js",
                    "status": "complete", "map_file": maps[0].name, "units": 1}]
@@ -269,7 +269,7 @@ def test_workspace_metrics_are_scoped_deterministic_and_audited(tmp_path):
         name = f"scc-{repository.artifact_key}.manifest.json"
         code = 60 if index == 0 else 40
         (run / "signals" / name).write_text(json.dumps({
-            "schema_version": "2.0.0", "tool": "scc", "status": "complete",
+            "schema_version": "3.0.0", "tool": "scc", "status": "complete",
             "repos": [{"repository_ref": repository.reference}],
             "structured_metrics": {"kind": "scc", "totals": {
                 "files": 1, "lines": code, "code": code,
@@ -279,7 +279,7 @@ def test_workspace_metrics_are_scoped_deterministic_and_audited(tmp_path):
                         "status": "complete", "reason": "", "view": "x.view.txt",
                         "manifest": name})
     (run / "signals" / "run-summary.json").write_text(json.dumps({
-        "schema_version": "2.0.0", "aggregate_status": "complete",
+        "schema_version": "3.0.0", "aggregate_status": "complete",
         "signals": signals}), "utf-8")
 
     first = workspace_metrics.write(run).read_bytes()
@@ -547,6 +547,78 @@ def test_audit_rejects_old_contracts_and_internal_ids_in_readable_evidence(tmp_p
     result = overview_audit.audit(run)
     assert any(row["check"] == "external-identity-boundary"
                and row["status"] == "fail" for row in result["checks"])
+
+
+def test_audit_widened_walk_covers_capability_dirs_and_recurses_into_fragments(tmp_path):
+    """57B-112 §1: the external-identity-boundary walk used to be a hardcoded
+    pre-migration file/dir list — it never scanned datastore/, deploy/,
+    access/, integrations/, routes/ (capability-evidence homes added by later
+    migrations), and its signals/callgraph/imports walks were a bare
+    ``.iterdir()`` (never descending into a ``.fragments/`` subdirectory).
+    A clean run still passes; a leaked internal_id planted in any of the
+    newly-covered locations — including a nested fragment file — is now
+    caught; the private signals/raw/ containment zone stays out of scope."""
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    assert overview_audit.audit(run)["status"] == "passed"
+
+    repo = identity.load(run).repositories[0]
+    assert repo.internal_id != repo.artifact_key  # precondition for the filename check below
+
+    def boundary_row():
+        result = overview_audit.audit(run)
+        return next(row for row in result["checks"]
+                    if row["check"] == "external-identity-boundary")
+
+    # Content leak in each capability-evidence directory the walk previously
+    # never visited at all.
+    for directory in ("datastore", "deploy", "access", "integrations"):
+        path = run / directory / f"{repo.artifact_key}.json"
+        original = path.read_text("utf-8")
+        path.write_text(original.replace("{", f'{{"leak": "{repo.internal_id}",', 1), "utf-8")
+        row = boundary_row()
+        assert row["status"] == "fail"
+        assert f"{directory}/{repo.artifact_key}.json: content" in row["detail"]
+        path.write_text(original, "utf-8")
+
+    # routes/ — a fixed-name file (route-inventory.json), also previously
+    # unvisited.
+    path = run / "routes" / "route-inventory.json"
+    original = path.read_text("utf-8")
+    path.write_text(original.replace("{", f'{{"leak": "{repo.internal_id}",', 1), "utf-8")
+    row = boundary_row()
+    assert row["status"] == "fail"
+    assert "routes/route-inventory.json: content" in row["detail"]
+    path.write_text(original, "utf-8")
+
+    # Recursion: a nested .fragments/ file under callgraph/, imports/, and
+    # routes/ (the real provider stage's own fragment convention — see those
+    # packages' emit.py) — the old bare ``.iterdir()`` walk never descended
+    # into one.
+    for parent in ("callgraph", "imports", "routes"):
+        fragments_dir = run / parent / ".fragments"
+        fragments_dir.mkdir(exist_ok=True)
+        frag = fragments_dir / f"{repo.artifact_key}.fixture.json"
+        frag.write_text(json.dumps({"leak": repo.internal_id}), "utf-8")
+        row = boundary_row()
+        assert row["status"] == "fail"
+        assert f"{parent}/.fragments/{repo.artifact_key}.fixture.json: content" in row["detail"]
+        frag.unlink()
+        fragments_dir.rmdir()
+
+    # Filename leak generalizes to every covered directory too.
+    stray = run / "datastore" / f"{repo.internal_id}.json"
+    stray.write_text("{}", "utf-8")
+    row = boundary_row()
+    assert row["status"] == "fail"
+    assert f"datastore/{repo.internal_id}.json: filename" in row["detail"]
+    stray.unlink()
+
+    # signals/raw/ is a self-gitignored, owner-only containment zone that is
+    # never model-read or shipped — deliberately out of this check's scope.
+    raw_dir = run / "signals" / "raw"
+    raw_dir.mkdir(exist_ok=True)
+    (raw_dir / "leaked.out").write_text(repo.internal_id, "utf-8")
+    assert overview_audit.audit(run)["status"] == "passed"
 
 
 def test_synthesis_candidates_use_repository_references_not_internal_ids(tmp_path):

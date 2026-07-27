@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Callable
 
+from .contract_version import CONTRACT_VERSION
 from .executor import (SignalResult, WrapperSafetyError,
                        prepare_output_directory, run_tool,
                        use_existing_run_directory)
@@ -33,7 +37,7 @@ def _record_summary(out: Path, results: list[SignalResult]) -> None:
         except (OSError, ValueError, KeyError, IndexError):
             continue
     payload = {
-        "schema_version": "2.0.0",
+        "schema_version": CONTRACT_VERSION,
         "aggregate_status": aggregate([x.status for x in results]).value,
         "signals": [
             {"tool": x.tool, "repository_ref": x.repository_ref,
@@ -63,6 +67,46 @@ def _run_one(args: argparse.Namespace, spec: TargetSpec, out: Path,
     )]
 
 
+def _resolve_jobs(requested: int | None) -> int:
+    """Bounded worker count for the sweep's thread pool (57B-115).
+
+    ``None`` (flag omitted) means "pick the default": ``min(8, cpu_count)``.
+    An explicit value must be >= 1 — ``1`` is not a special "disable
+    threading" sentinel handled elsewhere, it simply makes the pool a no-op
+    (see ``_run_tasks``), which is exactly today's serial call path.
+    """
+    if requested is None:
+        return min(8, os.cpu_count() or 1)
+    if requested < 1:
+        raise ValueError(f"--jobs must be >= 1, got {requested}")
+    return requested
+
+
+def _run_tasks(tasks: list[Callable[[], SignalResult]], *,
+              jobs: int) -> list[SignalResult]:
+    """Execute independent signal-tool invocations, at most ``jobs`` at once.
+
+    Every task is a fully-bound ``run_tool`` call (its target/tool/output
+    already fixed): parallelism only changes WHEN a subprocess runs, never
+    what gets written, since each task writes its own uniquely-named
+    artifacts (``<tool>-<artifact-key>`` or a cross-repo ``signal_id``) —
+    concurrent tasks never share an output path. Results are always
+    returned in the SAME order the tasks were submitted (the same order the
+    old serial ``for`` loop would have produced), regardless of completion
+    order or thread count, so a caller that sorts/serializes afterward (as
+    ``_record_summary`` does) gets byte-identical output whether this ran
+    with ``jobs=1`` or ``jobs=8``.
+
+    ``jobs <= 1`` (or fewer than two tasks, where a pool buys nothing) never
+    constructs a ``ThreadPoolExecutor`` at all — it calls each task directly
+    in a plain loop, i.e. today's exact serial path, unchanged.
+    """
+    if jobs <= 1 or len(tasks) <= 1:
+        return [task() for task in tasks]
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        return list(pool.map(lambda task: task(), tasks))
+
+
 def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
            identities, *,
            exclude_tool_names: frozenset[str] = frozenset()) -> list[SignalResult]:
@@ -72,9 +116,21 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
     exactly once, through their own capability providers, instead of also
     running here. The standalone ``run``/``sweep`` CLI subcommands are
     user-facing debug paths and never pass this — they keep executing every
-    tool directly, unchanged."""
-    results: list[SignalResult] = []
+    tool directly, unchanged.
+
+    Every (repo, tool) invocation below — plus the cross-repo per-family
+    jscpd pass — is subprocess-bound and independent of every other one, so
+    they are collected into a flat, deterministically-ordered task list
+    (``functools.partial`` binds each task's arguments immediately, avoiding
+    the classic late-binding-closure bug of capturing a loop variable by
+    reference) and handed to ``_run_tasks`` (57B-115), which runs up to
+    ``--jobs`` of them concurrently. Collection order — and therefore
+    everything written from ``results`` afterward — is identical to the
+    pre-57B-115 serial loop regardless of how many workers ran it; see
+    ``_run_tasks``'s own docstring.
+    """
     repos = sorted(spec.repos, key=lambda r: r.repo_id)
+    tasks: list[Callable[[], SignalResult]] = []
     for target in repos:
         definitions = local_tools(target)
         # Respect the CLI's reproducible history window instead of the registry default.
@@ -86,10 +142,10 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
         definitions += network_tools(target)
         if exclude_tool_names:
             definitions = [d for d in definitions if d.name not in exclude_tool_names]
+        repo_identity = identities.repository(target.repo_id)
         for definition in definitions:
-            results.append(run_tool(
-                definition, target, out, args.scan_date,
-                identities.repository(target.repo_id),
+            tasks.append(functools.partial(
+                run_tool, definition, target, out, args.scan_date, repo_identity,
                 allow_network=args.include_network,
             ))
     # Cross-repo duplication runs per LANGUAGE FAMILY: Phase 0 proved jscpd is
@@ -99,15 +155,15 @@ def _sweep(args: argparse.Namespace, spec: TargetSpec, out: Path,
         if len(members) < 2:
             continue
         definition = jscpd_multi(members)
-        results.append(run_tool(
-            definition, members[0], out, args.scan_date,
+        tasks.append(functools.partial(
+            run_tool, definition, members[0], out, args.scan_date,
             identities.repository(members[0].repo_id),
             additional_targets=members[1:], signal_id=f"jscpd-cross-{family}",
             additional_repository_identities=[
                 identities.repository(item.repo_id) for item in members[1:]],
             allow_network=args.include_network,
         ))
-    return results
+    return _run_tasks(tasks, jobs=_resolve_jobs(getattr(args, "jobs", None)))
 
 
 def _family_groups(repos: list) -> dict[str, list]:
@@ -147,6 +203,13 @@ def parser() -> argparse.ArgumentParser:
         help="comma-separated extra network hosts approved for the package "
              "lane (e.g. private git hosts found in package.json); unapproved "
              "hosts make the signal SKIPPED, never silently contacted",
+    )
+    result.add_argument(
+        "--jobs", type=int, default=None,
+        help="max concurrent signal-tool invocations for prepare-overview/"
+             "sweep (subprocess-bound work only — every write still happens "
+             "in the same deterministic order --jobs 1 would produce); "
+             "default: min(8, cpu count); --jobs 1 = today's exact serial path",
     )
     sub = result.add_subparsers(dest="command", required=True)
     one = sub.add_parser("run", help="run one tool against one repo")
@@ -244,6 +307,24 @@ def parser() -> argparse.ArgumentParser:
         help="validate atomic findings against source/signal/metric refs and "
              "render the protected technical and PM findings blocks")
     finalize_findings.add_argument("--run", required=True, help="overview run directory")
+    finalize_findings.add_argument(
+        "--report-failures", default="", metavar="PATH",
+        help="(57B-116) write {finding_id: [failures]} JSON to PATH instead "
+             "of raising on the first invalid finding, and skip rendering "
+             "the protected findings blocks; omit for the original "
+             "all-or-nothing validate+render behavior, unchanged")
+    rekey_findings = sub.add_parser(
+        "rekey-findings",
+        help="(orchestrator, 57B-116) re-key a pre-finalization findings "
+             "document's affected_modules from candidate IDs to finalized "
+             "module IDs via module-map.json's expanded candidate_dispositions "
+             "(a pure lookup); findings landing only on excluded/unresolved "
+             "candidates are set aside in a 'tail' list instead of guessed")
+    rekey_findings.add_argument("--run", required=True, help="overview run directory")
+    rekey_findings.add_argument("--in", required=True, dest="findings_in",
+                                help="path to the findings JSON document to re-key")
+    rekey_findings.add_argument("--out", required=True,
+                                help="path to write the {rekeyed, tail} JSON result")
     audit_overview = sub.add_parser(
         "audit-overview",
         help="audit final structured artifacts and reports before marking the "
@@ -285,8 +366,258 @@ def parser() -> argparse.ArgumentParser:
     compare_runs.add_argument("candidate", help="candidate completed run directory")
     compare_runs.add_argument(
         "--report", default="",
-        help="optional path to write the full JSON parity report")
+        help="optional path to write the full JSON parity report "
+             "(with --semantic: overrides the default parity-semantic.json path)")
+    compare_runs.add_argument(
+        "--semantic", action="store_true",
+        help="(dev-only) semantic-equivalence mode: writes parity-semantic.json, "
+             "in the current directory by default (override with --report), "
+             "instead of the byte-level report -- tolerant of id/wording churn "
+             "a migration is expected to cause, flags substance drift only")
+    next_task = sub.add_parser(
+        "next-task",
+        help="(orchestrator, 57B-115) claim up to N ready orchestrator tasks; "
+             "prints the claimed {task, attempt} pairs as JSON")
+    next_task.add_argument("--run", required=True, help="run directory")
+    next_task.add_argument("--claim", type=int, default=1, help="max tasks to claim")
+    next_task.add_argument("--executor-kind", default="manual",
+                           help="recorded executor kind (e.g. 'anthropic', 'manual')")
+    next_task.add_argument("--model", default="unknown", help="recorded executor model")
+    submit_task = sub.add_parser(
+        "submit-task",
+        help="(orchestrator, 57B-115) submit + validate one orchestrator task result")
+    submit_task.add_argument("--run", required=True, help="run directory")
+    submit_task.add_argument("--task", required=True, help="task_id being submitted")
+    submit_task.add_argument("--result", required=True,
+                             help="path to a TaskResult JSON file, or - for stdin")
+    run_executor_cmd = sub.add_parser(
+        "run-executor",
+        help="(orchestrator, 57B-115) bundled headless executor loop -- performs "
+             "model-API network calls; invoked explicitly, with your own API key")
+    run_executor_cmd.add_argument("--run", required=True, help="run directory")
+    run_executor_cmd.add_argument("--adapter", required=True,
+                                  choices=["anthropic", "openai-compatible"])
+    run_executor_cmd.add_argument("--model", required=True, help="model id")
+    run_executor_cmd.add_argument("--concurrency", type=int, default=1)
+    run_executor_cmd.add_argument("--base-url", default="",
+                                  help="required for --adapter openai-compatible")
+    run_executor_cmd.add_argument(
+        "--api-key-env", default="",
+        help="env var holding the API key (default: ANTHROPIC_API_KEY / OPENAI_API_KEY)")
+    run_executor_cmd.add_argument("--temperature", type=float, default=0.0)
+    run_executor_cmd.add_argument("--max-attempts", type=int, default=3)
+    conformance = sub.add_parser(
+        "executor-conformance",
+        help="(orchestrator, 57B-115) validate the 8 fixture task types (golden "
+             "outputs by default, or a live --adapter/--model) against the "
+             "orchestrator schemas")
+    conformance.add_argument(
+        "--run", default="",
+        help="run dir to materialize the fixture DAG into (default: a fresh "
+             "temp dir, removed afterward)")
+    conformance.add_argument("--adapter", default="",
+                             choices=["", "anthropic", "openai-compatible"],
+                             help="omit to self-check the built-in golden outputs (no network)")
+    conformance.add_argument("--model", default="")
+    conformance.add_argument("--concurrency", type=int, default=1)
+    conformance.add_argument("--base-url", default="")
+    conformance.add_argument("--api-key-env", default="")
+    plan_judgment_cmd = sub.add_parser(
+        "plan-judgment",
+        help="(orchestrator, 57B-116) compose + register the judgment DAG for a "
+             "prepared run: one lens-findings task per repo-sharded lens x repo "
+             "(plus one per workspace-sharded lens), the independent "
+             "formation-proposal task, and -- for a source_reads lens -- its "
+             "paired selection-fetch task in place of the lens task directly "
+             "(fetch-selections + plan-lens-finalize compose the real one)")
+    plan_judgment_cmd.add_argument("--run", required=True, help="run directory")
+    plan_judgment_cmd.add_argument(
+        "--context-budget", type=int, default=96000, dest="context_budget",
+        help="per-packet context budget in estimated tokens (default: 96000)")
+    plan_dedup_cmd = sub.add_parser(
+        "plan-dedup",
+        help="(orchestrator, 57B-116) compose + register the single global "
+             "dedup-rank task from every VALIDATED lens-findings output already "
+             "in the run's ledger -- run this after plan-judgment's lens tasks "
+             "have validated")
+    plan_dedup_cmd.add_argument("--run", required=True, help="run directory")
+    plan_dedup_cmd.add_argument(
+        "--context-budget", type=int, default=96000, dest="context_budget",
+        help="per-packet context budget in estimated tokens (default: 96000)")
+    assemble_findings_cmd = sub.add_parser(
+        "assemble-findings",
+        help="(orchestrator, 57B-116) deterministically merge the run's "
+             "validated lens-findings pool via its validated dedup-rank "
+             "output's merge_map/rank into findings.json-shaped rows -- pure "
+             "mechanical application, no judgment; still candidate-keyed "
+             "(rekey-findings runs after this)")
+    assemble_findings_cmd.add_argument("--run", required=True, help="run directory")
+    assemble_findings_cmd.add_argument(
+        "--out", required=True, help="path to write the assembled findings JSON document")
+    write_module_map_cmd = sub.add_parser(
+        "write-module-map",
+        help="(orchestrator, 57B-116) materialize module-map.json from the "
+             "run's single validated formation-proposal task -- mechanical "
+             "only (the task already decided modules/dispositions/rules); "
+             "finalize-module-map (unchanged) validates/expands it afterward")
+    write_module_map_cmd.add_argument("--run", required=True, help="run directory")
+    write_module_map_cmd.add_argument(
+        "--out", default="",
+        help="override output path (default: <run>/module-map.json, the "
+             "canonical location finalize-module-map reads)")
+    fetch_selections_cmd = sub.add_parser(
+        "fetch-selections",
+        help="(orchestrator, 57B-116) fetch bounded, revision-checked, sanitized "
+             "+/-40-line source excerpts for a VALIDATED selection-fetch task's "
+             "requested locations -- writes fetched-evidence.json; run this "
+             "before plan-lens-finalize for the same lens")
+    fetch_selections_cmd.add_argument("--run", required=True, help="run directory")
+    fetch_selections_cmd.add_argument(
+        "--task", required=True, dest="task",
+        help="the validated selection-fetch task_id to fetch for (a "
+             "<lens-task-id>-select id)")
+    fetch_selections_cmd.add_argument(
+        "--out", default="",
+        help="override output path (default: <run>/tasks/<task>-fetched-"
+             "evidence.json, the canonical location plan-lens-finalize reads)")
+    plan_lens_finalize_cmd = sub.add_parser(
+        "plan-lens-finalize",
+        help="(orchestrator, 57B-116) phase 2 of a source_reads lens's select/"
+             "finalize pair: compose + register the REAL lens-findings task "
+             "from its original inputs plus fetch-selections's fetched-"
+             "evidence.json -- run this after fetch-selections for the same lens")
+    plan_lens_finalize_cmd.add_argument("--run", required=True, help="run directory")
+    plan_lens_finalize_cmd.add_argument(
+        "--lens", required=True, dest="lens",
+        help="the ORIGINAL lens task_id (not the -select id) plan-judgment "
+             "would have used directly for a non-source_reads lens")
+    plan_lens_finalize_cmd.add_argument(
+        "--context-budget", type=int, default=96000, dest="context_budget",
+        help="per-packet context budget in estimated tokens (default: 96000)")
+
+    plan_reports_cmd = sub.add_parser(
+        "plan-reports",
+        help="register the authored report sections that are ready to run "
+             "(rendered sections are produced at assembly time, not as tasks); "
+             "call once per wave -- a later wave's packets are composed from "
+             "the sections earlier waves already produced")
+    plan_reports_cmd.add_argument("--run", required=True, help="run directory")
+    plan_reports_cmd.add_argument(
+        "--document", default=None,
+        help="restrict to one document (default: all three)")
+    plan_reports_cmd.add_argument(
+        "--wave", type=int, default=None,
+        help="restrict to one wave (default: every section whose dependencies "
+             "are already satisfied)")
+    plan_reports_cmd.add_argument(
+        "--context-budget", type=int, default=96000, dest="context_budget",
+        help="per-packet context budget in estimated tokens (default: 96000)")
+
+    assemble_reports_cmd = sub.add_parser(
+        "assemble-reports",
+        help="write the report document(s) from rendered + validated authored "
+             "sections, in template order -- assembly is the ONLY writer, so "
+             "headings, ordering and protected blocks cannot drift")
+    assemble_reports_cmd.add_argument("--run", required=True, help="run directory")
+    assemble_reports_cmd.add_argument(
+        "--document", default=None, help="one document (default: all three)")
+
+    report_floors_cmd = sub.add_parser(
+        "report-floors",
+        help="report a document's completeness FLOORS together with its prose "
+             "ceiling -- never the ceiling alone, because overflow is fixed by "
+             "relocating content, never by dropping it")
+    report_floors_cmd.add_argument("--run", required=True, help="run directory")
+    report_floors_cmd.add_argument(
+        "--document", default=None, help="one document (default: all three)")
+    report_floors_cmd.add_argument(
+        "--out", default="", help="optional path to write the JSON report")
+
+    run_pipeline_cmd = sub.add_parser(
+        "run-pipeline",
+        help="drive the whole analysis end to end against an executor -- "
+             "prepare, plan, execute, fetch, finalize, assemble, audit -- with "
+             "no hand-driven orchestration")
+    run_pipeline_cmd.add_argument("--run", required=True, help="prepared run directory")
+    run_pipeline_cmd.add_argument(
+        "--executor", default="api", choices=("api", "external"),
+        help="'api' drives the bundled headless executor; 'external' stops at "
+             "each phase boundary so another harness can claim the tasks")
+    run_pipeline_cmd.add_argument("--adapter", default="anthropic",
+                                  choices=("anthropic", "openai-compatible"))
+    run_pipeline_cmd.add_argument("--model", default="", help="executor model id")
+    run_pipeline_cmd.add_argument("--base-url", default="", dest="base_url")
+    run_pipeline_cmd.add_argument("--api-key-env", default="", dest="api_key_env")
+    run_pipeline_cmd.add_argument("--concurrency", type=int, default=4)
+    run_pipeline_cmd.add_argument(
+        "--context-budget", type=int, default=180000, dest="context_budget",
+        help="per-packet context budget; must stay consistent across phases")
+    run_pipeline_cmd.add_argument(
+        "--stop-after", default="", help="stop after this phase (for staged runs)")
     return result
+
+
+def _plan_reports_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import reports
+    run = Path(args.run).expanduser().resolve()
+    planned = reports.plan_reports(
+        run, document=args.document, wave=args.wave,
+        context_budget_tokens=args.context_budget)
+    if not planned:
+        print("no report section is ready to plan "
+              "(every ready section is already registered, or an earlier wave "
+              "has not produced its dependencies yet)")
+        return 0
+    for row in planned:
+        state = "created" if row.created else "unchanged"
+        print(f"{row.section_id} -> {row.task_id} (wave {row.wave}, "
+              f"budget {row.budget_words}w, ~{row.estimated_tokens} tokens) [{state}]")
+    print(f"planned {len(planned)} section task(s)")
+    return 0
+
+
+def _assemble_reports_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import reports, sections as catalog
+    run = Path(args.run).expanduser().resolve()
+    documents = [args.document] if args.document else list(catalog.DOCUMENTS)
+    for document in documents:
+        path = reports.assemble_document(run, document)
+        print(f"wrote {path}")
+    return 0
+
+
+def _report_floors_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import reports, sections as catalog
+    run = Path(args.run).expanduser().resolve()
+    documents = [args.document] if args.document else list(catalog.DOCUMENTS)
+    payload, failed = {}, False
+    for document in documents:
+        report = reports.document_floors(run, document)
+        payload[document] = report
+        failed = failed or bool(report["failures"])
+        print(f"{document}: {report['sections_present']}/{report['sections_expected']} "
+              f"section(s) present, {report['prose_words']} prose words "
+              f"(ceiling {report['prose_ceiling']}), {len(report['failures'])} failure(s)")
+        for failure in report["failures"][:20]:
+            print(f"  {failure['check']} @ {failure['location']}: {failure['detail']}")
+    if args.out:
+        Path(args.out).expanduser().resolve().write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", "utf-8")
+        print(f"wrote {args.out}")
+    return 3 if failed else 0
+
+
+def _run_pipeline_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import driver
+    run = Path(args.run).expanduser().resolve()
+    outcome = driver.run_pipeline(
+        run,
+        executor=args.executor, adapter=args.adapter, model=args.model,
+        base_url=args.base_url, api_key_env=args.api_key_env,
+        concurrency=args.concurrency, context_budget_tokens=args.context_budget,
+        stop_after=args.stop_after or None, log=print)
+    print(json.dumps(outcome["summary"], indent=2, sort_keys=True))
+    return 0 if outcome["complete"] else 3
 
 
 def _discover(args: argparse.Namespace) -> int:
@@ -580,7 +911,7 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     Existing canonical stage outputs are validated and reused; missing stages
     run exactly once.  Producer paths never depend on model effort.
     """
-    from . import (capabilities, coverage_render, lifecycle, module_map,
+    from . import (capabilities, cohesion, coverage_render, lifecycle, module_map,
                    overview_audit, run_provenance, synthesis_input,
                    workspace_metrics)
     from .callgraph import emit as cg_emit
@@ -714,6 +1045,12 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     dump(model, run)
     model_doc = model.to_dict()
     module_map.write_candidates(run, model_doc)
+    # Cohesion measurements (57B-116, M2) read module-candidates.json (just
+    # written above) plus the model/signals already on disk by this point in
+    # the stage plan — every one of its inputs is already available here, and
+    # nothing later in this function depends on its output, so it slots in
+    # right after the candidate universe it measures over.
+    cohesion_path = cohesion.write(run, model_doc)
     capabilities_path = capabilities.write(run)
     coverage_path = coverage_render.write(run)
     metrics_path = workspace_metrics.write(run)
@@ -721,6 +1058,7 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     audit_path = overview_audit.write(run)
     audit = _load_object(audit_path)
     capability_doc = _load_object(capabilities_path)
+    print(f"wrote {cohesion_path}")
     print(f"wrote {capabilities_path}")
     print(f"wrote {coverage_path}")
     print(f"wrote {metrics_path}")
@@ -760,11 +1098,34 @@ def _finalize_findings(args: argparse.Namespace) -> int:
     run = Path(args.run).expanduser().resolve()
     if (run / "run-state.json").is_file():
         _assert_fresh_run(run)
+    if getattr(args, "report_failures", ""):
+        # Incremental failure-surface mode (57B-116): additive-only branch —
+        # the flag's absence falls straight through to the original
+        # validate+render path below, untouched.
+        failures = findings.validate_report_failures(run)
+        out_path = Path(args.report_failures).expanduser().resolve()
+        out_path.write_text(json.dumps(failures, indent=2, sort_keys=True) + "\n", "utf-8")
+        print(f"findings: {len(failures)} finding(s) with failures")
+        print(f"wrote {out_path}")
+        return 0 if not failures else 3
     technical, pm = findings.write(args.run)
     count = len(findings.validate(args.run).get("findings", []))
     print(f"findings: {count} validated atomic finding(s)")
     print(f"wrote {technical}")
     print(f"wrote {pm}")
+    return 0
+
+
+def _rekey_findings(args: argparse.Namespace) -> int:
+    from .orchestrator import rekey
+    run = Path(args.run).expanduser().resolve()
+    findings_path = Path(args.findings_in).expanduser().resolve()
+    findings_doc = json.loads(findings_path.read_text("utf-8"))
+    result = rekey.rekey(run, findings_doc)
+    out_path = Path(args.out).expanduser().resolve()
+    out_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", "utf-8")
+    print(f"rekeyed: {len(result['rekeyed'])}, tail: {len(result['tail'])}")
+    print(f"wrote {out_path}")
     return 0
 
 
@@ -869,8 +1230,65 @@ def _lifecycle_cmd(args: argparse.Namespace) -> int:
     raise AssertionError(args.command)
 
 
+def _print_semantic_summary(report: dict) -> None:
+    findings = report["findings"]
+    if findings == "not present in both runs":
+        print("findings: not present in both runs")
+    else:
+        with_deltas = sum(1 for pair in findings["matched"] if pair["deltas"])
+        print(f"findings: {len(findings['matched'])} matched "
+              f"({with_deltas} with substance deltas), "
+              f"{len(findings['unmatched_left'])} unmatched (base), "
+              f"{len(findings['unmatched_right'])} unmatched (candidate)")
+    module_map = report["module_map"]
+    if module_map == "not present in both runs":
+        print("module_map: not present in both runs")
+    else:
+        print(f"module_map: +{len(module_map['added'])} -{len(module_map['removed'])} "
+              f"~{len(module_map['changed'])}")
+    for name, doc in sorted(report["citations"].items()):
+        if doc == "not present in both runs":
+            print(f"citations/{name}: not present in both runs")
+        else:
+            print(f"citations/{name}: base_valid={doc['base_valid_count']} "
+                  f"candidate_valid={doc['candidate_valid_count']} "
+                  f"+{len(doc['added'])} -{len(doc['removed'])}")
+    disposition = report["disposition_totals"]
+    if disposition == "not present in both runs":
+        print("disposition_totals: not present in both runs")
+    else:
+        print(f"disposition_totals: equal={disposition['equal']} "
+              f"base={disposition['base']} candidate={disposition['candidate']}")
+    for name, row in sorted(report["coverage"].items()):
+        print(f"coverage/{name}: equal={row['equal']} differences={row['difference_count']}")
+    for name, doc in sorted(report["section_completeness"].items()):
+        if doc == "not present in both runs":
+            print(f"section_completeness/{name}: not present in both runs")
+            continue
+        regressions = sorted(section_name for section_name, section in doc["sections"].items()
+                             if not section["equal_or_greater"])
+        suffix = f" [{', '.join(regressions[:5])}]" if regressions else ""
+        print(f"section_completeness/{name}: {len(doc['sections'])} section(s), "
+              f"{len(regressions)} regression(s){suffix}")
+
+
+def _compare_runs_semantic(args: argparse.Namespace) -> int:
+    from . import parity
+    report = parity.compare_semantic(args.base, args.candidate)
+    report_path = (Path(args.report) if args.report
+                  else Path("parity-semantic.json")).expanduser().resolve()
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", "utf-8")
+    print(f"base:      {args.base}")
+    print(f"candidate: {args.candidate}")
+    print(f"semantic report: {report_path}")
+    _print_semantic_summary(report)
+    return 3 if parity.has_semantic_mode_differences(report) else 0
+
+
 def _compare_runs(args: argparse.Namespace) -> int:
     from . import parity
+    if args.semantic:
+        return _compare_runs_semantic(args)
     report = parity.compare(args.base, args.candidate)
     if args.report:
         Path(args.report).expanduser().resolve().write_text(
@@ -924,6 +1342,168 @@ def _compare_runs(args: argparse.Namespace) -> int:
     return 3 if parity.has_semantic_differences(report) else 0
 
 
+def _next_task(args: argparse.Namespace) -> int:
+    from .orchestrator.engine import Engine
+    run = Path(args.run).expanduser().resolve()
+    engine = Engine(run)
+    if not engine.ledger_exists():
+        print(f"wrapper input error: no orchestrator ledger at "
+              f"{run / 'tasks' / 'ledger.jsonl'} -- create tasks before claiming",
+              file=sys.stderr)
+        return 6
+    claimed = engine.claim(args.claim, executor_kind=args.executor_kind, model=args.model)
+    print(json.dumps([{"task": item.packet.to_dict(), "attempt": item.attempt}
+                      for item in claimed], indent=2, sort_keys=True))
+    return 0
+
+
+def _submit_task(args: argparse.Namespace) -> int:
+    from .orchestrator.engine import Engine, EngineError
+    run = Path(args.run).expanduser().resolve()
+    raw_text = sys.stdin.read() if args.result == "-" else \
+        Path(args.result).expanduser().resolve().read_text("utf-8")
+    try:
+        raw = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        print(f"wrapper input error: --result is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(raw, dict):
+        print("wrapper input error: --result must contain a JSON object", file=sys.stderr)
+        return 2
+    engine = Engine(run)
+    try:
+        outcome = engine.submit(args.task, raw)
+    except EngineError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(outcome, indent=2, sort_keys=True))
+    return 0 if outcome["status"] == "validated" else 3
+
+
+def _run_executor_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator.executor_api import AdapterConfig, ExecutorError, run_executor
+    run = Path(args.run).expanduser().resolve()
+    config = AdapterConfig(name=args.adapter, model=args.model, base_url=args.base_url,
+                           api_key_env=args.api_key_env, temperature=args.temperature)
+    try:
+        summary = run_executor(run, config, concurrency=args.concurrency,
+                               max_attempts=args.max_attempts)
+    except ExecutorError as exc:
+        print(f"wrapper executor error: {exc}", file=sys.stderr)
+        return 4
+    print(f"validated: {len(summary['validated'])}, failed: {len(summary['failed'])}")
+    for task_id in summary["failed"]:
+        print(f"  failed: {task_id}")
+    return 0 if not summary["failed"] else 3
+
+
+def _executor_conformance_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator.conformance import run_conformance
+    from .orchestrator.executor_api import AdapterConfig, ExecutorError
+    config = None
+    if args.adapter:
+        if not args.model:
+            print("wrapper input error: --model is required with --adapter", file=sys.stderr)
+            return 2
+        config = AdapterConfig(name=args.adapter, model=args.model, base_url=args.base_url,
+                               api_key_env=args.api_key_env)
+    try:
+        report = run_conformance(run_dir=args.run or None, config=config,
+                                 concurrency=args.concurrency)
+    except ExecutorError as exc:
+        print(f"wrapper executor error: {exc}", file=sys.stderr)
+        return 4
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["passed"] else 3
+
+
+def _plan_judgment_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import planner
+    run = Path(args.run).expanduser().resolve()
+    try:
+        planned = planner.plan_judgment(run, context_budget_tokens=args.context_budget)
+    except planner.PlannerError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    for task in planned:
+        detail = f", lens={task.lens_id}, shard={task.shard}" if task.lens_id else ""
+        shard_note = f", {len(task.packet_ids)} packet(s)" if len(task.packet_ids) > 1 else ""
+        status = "" if task.created else " (already planned, no-op)"
+        print(f"{task.task_id} ({task.task_type}{detail}): "
+              f"~{task.estimated_tokens} tokens{shard_note}{status}")
+    print(f"planned {len(planned)} task(s), "
+          f"{sum(1 for task in planned if task.created)} newly created")
+    return 0
+
+
+def _plan_dedup_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import planner
+    run = Path(args.run).expanduser().resolve()
+    try:
+        task = planner.plan_dedup(run, context_budget_tokens=args.context_budget)
+    except planner.PlannerError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    status = "" if task.created else " (already planned, no-op)"
+    print(f"{task.task_id}: ~{task.estimated_tokens} tokens, "
+          f"{len(task.packet_ids)} packet(s){status}")
+    return 0
+
+
+def _assemble_findings_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import assemble
+    run = Path(args.run).expanduser().resolve()
+    try:
+        result = assemble.assemble(run)
+    except assemble.AssembleError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    out_path = Path(args.out).expanduser().resolve()
+    out_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", "utf-8")
+    print(f"assembled {len(result['findings'])} finding(s)")
+    print(f"wrote {out_path}")
+    return 0
+
+
+def _write_module_map_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import formation
+    run = Path(args.run).expanduser().resolve()
+    try:
+        out_path = formation.write(run, out=args.out or None)
+    except formation.FormationWriterError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    print(f"wrote {out_path}")
+    return 0
+
+
+def _fetch_selections_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import selection
+    run = Path(args.run).expanduser().resolve()
+    try:
+        out_path = selection.fetch(run, args.task, out=args.out or None)
+    except selection.SelectionFetchError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    print(f"wrote {out_path}")
+    return 0
+
+
+def _plan_lens_finalize_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import planner
+    run = Path(args.run).expanduser().resolve()
+    try:
+        task = planner.plan_lens_finalize(
+            run, args.lens, context_budget_tokens=args.context_budget)
+    except planner.PlannerError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    status = "" if task.created else " (already planned, no-op)"
+    print(f"{task.task_id}: ~{task.estimated_tokens} tokens, "
+          f"{len(task.packet_ids)} packet(s){status}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -945,12 +1525,42 @@ def main(argv: list[str] | None = None) -> int:
             return _finalize_module_map(args)
         if args.command == "finalize-findings":
             return _finalize_findings(args)
+        if args.command == "rekey-findings":
+            return _rekey_findings(args)
         if args.command == "audit-overview":
             return _audit_overview(args)
         if args.command == "export":
             return _export(args)
         if args.command == "compare-runs":
             return _compare_runs(args)
+        if args.command == "next-task":
+            return _next_task(args)
+        if args.command == "submit-task":
+            return _submit_task(args)
+        if args.command == "run-executor":
+            return _run_executor_cmd(args)
+        if args.command == "executor-conformance":
+            return _executor_conformance_cmd(args)
+        if args.command == "plan-judgment":
+            return _plan_judgment_cmd(args)
+        if args.command == "plan-dedup":
+            return _plan_dedup_cmd(args)
+        if args.command == "assemble-findings":
+            return _assemble_findings_cmd(args)
+        if args.command == "write-module-map":
+            return _write_module_map_cmd(args)
+        if args.command == "fetch-selections":
+            return _fetch_selections_cmd(args)
+        if args.command == "plan-lens-finalize":
+            return _plan_lens_finalize_cmd(args)
+        if args.command == "plan-reports":
+            return _plan_reports_cmd(args)
+        if args.command == "assemble-reports":
+            return _assemble_reports_cmd(args)
+        if args.command == "report-floors":
+            return _report_floors_cmd(args)
+        if args.command == "run-pipeline":
+            return _run_pipeline_cmd(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)

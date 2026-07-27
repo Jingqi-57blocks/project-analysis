@@ -1,3 +1,23 @@
+---
+shard: workspace
+# shard: this is the network lane, authorized or skipped for the WHOLE run
+#   at once (never per repo). When unauthorized -- which README calls
+#   "often skipped" -- every repo's shard would independently produce the
+#   identical trivial "coverage: skipped" output, multiplying LLM calls for
+#   zero additional information; one workspace task states the same skip
+#   once. When authorized, the composer's own deterministic sharding
+#   (composer.py) already splits an oversized workspace packet by its
+#   largest input if needed, so per-repo semantic sharding would only buy
+#   parallelism at the cost of duplicated skip-state calls on the common
+#   path -- a bad trade for this lane. Kept as one workspace task.
+signals: [dependency-cruiser, go-list, osv-scanner, outdated]
+# signals: lenses/coverage-map.json requires {osv-scanner, outdated}; this
+#   file's own "Signals:" line additionally names dependency-cruiser
+#   ("external import partitions (prod vs dev vs unclassified)") and
+#   go-list ("external imports") as corroborating signals its own Rules
+#   section requires ("production-exposure claims add the cruiser
+#   partition citation"), so both are added.
+---
 # Lens: dependency-risk (group C)
 
 **Question:** which third-party dependencies expose this project to known

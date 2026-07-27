@@ -16,6 +16,8 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from ..contract_version import CONTRACT_VERSION
+
 # Resolution certainty: an edge the analysis proved (static dispatch, a concrete
 # TypeScript declaration) is ``observed``; a dispatch candidate the analysis
 # inferred (Go dynamic/interface dispatch via VTA) is ``inferred`` — never
@@ -206,7 +208,7 @@ class CoverageReport:
     def to_dict(self) -> dict:
         ordered = sorted(self.repos, key=lambda c: (c.repository_ref, c.lang))
         return {
-            "schema_version": "2.0.0",
+            "schema_version": CONTRACT_VERSION,
             "scan_date": self.scan_date,
             "determinism": self.determinism,
             "repos": [c.to_dict() for c in ordered],

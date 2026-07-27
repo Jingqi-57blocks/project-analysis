@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from ..contract_version import CONTRACT_VERSION
+
 # Per-repo/lane verdict — same vocabulary as the call-graph lane.
 COVERAGE_STATES = ("complete", "partial", "failed", "unavailable")
 # Lanes this stage drives.
@@ -65,7 +67,7 @@ class DepMapReport:
     def to_dict(self) -> dict:
         ordered = sorted(self.repos, key=lambda c: (c.repository_ref, c.lane))
         return {
-            "schema_version": "2.0.0",
+            "schema_version": CONTRACT_VERSION,
             "scan_date": self.scan_date,
             "determinism": self.determinism,
             "repos": [c.to_dict() for c in ordered],

@@ -436,7 +436,7 @@ class DatastoreEvidenceProvider:
         facts = tuple(
             self._table_fact(
                 name, buckets, store_metadata.get(name, {}),
-                capability_id=self.capability_id, repo_id=target.repo_id,
+                capability_id=self.capability_id,
                 repository_ref=repository_ref, revision=revision,
             )
             for name, buckets in sorted(payload.get("tables", {}).items())
@@ -450,7 +450,7 @@ class DatastoreEvidenceProvider:
 
     @staticmethod
     def _table_fact(name: str, buckets: dict, metadata: dict, *, capability_id: str,
-                    repo_id: str, repository_ref: str, revision: str) -> Fact:
+                    repository_ref: str, revision: str) -> Fact:
         # The SAME evidence site legitimately appears under two different
         # access buckets for one table (e.g. a Sequelize createTable call is
         # both a "declaration" and a "schema_write" at the identical site) —
@@ -472,7 +472,7 @@ class DatastoreEvidenceProvider:
             "logical_names": list(metadata.get("logical_names", [])),
             "access": {access: list(sites) for access, sites in sorted(buckets.items())},
         }
-        fact_id = make_fact_id(capability_id, repo_id, "data-store", (name,))
+        fact_id = make_fact_id(capability_id, repository_ref, "data-store", (name,))
         return Fact(fact_id=fact_id, kind="data-store", data=data, source_refs=source_refs)
 
 
