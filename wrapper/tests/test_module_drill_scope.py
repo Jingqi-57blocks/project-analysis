@@ -18,6 +18,7 @@ from analysis_wrapper.module_drill import (
     ModuleCoverage,
     build_module_evidence,
     write_module_evidence,
+    write_module_prd,
     ModuleIdentity,
     ModuleRunLayout,
     ModuleScope,
@@ -237,6 +238,22 @@ def test_module_evidence_keeps_overview_hints_out_of_facts_and_discloses_missing
     assert evidence.source_reads[0].status == "missing"
     assert evidence.coverage["module_evidence"]["status"] == "partial"
     assert evidence.unknowns
+
+
+def test_module_prd_is_evidence_only_and_keeps_verbatim_boundary_identifiers(tmp_path):
+    root = tmp_path / "api"
+    (root / "internal" / "billing").mkdir(parents=True)
+    (root / "internal" / "billing" / "service.go").write_text("package billing\n", "utf-8")
+    scope = _scope()
+    evidence_path = write_module_evidence(
+        tmp_path / "module-evidence.json", build_module_evidence(scope, {"api": root}))
+    scope_path = write_scope(tmp_path / "module-scope.json", scope)
+    prd = write_module_prd(scope_path, evidence_path, tmp_path / "prd.md", language="zh-CN")
+    text = prd.read_text("utf-8")
+    assert "模块现状 PRD" in text
+    assert "payments" in text  # source identifier remains verbatim in zh-CN
+    assert "生产环境中已激活" in text
+    assert "PTO" not in text and "approval" not in text
 
 
 def _overview_run(tmp_path, monkeypatch):

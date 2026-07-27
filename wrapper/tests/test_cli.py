@@ -66,7 +66,8 @@ def test_module_command_creates_immutable_standalone_evidence_run(tmp_path):
     assert len(evidence) == 1
     state = json.loads(evidence[0].with_name("run-state.json").read_text("utf-8"))
     assert state["stages"]["scope"] == "done" and state["stages"]["evidence"] == "done"
-    assert state["stages"]["prd"] == "pending"
+    assert state["stages"]["prd"] == "done"
+    assert evidence[0].with_name("prd.md").is_file()
     assert main(argv) == 0
     evidence = list((skill / "output").glob("*/modules/orders/*/module-evidence.json"))
     assert len(evidence) == 2
