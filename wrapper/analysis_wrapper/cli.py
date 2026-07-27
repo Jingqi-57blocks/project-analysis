@@ -493,7 +493,130 @@ def parser() -> argparse.ArgumentParser:
     plan_lens_finalize_cmd.add_argument(
         "--context-budget", type=int, default=96000, dest="context_budget",
         help="per-packet context budget in estimated tokens (default: 96000)")
+
+    plan_reports_cmd = sub.add_parser(
+        "plan-reports",
+        help="register the authored report sections that are ready to run "
+             "(rendered sections are produced at assembly time, not as tasks); "
+             "call once per wave -- a later wave's packets are composed from "
+             "the sections earlier waves already produced")
+    plan_reports_cmd.add_argument("--run", required=True, help="run directory")
+    plan_reports_cmd.add_argument(
+        "--document", default=None,
+        help="restrict to one document (default: all three)")
+    plan_reports_cmd.add_argument(
+        "--wave", type=int, default=None,
+        help="restrict to one wave (default: every section whose dependencies "
+             "are already satisfied)")
+    plan_reports_cmd.add_argument(
+        "--context-budget", type=int, default=96000, dest="context_budget",
+        help="per-packet context budget in estimated tokens (default: 96000)")
+
+    assemble_reports_cmd = sub.add_parser(
+        "assemble-reports",
+        help="write the report document(s) from rendered + validated authored "
+             "sections, in template order -- assembly is the ONLY writer, so "
+             "headings, ordering and protected blocks cannot drift")
+    assemble_reports_cmd.add_argument("--run", required=True, help="run directory")
+    assemble_reports_cmd.add_argument(
+        "--document", default=None, help="one document (default: all three)")
+
+    report_floors_cmd = sub.add_parser(
+        "report-floors",
+        help="report a document's completeness FLOORS together with its prose "
+             "ceiling -- never the ceiling alone, because overflow is fixed by "
+             "relocating content, never by dropping it")
+    report_floors_cmd.add_argument("--run", required=True, help="run directory")
+    report_floors_cmd.add_argument(
+        "--document", default=None, help="one document (default: all three)")
+    report_floors_cmd.add_argument(
+        "--out", default="", help="optional path to write the JSON report")
+
+    run_pipeline_cmd = sub.add_parser(
+        "run-pipeline",
+        help="drive the whole analysis end to end against an executor -- "
+             "prepare, plan, execute, fetch, finalize, assemble, audit -- with "
+             "no hand-driven orchestration")
+    run_pipeline_cmd.add_argument("--run", required=True, help="prepared run directory")
+    run_pipeline_cmd.add_argument(
+        "--executor", default="api", choices=("api", "external"),
+        help="'api' drives the bundled headless executor; 'external' stops at "
+             "each phase boundary so another harness can claim the tasks")
+    run_pipeline_cmd.add_argument("--adapter", default="anthropic",
+                                  choices=("anthropic", "openai-compatible"))
+    run_pipeline_cmd.add_argument("--model", default="", help="executor model id")
+    run_pipeline_cmd.add_argument("--base-url", default="", dest="base_url")
+    run_pipeline_cmd.add_argument("--api-key-env", default="", dest="api_key_env")
+    run_pipeline_cmd.add_argument("--concurrency", type=int, default=4)
+    run_pipeline_cmd.add_argument(
+        "--context-budget", type=int, default=180000, dest="context_budget",
+        help="per-packet context budget; must stay consistent across phases")
+    run_pipeline_cmd.add_argument(
+        "--stop-after", default="", help="stop after this phase (for staged runs)")
     return result
+
+
+def _plan_reports_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import reports
+    run = Path(args.run).expanduser().resolve()
+    planned = reports.plan_reports(
+        run, document=args.document, wave=args.wave,
+        context_budget_tokens=args.context_budget)
+    if not planned:
+        print("no report section is ready to plan "
+              "(every ready section is already registered, or an earlier wave "
+              "has not produced its dependencies yet)")
+        return 0
+    for row in planned:
+        state = "created" if row.created else "unchanged"
+        print(f"{row.section_id} -> {row.task_id} (wave {row.wave}, "
+              f"budget {row.budget_words}w, ~{row.estimated_tokens} tokens) [{state}]")
+    print(f"planned {len(planned)} section task(s)")
+    return 0
+
+
+def _assemble_reports_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import reports, sections as catalog
+    run = Path(args.run).expanduser().resolve()
+    documents = [args.document] if args.document else list(catalog.DOCUMENTS)
+    for document in documents:
+        path = reports.assemble_document(run, document)
+        print(f"wrote {path}")
+    return 0
+
+
+def _report_floors_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import reports, sections as catalog
+    run = Path(args.run).expanduser().resolve()
+    documents = [args.document] if args.document else list(catalog.DOCUMENTS)
+    payload, failed = {}, False
+    for document in documents:
+        report = reports.document_floors(run, document)
+        payload[document] = report
+        failed = failed or bool(report["failures"])
+        print(f"{document}: {report['sections_present']}/{report['sections_expected']} "
+              f"section(s) present, {report['prose_words']} prose words "
+              f"(ceiling {report['prose_ceiling']}), {len(report['failures'])} failure(s)")
+        for failure in report["failures"][:20]:
+            print(f"  {failure['check']} @ {failure['location']}: {failure['detail']}")
+    if args.out:
+        Path(args.out).expanduser().resolve().write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", "utf-8")
+        print(f"wrote {args.out}")
+    return 3 if failed else 0
+
+
+def _run_pipeline_cmd(args: argparse.Namespace) -> int:
+    from .orchestrator import driver
+    run = Path(args.run).expanduser().resolve()
+    outcome = driver.run_pipeline(
+        run,
+        executor=args.executor, adapter=args.adapter, model=args.model,
+        base_url=args.base_url, api_key_env=args.api_key_env,
+        concurrency=args.concurrency, context_budget_tokens=args.context_budget,
+        stop_after=args.stop_after or None, log=print)
+    print(json.dumps(outcome["summary"], indent=2, sort_keys=True))
+    return 0 if outcome["complete"] else 3
 
 
 def _discover(args: argparse.Namespace) -> int:
@@ -1429,6 +1552,14 @@ def main(argv: list[str] | None = None) -> int:
             return _fetch_selections_cmd(args)
         if args.command == "plan-lens-finalize":
             return _plan_lens_finalize_cmd(args)
+        if args.command == "plan-reports":
+            return _plan_reports_cmd(args)
+        if args.command == "assemble-reports":
+            return _assemble_reports_cmd(args)
+        if args.command == "report-floors":
+            return _report_floors_cmd(args)
+        if args.command == "run-pipeline":
+            return _run_pipeline_cmd(args)
         if not args.out:
             print("wrapper input error: --out is required for this command",
                   file=sys.stderr)
