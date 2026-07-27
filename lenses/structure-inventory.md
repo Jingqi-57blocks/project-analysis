@@ -13,6 +13,13 @@ signals: [scc, dependency-cruiser, go-list]
 #   because coverage-map.json requires it even though the prose line omits
 #   it -- it backs the "layout vs claimed structure" bullet's module-graph
 #   check.
+source_reads: true
+# source_reads: "Layout vs claimed structure -- ... business logic in a
+#   folder named like infrastructure" cannot be argued from an scc/cruiser
+#   count alone -- it requires reading what is actually IN the mismatched
+#   folder. The same is true for judging whether a language-sprawl or
+#   generated-code-inflating-scc claim is real (vs. a trivial/vendored
+#   handful of files) rather than a raw line-count artifact.
 ---
 # Lens: structure-inventory (group A)
 

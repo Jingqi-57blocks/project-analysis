@@ -351,3 +351,18 @@ def test_selection_fetch_accepts_valid_selections_and_rejects_bad_ref():
     assert schemas.validate_output("selection-fetch", doc) == []
     doc["selections"][0]["ref"] = "not-a-citation"
     assert "selection-ref" in _checks(schemas.validate_output("selection-fetch", doc))
+
+
+def test_selection_fetch_accepts_both_quoted_text_states():
+    """57B-116: quoted_text carries two valid states -- "" (a REQUEST, not
+    yet fetched) and non-empty (FETCHED). Only a non-string is rejected."""
+    def _doc(quoted_text):
+        return {"selections": [{
+            "selection_id": "journey-entry-1", "purpose": "user-journey UI label",
+            "ref": "web@" + "b" * 40 + ":src/pages/Login.tsx:10",
+            "quoted_text": quoted_text,
+        }]}
+    assert schemas.validate_output("selection-fetch", _doc("")) == []  # request state
+    assert schemas.validate_output("selection-fetch", _doc("Sign in")) == []  # fetched state
+    failures = schemas.validate_output("selection-fetch", _doc(None))
+    assert "selection-quoted-text" in _checks(failures)

@@ -13,6 +13,12 @@ signals: [git-history, scc]
 # signals: lenses/coverage-map.json requires only {scc}; this file's own
 #   "Signals:" line additionally names git-history ("do tests change
 #   alongside the code they cover?"), so it is added.
+source_reads: true
+# source_reads: this lens's own body requires reading actual file content no
+#   signal view carries -- "Assertion quality sampling -- read a SAMPLE of
+#   tests in the hottest modules... cite the specific test files sampled"
+#   and "Type/migration nets... (read tsconfig/migration files as data)"
+#   both name a real file read, not a tool-summarized count.
 ---
 # Lens: safety-net (group B)
 
