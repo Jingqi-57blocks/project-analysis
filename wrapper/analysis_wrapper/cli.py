@@ -275,6 +275,19 @@ def parser() -> argparse.ArgumentParser:
     compare_runs.add_argument(
         "--report", default="",
         help="optional path to write the full JSON parity report")
+    module = sub.add_parser("module", help="create one immutable Module Drill evidence run")
+    module.add_argument("selector", help="exact module name, alias, path, package, symbol, route, or API")
+    module.add_argument("workspace", nargs="?", default=".",
+                        help="workspace root (default: current directory)")
+    module.add_argument("--from-run", default="", metavar="RUN_ID",
+                        help="explicit completed overview run ID (or its run directory)")
+    module.add_argument("--standalone", action="store_true",
+                        help="resolve directly from workspace instead of using an overview")
+    module.add_argument("--language", choices=["en", "zh-CN"], default="zh-CN")
+    module.add_argument("--run-id", default="", metavar="LABEL")
+    module.add_argument("--skill-root", required=True,
+                        help="skill root which owns output/ and exported/")
+    module.add_argument("--analyzer-root", default="")
     return result
 
 
@@ -298,6 +311,74 @@ def _state_dir_for(run_dir: Path) -> Path:
     """Map a readable project output key to its matching state directory."""
     project_dir = run_dir.parent.parent
     return project_dir.parent.parent / "state" / project_dir.name
+
+
+def _module_provider(args):
+    """Choose an explicit overview, one compatible current overview, or direct scope."""
+    from .module_drill import OverviewScopeProvider, StandaloneScopeProvider
+    standalone = StandaloneScopeProvider(args.workspace, analyzer_root=args.analyzer_root or None)
+    spec, identities, snapshot = standalone.source_inputs()
+    root = Path(args.skill_root).expanduser().resolve()
+    if args.from_run and args.standalone:
+        raise ValueError("--from-run and --standalone cannot be used together")
+    if args.from_run:
+        supplied = Path(args.from_run).expanduser()
+        if supplied.is_dir():
+            provider = OverviewScopeProvider(supplied)
+        else:
+            matches = list((root / "output").glob(f"*/overview/{args.from_run}"))
+            if len(matches) != 1:
+                raise ValueError("--from-run must identify exactly one overview run")
+            provider = OverviewScopeProvider(matches[0])
+        overview_spec, overview_identities, overview_snapshot = provider.source_inputs()
+        if overview_snapshot != snapshot:
+            raise ValueError("explicit overview does not match the current workspace snapshot")
+        return provider, overview_spec, overview_identities, snapshot, provider.run_dir.parents[1].name
+    if not args.standalone:
+        compatible = []
+        for pointers in (root / "state").glob("*/pointers.json"):
+            key = pointers.parent.name
+            try:
+                provider = OverviewScopeProvider.from_current(root, key)
+                overview_spec, overview_identities, overview_snapshot = provider.source_inputs()
+            except ValueError:
+                continue
+            if overview_snapshot == snapshot:
+                compatible.append((provider, overview_spec, overview_identities, key))
+        if len(compatible) == 1:
+            provider, overview_spec, overview_identities, key = compatible[0]
+            return provider, overview_spec, overview_identities, snapshot, key
+    return standalone, spec, identities, snapshot, identities.project.artifact_key
+
+
+def _module(args) -> int:
+    from .module_drill import (ModuleRunLayout, ModuleScopeRequest, Selector,
+                               build_module_evidence, create_module_run,
+                               mint_module_run_id, resolve_scope, write_module_evidence)
+    provider, spec, identities, snapshot, project_key = _module_provider(args)
+    selector_kinds = ("name", "alias", "path", "package", "symbol", "route", "api")
+    kind = next((item for item in selector_kinds
+                 if args.selector.startswith(item + ":")), "name")
+    value = args.selector.split(":", 1)[1] if args.selector.startswith(kind + ":") else args.selector
+    request = ModuleScopeRequest(provider.source_mode, snapshot, Selector(value, kind))
+    scope = resolve_scope(provider, request)
+    run_id = mint_module_run_id(args.skill_root, project_key, scope.module.module_id,
+                                snapshot, language=args.language, label=args.run_id)
+    layout = ModuleRunLayout(args.skill_root, project_key, scope.module.module_id, run_id)
+    create_module_run(layout, spec, scope, language=args.language)
+    repository_paths = {identities.reference_for(target.repo_id): target.path for target in spec.repos}
+    evidence = build_module_evidence(scope, repository_paths)
+    write_module_evidence(layout.evidence_path, evidence)
+    state = json.loads(layout.run_state_path.read_text("utf-8"))
+    state["stages"]["evidence"] = "done"
+    layout.run_state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", "utf-8")
+    print(f"source_mode: {scope.source_mode}")
+    print(f"snapshot: {scope.snapshot_id} · inspection_only: {scope.project.inspection_only}")
+    print(f"module: {scope.module.module_id} ({scope.module.name})")
+    print(f"run: {layout.run_dir}")
+    print(f"coverage: {evidence.coverage['module_evidence']['status']}")
+    print("next: generate prd.md and health.md from module-evidence.json")
+    return 0
 
 
 def _new_run(args: argparse.Namespace) -> int:
@@ -827,6 +908,8 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["PROJECT_ANALYSIS_ALLOW_HOSTS"] = args.allow_hosts
         if args.command == "new-run":
             return _new_run(args)
+        if args.command == "module":
+            return _module(args)
         if args.command in ("mark-stage", "rollback", "status", "accept"):
             return _lifecycle_cmd(args)
         if args.command == "system-model":

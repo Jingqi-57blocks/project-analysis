@@ -78,6 +78,9 @@ class StandaloneScopeProvider:
     def project_snapshot(self) -> ProjectSnapshot:
         return self._prepare()[2]
 
+    def source_inputs(self) -> tuple[TargetSpec, identity.IdentityMap, ProjectSnapshot]:
+        return self._prepare()
+
     @staticmethod
     def _citation(target: RepoTarget, repository_ref: str, relative: str, line: int) -> str:
         revision = (target.git.head if target.git.is_git and target.git.dirty_detail == "no"
@@ -256,7 +259,7 @@ class StandaloneScopeProvider:
         reference = identities.reference_for(candidate.target.repo_id)
         anchor_path, anchor_line = candidate.anchor.rsplit(":", 1)
         anchor = self._citation(candidate.target, reference, anchor_path, int(anchor_line))
-        module_id = _slug(candidate.root if candidate.root != "." else candidate.name)
+        module_id = _slug(candidate.name)
         candidate_id = "standalone." + hashlib.sha256(
             f"{reference}\0{candidate.root}".encode()).hexdigest()[:16]
         limitations = ["Standalone scope uses bounded direct source evidence; overview-wide findings are unavailable."]

@@ -52,6 +52,26 @@ def test_cli_does_not_advertise_the_retired_drilldown_stub():
     assert "new-drilldown" not in parser().format_help()
 
 
+def test_module_command_creates_immutable_standalone_evidence_run(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "src" / "orders").mkdir(parents=True)
+    (workspace / "package.json").write_text('{"name":"example"}\n', "utf-8")
+    (workspace / "src" / "orders" / "orders.ts").write_text(
+        "export function createOrder() {}\n", "utf-8")
+    skill = tmp_path / "skill"
+    argv = ["module", "path:src/orders", str(workspace), "--standalone",
+            "--skill-root", str(skill), "--language", "en", "--run-id", "first"]
+    assert main(argv) == 0
+    evidence = list((skill / "output").glob("*/modules/orders/first-*/module-evidence.json"))
+    assert len(evidence) == 1
+    state = json.loads(evidence[0].with_name("run-state.json").read_text("utf-8"))
+    assert state["stages"]["scope"] == "done" and state["stages"]["evidence"] == "done"
+    assert state["stages"]["prd"] == "pending"
+    assert main(argv) == 0
+    evidence = list((skill / "output").glob("*/modules/orders/*/module-evidence.json"))
+    assert len(evidence) == 2
+
+
 def test_cli_runs_one_tool_one_repo(monkeypatch, tmp_path, target):
     fake = _fake_scc(tmp_path, "echo '[{\"Name\":\"JavaScript\",\"Code\":1}]'")
     monkeypatch.setenv("PATH", str(fake.parent) + os.pathsep + os.environ["PATH"])
