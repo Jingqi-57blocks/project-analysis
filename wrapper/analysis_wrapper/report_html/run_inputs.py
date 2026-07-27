@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import identity
@@ -48,15 +48,6 @@ class RepoProvenance:
     dirty: str       # "no" / "yes" / verbatim dirty_detail; never a path
 
 
-@dataclass(frozen=True)
-class DrilldownModule:
-    module_id: str
-    has_prd: bool
-    has_health: bool
-    prd_relpath: str | None      # relative to the run dir; never absolute
-    health_relpath: str | None
-
-
 @dataclass
 class RunInputs:
     run_dir: Path
@@ -67,7 +58,6 @@ class RunInputs:
     depmap_coverage: dict | None
     discovery: dict | None
     identity_map: identity.IdentityMap | None = None
-    drilldown_modules: list[DrilldownModule] = field(default_factory=list)
 
     # ---- convenience accessors (all honest about missing data) ----
 
@@ -135,11 +125,6 @@ class RunInputs:
                 missing.append(filename)
         return missing
 
-    @property
-    def drilldown_available(self) -> bool:
-        return any(m.has_prd or m.has_health for m in self.drilldown_modules)
-
-
 def _read_json(path: Path) -> dict | None:
     if not path.is_file():
         return None
@@ -171,39 +156,6 @@ def _read_legacy_tolerant_contract(path: Path) -> dict | None:
         return _read_current_contract(path)
     except ValueError:
         return None
-
-
-def _detect_drilldown(run_dir: Path) -> list[DrilldownModule]:
-    """Detect per-module drill-down artifacts under ``<run>/drilldown/``.
-
-    Absent today (Phase 2 work) → empty list → the Modules entrance renders its
-    honest stub state. When a module directory holding ``prd.md`` / ``health.md``
-    appears, that module lights up automatically. Nothing is fabricated: presence
-    is detected, never assumed.
-    """
-    root = run_dir / "drilldown"
-    if not root.is_dir():
-        return []
-    modules: list[DrilldownModule] = []
-    for sub in sorted(root.iterdir(), key=lambda p: p.name):
-        if not sub.is_dir():
-            continue
-        prd = sub / "prd.md"
-        health = sub / "health.md"
-        if not prd.is_file() and not health.is_file():
-            continue
-        modules.append(
-            DrilldownModule(
-                module_id=sub.name,
-                has_prd=prd.is_file(),
-                has_health=health.is_file(),
-                prd_relpath=f"drilldown/{sub.name}/prd.md" if prd.is_file() else None,
-                health_relpath=(
-                    f"drilldown/{sub.name}/health.md" if health.is_file() else None
-                ),
-            )
-        )
-    return modules
 
 
 def load(run_dir: str | Path) -> RunInputs:
@@ -273,5 +225,4 @@ def load(run_dir: str | Path) -> RunInputs:
         depmap_coverage=contract_reader(run_dir / "imports" / "depmap-coverage.json"),
         discovery=discovery,
         identity_map=identities,
-        drilldown_modules=_detect_drilldown(run_dir),
     )

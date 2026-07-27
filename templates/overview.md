@@ -226,4 +226,4 @@ are never turned into recommendations.}}
 
 ---
 <!-- ONLY for clean (non-inspection-only) runs, end with the acceptance offer: -->
-*Accept this run as `current` (enables module drill-downs against it)? Reply "accept".*
+*Accept this run as `current`? Reply "accept".*

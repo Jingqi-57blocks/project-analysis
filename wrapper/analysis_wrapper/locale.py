@@ -5,7 +5,7 @@ labels, structured-component headers) is data, not code: it lives in one flat,
 namespaced catalog instead of five scattered per-file dictionaries, each with
 its own ``{"en": ..., "zh-CN": ...}`` shape and its own fallback logic. Keys
 are dotted namespaces that mirror where they render — e.g. ``findings.top``,
-``chrome.nav.index``, ``narrative.drilldown``, ``landing.run_status``,
+``chrome.nav.index``, ``narrative.map``, ``landing.run_status``,
 ``components.snapshot.title`` — chosen to preserve the exact meaning of the
 string each call site used before consolidation. No rendered byte changes for
 an existing language as a result of this module existing.
@@ -53,8 +53,7 @@ _EN: dict[str, str] = {
     "chrome.theme": "Toggle theme",
     "chrome.on_this_page": "On this page",
 
-    # -- report_html/narrative.py: module drill-down entrance ---------------
-    "narrative.drilldown": "Module drill-down",
+    # -- report_html/narrative.py: overview module-map entrance -------------
     "narrative.map": "System module map",
 
     # -- report_html/generate.py: landing page + run-status note ------------
@@ -196,7 +195,6 @@ _ZH_CN: dict[str, str] = {
     "chrome.on_this_page": "本页目录",
 
     # -- report_html/narrative.py ----------------------------------------------
-    "narrative.drilldown": "模块下钻",
     "narrative.map": "系统模块图",
 
     # -- report_html/generate.py -----------------------------------------------
