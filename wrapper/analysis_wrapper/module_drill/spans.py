@@ -225,8 +225,8 @@ def _fetch(request: SpanRequest, spec: TargetSpec,
     }
 
 
-def fetch(module_run: str | Path, requests: list[dict[str, Any]], *,
-          out: str | Path | None = None) -> Path:
+def fetch_rows(module_run: str | Path, requests: list[dict[str, Any]]) -> list[dict[str, str | int]]:
+    """Fetch validated request rows without choosing their persistence format."""
     run = Path(module_run).expanduser().resolve()
     if not isinstance(requests, list):
         raise ContractError("semantic span requests must be a list")
@@ -235,9 +235,15 @@ def fetch(module_run: str | Path, requests: list[dict[str, Any]], *,
     if len({item.span_id for item in parsed}) != len(parsed):
         raise ContractError("semantic span requests must have unique span_id values")
     context = load_source_context(run)
+    return [_fetch(item, context.source_spec, context.identities) for item in parsed]
+
+
+def fetch(module_run: str | Path, requests: list[dict[str, Any]], *,
+          out: str | Path | None = None) -> Path:
+    run = Path(module_run).expanduser().resolve()
     destination = Path(out).expanduser().resolve() if out else run / "semantic-spans.json"
     if not destination.is_relative_to(run):
         raise ContractError("semantic span output must stay inside the module run")
-    rows = [_fetch(item, context.source_spec, context.identities) for item in parsed]
+    rows = fetch_rows(run, requests)
     write_new_text(destination, json.dumps(rows, indent=2, sort_keys=True) + "\n")
     return destination
