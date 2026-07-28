@@ -20,6 +20,7 @@ from .frontier_receipts import write as write_frontier_receipts
 from .frontier_candidates import write as write_frontier_candidates
 from .span_plan import write as write_span_plan
 from .span_fetch import write as write_planned_spans
+from .graph_closure import write as write_graph_closure
 from .sync_recovery import finalize as finalize_sync_recovery, register as register_sync_recovery
 from .runtime import initialize_from_overview
 from .spans import fetch
@@ -150,6 +151,12 @@ def _frontier_candidates(args) -> int:
     return 0
 
 
+def _graph_closure(args) -> int:
+    out = write_graph_closure(load_source_context(args.run))
+    _print({"graph_closure": str(out)})
+    return 0
+
+
 def _span_plan(args) -> int:
     out = write_span_plan(load_source_context(args.run))
     _print({"span_plan": str(out)})
@@ -187,6 +194,7 @@ def run(args) -> int:
             "module-build-graph": _graph,
             "module-build-frontier-receipts": _frontier_receipts,
             "module-build-frontier-candidates": _frontier_candidates,
+            "module-build-graph-closure": _graph_closure,
             "module-plan-spans": _span_plan,
             "module-fetch-planned-spans": _planned_spans,
             "module-plan-sync-recovery": _sync_recovery,
