@@ -367,6 +367,9 @@ def parser() -> argparse.ArgumentParser:
     module_finalize_model = sub.add_parser(
         "module-finalize-model", help="audit and materialize the authoritative Module Drill model")
     module_finalize_model.add_argument("--run", required=True)
+    module_render_report = sub.add_parser(
+        "module-render-report", help="render deterministic Markdown from the finalized Module Drill model")
+    module_render_report.add_argument("--run", required=True)
     finalize_map = sub.add_parser(
         "finalize-module-map",
         help="validate complete candidate dispositions in module-map.json, "
