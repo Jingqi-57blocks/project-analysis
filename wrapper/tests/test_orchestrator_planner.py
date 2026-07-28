@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # wrapper/ on path
 
 from analysis_wrapper import identity
-from analysis_wrapper.orchestrator import planner
+from analysis_wrapper.orchestrator import formation, planner
 from analysis_wrapper.orchestrator import schemas
 from analysis_wrapper.orchestrator import templates as tpl
 from analysis_wrapper.orchestrator.contracts import (
@@ -151,9 +151,10 @@ def test_plan_judgment_creates_the_expected_task_count_and_shard_fanout(tmp_path
     lens_tasks = [t for t in planned if t.task_type == "lens-findings"]
     select_tasks = [t for t in planned if t.task_type == "selection-fetch"]
     formation_tasks = [t for t in planned if t.task_type == "formation-proposal"]
-    assert len(formation_tasks) == 1
-    assert formation_tasks[0].task_id == "formation"
-    assert formation_tasks[0].shard == ""
+    assert len(formation_tasks) == 2
+    assert {task.task_id for task in formation_tasks} == {
+        "formation-formation-0000", "formation-formation-0001"}
+    assert {task.shard for task in formation_tasks} == {"formation-0000", "formation-0001"}
 
     # DIRECT lens-findings tasks: 3 repo-sharded (complexity, dead-code,
     # hotspots-change-friction) x 2 repos + 2 workspace-sharded (duplication,
@@ -203,11 +204,13 @@ def test_plan_judgment_registers_every_task_in_the_engine_ledger(tmp_path):
 
 def test_formation_task_has_no_depends_on_and_runs_independently(tmp_path):
     run, _ = _build_run(tmp_path)
-    planner.plan_judgment(run)
+    planned = planner.plan_judgment(run)
     engine = Engine(run)
-    # Independent of every lens task -- it must be ready immediately,
-    # alongside every (unclaimed) lens task, with nothing claimed yet.
-    assert "formation" in engine.ready_task_ids()
+    formation_packet_ids = {packet_id for task in planned
+                            if task.task_type == "formation-proposal"
+                            for packet_id in task.packet_ids}
+    # Every partition is independent of the lens tasks and ready immediately.
+    assert formation_packet_ids <= set(engine.ready_task_ids())
 
 
 def test_formation_task_is_formation_proposal_not_boundary_resolution(tmp_path):
@@ -219,6 +222,25 @@ def test_formation_task_is_formation_proposal_not_boundary_resolution(tmp_path):
     task_types = {task.task_type for task in planned}
     assert "formation-proposal" in task_types
     assert "boundary-resolution" not in task_types
+
+
+def test_formation_packet_carries_a_deterministic_partition_plan(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planned = planner.plan_judgment(run)
+    engine = Engine(run)
+    formation_task_ids = {task.task_id for task in planned
+                          if task.task_type == "formation-proposal"}
+    packets = [rec.detail["task"] for rec in engine._read_records()
+               if rec.event == "created" and rec.task_id in formation_task_ids]
+    plan = json.loads((run / "tasks" / formation.PARTITION_PLAN_FILENAME).read_text("utf-8"))
+    assert {packet["task_id"] for packet in packets} == formation_task_ids
+    assert plan["merge_order"] == [row["partition_id"] for row in plan["partitions"]]
+    assert plan["global_identity"]["candidate_universe_digest"] == plan["candidate_universe_digest"]
+    for packet in packets:
+        context = json.loads(packet["inputs"]["formation-partition-context.json"]["content"])
+        candidates = json.loads(packet["inputs"]["module-candidates.json"]["content"])
+        assert {row["candidate_id"] for row in candidates} <= set(context["partition"]["candidate_ids"])
+        assert context["partition"]["partition_id"] in context["merge_order"]
 
 
 # --------------------------------------------------------------------------- #
@@ -758,6 +780,15 @@ def _collision_lens_output(task_id):
 
 
 def _submit(engine, item, output, *, status="ok"):
+    if item.packet.task_type == "formation-proposal" and isinstance(output, dict):
+        partition_input = item.packet.inputs.get("formation-partition-context.json")
+        candidates_input = item.packet.inputs.get("module-candidates.json")
+        if partition_input is not None and candidates_input is not None:
+            output = dict(output)
+            output["candidate_dispositions"] = [{
+                "candidate_id": row["candidate_id"], "disposition": "standalone",
+                "module_ids": [output["modules"][0]["module_id"]], "reason": "fixture",
+            } for row in json.loads(candidates_input.content)]
     if item.packet.task_type == "lens-findings" and isinstance(output, dict) \
             and isinstance(output.get("findings"), list):
         raw = item.packet.inputs.get("requirements.json")

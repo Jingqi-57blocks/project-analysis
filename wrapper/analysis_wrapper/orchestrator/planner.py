@@ -103,7 +103,7 @@ from typing import Any, Callable, Mapping
 from .. import identity
 from ..exclusions import is_excluded_relative
 from ..targetspec import RepoTarget, TargetSpec
-from . import requirements, templates as tpl
+from . import formation, requirements, templates as tpl
 from .composer import compose, estimate_tokens
 from .contracts import TaskPacket
 from .engine import Engine
@@ -650,20 +650,24 @@ FORMATION_PREAMBLE = (
     "(optional)}. modules: module_id (stable kebab-case slug), name, "
     "classification (business|platform|shared-infra|unresolved), confidence "
     "(high|medium|low), aliases. Disposition EVERY candidate_id in the given "
-    "candidate universe (module-candidates.json below; the optional "
-    "cohesion-bundle.json, when present, groups candidates by an observed "
+    "candidate universe (module-candidates.json below; the required "
+    "formation-partition-context.json names this work item's primary "
+    "ownership, the global merge order, adjacent partition summaries, "
+    "boundary_candidates, and observed cross_links. Treat cross_links as boundary context rather than "
+    "an implicit merge; candidates linked across repositories may still share "
+    "one module when the evidence supports it. Its cohesion_clusters group candidates by an observed "
     "measure -- route-prefix, folder, import, co-change, or table-ownership "
     "-- to help judge when signals genuinely support one boundary) exactly "
-    "once, either via compact candidate_rules (selectors + disposition + "
-    "module_ids + reason; at most one final remaining:true rule for an "
-    "honest unresolved leftover) or explicit candidate_dispositions rows "
+    "once through explicit candidate_dispositions rows "
     "(candidate_id, disposition, module_ids, reason). disposition is one of "
     "standalone|merged|platform|shared-infrastructure|excluded|unresolved -- "
     "the first four map to exactly one module_id, the last two to none. An "
     "evidence-backed boundary not surfaced mechanically may be added only "
     "through additional_candidates (a stable mc-added-<slug> id, "
     "repository_ref, value, and at least one citation). Follow the "
-    "project-agnostic granularity contract below (ported verbatim from "
+    "An unresolved disposition is allowed only when its reason is bounded by "
+    "the supplied immediate evidence and it will be handed to the targeted "
+    "boundary-resolution pass. Follow the project-agnostic granularity contract below (ported verbatim from "
     "synthesis.md). Return ONLY this JSON object -- no prose outside it."
 )
 
@@ -793,35 +797,104 @@ def plan_judgment(run_dir: str | Path, *,
             estimated_tokens=sum(_packet_tokens(packet) for packet in built),
             created=False))
 
-    # formation: one global, INDEPENDENT task (no depends_on) -- runs in
-    # parallel with every lens task above. It carries the FULL candidate
-    # universe (repository_ref=None -> no per-repo trim) -- the single
-    # biggest input in the whole DAG, so it gets the same array/meta split
-    # every lens task's own candidates input gets above.
-    all_candidates, all_candidates_meta = _split_module_candidates(module_candidates_doc, None)
-    formation_inputs = {
-        "module-candidates.json": json.dumps(all_candidates, sort_keys=True),
-        "module-candidates-meta.json": json.dumps(all_candidates_meta, sort_keys=True),
-    }
-    cohesion_path = run / "cohesion-bundle.json"
-    if cohesion_path.is_file():
-        formation_inputs["cohesion-bundle.json"] = cohesion_path.read_text("utf-8")
-    built = compose(
-        task_id="formation", template_id="formation-proposal",
-        template_version=_formation_version(), task_type="formation-proposal",
-        instructions=_formation_instructions(), inputs=formation_inputs,
-        output_schema_id="formation-proposal.v1",
-        context_budget_tokens=context_budget_tokens)
-    packets.extend(built)
-    planned.append(PlannedTask(
-        task_id="formation", task_type="formation-proposal", lens_id="",
-        shard="", repository_ref="",
-        packet_ids=tuple(packet.task_id for packet in built),
-        estimated_tokens=sum(_packet_tokens(packet) for packet in built), created=False))
+    # Formation has deterministic structural work items. Each carries its
+    # local candidate universe and concise global/adjacent-boundary context;
+    # formation.write() merges validated outputs in the persisted merge order.
+    partition_plan_path = formation.write_partition_plan(run)
+    partition_plan = json.loads(partition_plan_path.read_text("utf-8"))
+    candidates_by_id = {row.get("candidate_id"): row
+                        for row in module_candidates_doc.get("candidates", [])
+                        if isinstance(row, dict) and isinstance(row.get("candidate_id"), str)}
+    for partition in partition_plan["partitions"]:
+        partition_id = partition["partition_id"]
+        local_candidates = [candidates_by_id[candidate_id]
+                            for candidate_id in partition["candidate_ids"]]
+        formation_inputs = {
+            "module-candidates.json": json.dumps(local_candidates, sort_keys=True),
+            "module-candidates-meta.json": json.dumps({
+                "schema_version": module_candidates_doc.get("schema_version", ""),
+                "project_ref": module_candidates_doc.get("project_ref", ""),
+                "candidate_count": len(local_candidates),
+                "limitations": module_candidates_doc.get("limitations", []),
+            }, sort_keys=True),
+            "formation-partition-context.json": json.dumps(
+                formation.partition_context(partition_plan, partition_id), sort_keys=True),
+        }
+        task_id = formation.formation_task_id(partition_id)
+        built = compose(
+            task_id=task_id, template_id="formation-proposal",
+            template_version=_formation_version(), task_type="formation-proposal",
+            instructions=_formation_instructions(), inputs=formation_inputs,
+            output_schema_id="formation-proposal.v1",
+            context_budget_tokens=context_budget_tokens)
+        packets.extend(built)
+        planned.append(PlannedTask(
+            task_id=task_id, task_type="formation-proposal", lens_id="",
+            shard=partition_id, repository_ref=partition["repository_ref"],
+            packet_ids=tuple(packet.task_id for packet in built),
+            estimated_tokens=sum(_packet_tokens(packet) for packet in built), created=False))
 
     created_ids = set(Engine(run).create_tasks(packets))
     return [replace(task, created=any(pid in created_ids for pid in task.packet_ids))
            for task in planned]
+
+
+# --------------------------------------------------------------------------- #
+# targeted formation remainder -- no percentage/count threshold is involved.
+# Every unresolved candidate arrives with immediate graph/evidence context,
+# prior module relationships and its first-pass reason.
+# --------------------------------------------------------------------------- #
+
+_BOUNDARY_RESOLUTION_INSTRUCTIONS = """\
+Resolve every candidate in unresolved-candidates.json exactly once. Return only
+JSON matching boundary-resolution.v1 with {"modules": [...], "dispositions": [...]}.
+For each candidate, use its immediate graph edges, evidence_refs, prior module
+ids, partition id and prior_reason. Choose standalone, merged, platform,
+shared-infrastructure, excluded, or unresolved. An unresolved result is allowed
+only when evidence still cannot justify a boundary; keep its evidence_refs and
+state the exact limitation plus a non-empty coverage_impact describing the
+Overview Coverage degradation. Do not use a blanket remaining rule and do not
+rewrite candidates outside this packet.\n"""
+
+
+def plan_boundary_resolution(run_dir: str | Path, *,
+                             context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS) \
+        -> PlannedTask | None:
+    """Plan the one evidence-contextual pass required for unresolved modules."""
+    run = Path(run_dir).expanduser().resolve()
+    if validated_outputs(run, task_type="boundary-resolution"):
+        return None
+    unresolved = formation.unresolved_rows(run)
+    if not unresolved:
+        return None
+    document = _load_json(run / "module-map.json")
+    quality = formation.formation_quality(run, refined=False)
+    partition_plan = formation.build_partition_plan(run)
+    involved_partitions = sorted({row.get("partition_id") for row in unresolved
+                                  if isinstance(row.get("partition_id"), str)})
+    inputs = {
+        "unresolved-candidates.json": json.dumps(unresolved, sort_keys=True),
+        "existing-modules.json": json.dumps({
+            "modules": document.get("modules", []),
+        }, sort_keys=True),
+        "boundary-context.json": json.dumps({
+            "partition_ids": involved_partitions,
+            "global_identity": partition_plan.get("global_identity", {}),
+            "diagnostics": quality.get("diagnostics", {}),
+        }, sort_keys=True),
+    }
+    built = compose(
+        task_id="boundary-resolution", template_id="boundary-resolution",
+        template_version=tpl.content_digest(_BOUNDARY_RESOLUTION_INSTRUCTIONS),
+        task_type="boundary-resolution", instructions=_BOUNDARY_RESOLUTION_INSTRUCTIONS,
+        inputs=inputs, output_schema_id="boundary-resolution.v1",
+        context_budget_tokens=context_budget_tokens, depends_on=("formation",))
+    created_ids = set(Engine(run).create_tasks(built))
+    return PlannedTask(
+        task_id="boundary-resolution", task_type="boundary-resolution", lens_id="",
+        shard="", repository_ref="", packet_ids=tuple(packet.task_id for packet in built),
+        estimated_tokens=sum(_packet_tokens(packet) for packet in built),
+        created=any(packet.task_id in created_ids for packet in built))
 
 
 # --------------------------------------------------------------------------- #

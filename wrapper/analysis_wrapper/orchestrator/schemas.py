@@ -1046,6 +1046,133 @@ def _crosscheck_lens_requirements(obj: Any, packet_inputs: Mapping[str, str]) ->
                                  "input_dispositions[fetched-evidence.json]")
     return failures.rows
 
+
+def _crosscheck_formation_partitions(obj: Any,
+                                     packet_inputs: Mapping[str, str]) -> list[Failure]:
+    """Formation work items must account for their assigned candidate slice."""
+    raw_context = packet_inputs.get("formation-partition-context.json")
+    if raw_context is None:
+        return []
+    failures = _Failures()
+    try:
+        context = json.loads(raw_context)
+        candidates = json.loads(packet_inputs.get("module-candidates.json", "[]"))
+    except ValueError:
+        return [{"check": "formation-partition-context-json", "detail":
+                 "formation partition context and candidate universe must be valid JSON",
+                 "location": "formation-partition-context.json"}]
+    if not isinstance(context, dict) or not isinstance(candidates, list):
+        return [{"check": "formation-partition-context-shape", "detail":
+                 "formation partition context must be an object and candidates a list",
+                 "location": "formation-partition-context.json"}]
+    candidate_ids = {row.get("candidate_id") for row in candidates if isinstance(row, dict)}
+    partition = context.get("partition")
+    merge_order = context.get("merge_order")
+    global_identity = context.get("global_identity")
+    partition_id = partition.get("partition_id") if isinstance(partition, dict) else None
+    if not isinstance(partition, dict) or not _one_line_str(partition_id) \
+            or not _string_list(partition.get("candidate_ids"), allow_empty=False):
+        failures.add("formation-partition-context-partition",
+                     "context needs one partition with non-empty id and candidate_ids",
+                     "formation-partition-context.json.partition")
+        assigned_ids: set[str] = set()
+    else:
+        assigned_ids = set(partition["candidate_ids"])
+        if not candidate_ids <= assigned_ids:
+            failures.add("formation-partition-context-ownership",
+                         "packet candidates must belong to its assigned partition",
+                         "module-candidates.json")
+    if not isinstance(global_identity, dict) or not isinstance(merge_order, list) \
+            or partition_id not in merge_order:
+        failures.add("formation-partition-context-global",
+                     "context needs global identity and a merge order containing this partition",
+                     "formation-partition-context.json")
+
+    rows = obj.get("candidate_dispositions") if isinstance(obj, dict) else None
+    if not isinstance(rows, list):
+        failures.add("formation-disposition-accounting", "candidate_dispositions must be a list",
+                     "candidate_dispositions")
+    else:
+        additions = obj.get("additional_candidates", []) if isinstance(obj, dict) else []
+        added_ids = {row.get("candidate_id") for row in additions if isinstance(row, dict)} \
+            if isinstance(additions, list) else set()
+        output_ids = [row.get("candidate_id") for row in rows if isinstance(row, dict)]
+        if len(output_ids) != len(rows) or len(set(output_ids)) != len(output_ids) \
+                or set(output_ids) != candidate_ids | added_ids:
+            failures.add("formation-disposition-accounting",
+                         "candidate_dispositions must account for every packet and added candidate exactly once",
+                         "candidate_dispositions")
+    if "candidate_rules" in obj:
+        failures.add("formation-explicit-dispositions",
+                     "partitioned formation packets must use explicit candidate_dispositions",
+                     "candidate_rules")
+    return failures.rows
+
+
+def _crosscheck_boundary_resolution(obj: Any,
+                                    packet_inputs: Mapping[str, str]) -> list[Failure]:
+    """Targeted boundary resolution must consume every contextual remainder."""
+    raw = packet_inputs.get("unresolved-candidates.json")
+    if raw is None:
+        return []
+    try:
+        expected_rows = json.loads(raw)
+    except ValueError:
+        return [{"check": "boundary-context-json", "detail":
+                 "unresolved-candidates.json is not valid JSON", "location": "unresolved-candidates.json"}]
+    if not isinstance(expected_rows, list):
+        return [{"check": "boundary-context-shape", "detail":
+                 "unresolved-candidates.json must be a list", "location": "unresolved-candidates.json"}]
+    expected_ids = {row.get("candidate_id") for row in expected_rows if isinstance(row, dict)}
+    expected_by_id = {row.get("candidate_id"): row for row in expected_rows if isinstance(row, dict)}
+    failures = _Failures()
+    rows = obj.get("dispositions") if isinstance(obj, dict) else None
+    if not isinstance(rows, list):
+        failures.add("boundary-disposition-accounting", "dispositions must be a list", "dispositions")
+        return failures.rows
+    actual_ids = [row.get("candidate_id") for row in rows if isinstance(row, dict)]
+    if len(actual_ids) != len(rows) or len(set(actual_ids)) != len(actual_ids) \
+            or set(actual_ids) != expected_ids:
+        failures.add("boundary-disposition-accounting",
+                     "dispositions must account for every unresolved candidate exactly once",
+                     "dispositions")
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        refs = row.get("evidence_refs")
+        if not _string_list(refs, allow_empty=False):
+            failures.add("boundary-evidence-refs", "resolution needs non-empty evidence_refs",
+                         f"dispositions[{index}].evidence_refs")
+        elif any(citation_grammar_kind(ref) is None for ref in refs):
+            failures.add("boundary-evidence-ref-grammar", "resolution has an invalid evidence ref",
+                         f"dispositions[{index}].evidence_refs")
+        if row.get("disposition") == "unresolved":
+            expected_refs = expected_by_id.get(row.get("candidate_id"), {}).get("evidence_refs", [])
+            if not isinstance(refs, list) or not set(refs) & set(expected_refs):
+                failures.add("boundary-evidence-provenance",
+                             "retained unresolved candidate must cite its supplied exact evidence",
+                             f"dispositions[{index}].evidence_refs")
+            coverage_impact = row.get("coverage_impact")
+            if not _one_line_str(coverage_impact):
+                failures.add("boundary-coverage-impact",
+                             "retained unresolved candidate needs a non-empty Coverage impact",
+                             f"dispositions[{index}].coverage_impact")
+    modules = obj.get("modules") if isinstance(obj, dict) else None
+    if modules is not None:
+        if not isinstance(modules, list):
+            failures.add("boundary-modules-shape", "modules must be a list", "modules")
+        else:
+            seen: set[str] = set()
+            for index, row in enumerate(modules):
+                _validate_module_row(row, f"modules[{index}]", failures)
+                module_id = row.get("module_id") if isinstance(row, dict) else None
+                if isinstance(module_id, str):
+                    if module_id in seen:
+                        failures.add("boundary-module-id-unique", f"duplicate module_id: {module_id}",
+                                     f"modules[{index}].module_id")
+                    seen.add(module_id)
+    return failures.rows
+
 def _crosscheck_dedup_rank(obj: Any, packet_inputs: Mapping[str, str]) -> list[Failure]:
     raw = packet_inputs.get("input-finding-ids.json")
     if raw is None:
@@ -1123,6 +1250,8 @@ def _crosscheck_section_generate(obj: Any, packet_inputs: Mapping[str, str]) -> 
 _CROSSCHECKS: dict[str, Callable[[Any, Mapping[str, str]], list[Failure]]] = {
     "lens-findings": _crosscheck_lens_requirements,
     "selection-fetch": _crosscheck_selection_requirements,
+    "formation-proposal": _crosscheck_formation_partitions,
+    "boundary-resolution": _crosscheck_boundary_resolution,
     "dedup-rank": _crosscheck_dedup_rank,
     "section-generate": _crosscheck_section_generate,
 }

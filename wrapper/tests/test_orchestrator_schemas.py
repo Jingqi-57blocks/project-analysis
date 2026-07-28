@@ -252,6 +252,44 @@ def test_boundary_resolution_accepts_valid_dispositions_and_rejects_duplicates()
         schemas.validate_output("boundary-resolution", doc))
 
 
+def test_boundary_resolution_packet_requires_contextual_exact_evidence_accounting():
+    packet_inputs = {"unresolved-candidates.json": json.dumps([{
+        "candidate_id": "mc-a", "evidence_refs": ["signals/imports.view.txt:1"],
+        "immediate_graph": [], "prior_module_ids": [], "prior_reason": "first pass limit",
+    }])}
+    output = {"dispositions": [{
+        "candidate_id": "mc-a", "disposition": "unresolved", "module_ids": [],
+        "reason": "evidence remains insufficient", "evidence_refs": ["signals/imports.view.txt:1"],
+        "coverage_impact": "Coverage cannot claim a complete ownership boundary.",
+    }]}
+    assert schemas.validate_output("boundary-resolution", output, packet_inputs=packet_inputs) == []
+    output["dispositions"][0].pop("evidence_refs")
+    assert "boundary-evidence-refs" in _checks(
+        schemas.validate_output("boundary-resolution", output, packet_inputs=packet_inputs))
+
+
+def test_partitioned_formation_rejects_a_blanket_remaining_unresolved_rule():
+    packet_inputs = {
+        "module-candidates.json": json.dumps([{"candidate_id": "mc-a"}]),
+        "formation-partition-context.json": json.dumps({
+            "global_identity": {"candidate_universe_digest": "digest"},
+            "merge_order": ["formation-0000"],
+            "partition": {"partition_id": "formation-0000", "candidate_ids": ["mc-a"]},
+        }),
+    }
+    output = {
+        "modules": [{"module_id": "sample", "name": "Sample", "classification": "business",
+                     "confidence": "medium", "aliases": []}],
+        "candidate_rules": [{"rule_id": "remaining", "remaining": True,
+                             "disposition": "unresolved", "module_ids": [],
+                             "reason": "no decision"}],
+    }
+    checks = _checks(schemas.validate_output(
+        "formation-proposal", output, packet_inputs=packet_inputs))
+    assert "formation-explicit-dispositions" in checks
+    assert "formation-disposition-accounting" in checks
+
+
 # --------------------------------------------------------------------------- #
 # dedup-rank
 # --------------------------------------------------------------------------- #
