@@ -132,7 +132,10 @@ def build(context: SourceContext) -> dict[str, Any]:
         raise ContractError("graph closure nodes and edges require stable IDs")
     handler_ids = {
         node_id for node_id, node in nodes.items()
-        if node.get("kind") == "symbol" and node.get("observation") == "observed"
+        # A route registration is a verified handler entry point even where a
+        # language callgraph cannot resolve the inline implementation.  The
+        # exact route span is fetched before any provider boundary is attached.
+        if node.get("kind") in {"symbol", "route"} and node.get("observation") == "observed"
     }
     fetched_spans = [row for row in spans.get("spans", []) if isinstance(row, dict)]
     if not all(isinstance(row.get("span_id"), str) for row in fetched_spans):

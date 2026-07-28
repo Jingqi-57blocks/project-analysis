@@ -179,7 +179,7 @@ def _statement_bounds(lines: list[str], anchor: int,
     return None
 
 
-def _bounds(lines: list[str], anchor: int) -> tuple[tuple[int, int], str] | None:
+def _bounds(lines: list[str], anchor: int, *, kind: str) -> tuple[tuple[int, int], str] | None:
     """Return one complete lexical construct around an already-evidenced line."""
     opens, closes, semicolons = _syntax_tokens(lines)
     brace = _brace_bounds(lines, anchor, opens, closes)
@@ -188,6 +188,13 @@ def _bounds(lines: list[str], anchor: int) -> tuple[tuple[int, int], str] | None
     statement = _statement_bounds(lines, anchor, semicolons)
     if statement is not None:
         return statement, "statement"
+    # A declaration anchor may legitimately be one syntax-level declaration
+    # inside a Go const/var block, where neither braces nor semicolons delimit
+    # the individual line.  Returning precisely that evidenced, nonblank line
+    # is not a nearby-line fallback: it is the smallest available declaration
+    # span and keeps the original source reference intact.
+    if kind == "declaration" and lines[anchor].strip():
+        return (anchor, anchor), "anchored-line"
     return None
 
 
@@ -210,7 +217,7 @@ def _fetch(request: SpanRequest, spec: TargetSpec,
     if isinstance(loaded, str):
         return {**base, "status": "unresolved", "reason": loaded, "content": ""}
     lines, anchor = loaded
-    bounds = _bounds(lines, anchor)
+    bounds = _bounds(lines, anchor, kind=request.kind)
     if bounds is None:
         return {**base, "status": "unresolved", "reason": "semantic boundary cannot be resolved", "content": ""}
     (start, end), boundary = bounds

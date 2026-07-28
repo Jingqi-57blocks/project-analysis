@@ -185,6 +185,8 @@ def build(context: SourceContext) -> ModuleModel:
         raise ContractError("finalization requires exactly one disposition for every scope frontier")
     states = {item.state for item in dispositions}
     closure = "blocked" if "blocked" in states else "open" if "unresolved" in states else "closed"
+    if closure != "closed":
+        raise ContractError("mandatory feature frontiers remain unresolved or blocked")
     return ModuleModel(
         feature_id=scope.feature_id, nodes=tuple(sorted(nodes, key=lambda node: node.node_id)),
         edges=tuple(sorted(edges, key=lambda edge: edge.edge_id)), claims=_claims(sync, async_doc),

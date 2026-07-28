@@ -39,6 +39,23 @@ def _anchor_node_id(frontier: dict[str, Any]) -> str:
     return "node-" + frontier["anchor_id"].removeprefix("seed-")
 
 
+def _terminal_source_anchor(frontier: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> bool:
+    """Whether an observed source anchor is itself the bounded semantic unit.
+
+    A call edge is useful when one is observed, but a route registration,
+    datastore declaration, event boundary, or direct configuration anchor does
+    not become untrustworthy merely because a provider could not discover a
+    *second* structural edge.  Its separately planned exact source span is the
+    terminal unit that semantic recovery must inspect.  This is deliberately a
+    terminal disposition, never an invented self-edge or a claim that no
+    transitive dependency exists.
+    """
+    node = nodes.get(_anchor_node_id(frontier))
+    return bool(node and node.get("observation") == "observed"
+                and isinstance(node.get("evidence_refs"), list)
+                and node["evidence_refs"])
+
+
 def build(context: SourceContext) -> dict[str, Any]:
     """Materialize exact observed call candidates; disclose every other frontier."""
     graph = _load(context, GRAPH_FILENAME, "feature-graph/v1")
@@ -110,6 +127,11 @@ def build(context: SourceContext) -> dict[str, Any]:
             frontier_dispositions.append({
                 "frontier_id": frontier_id, "state": "expanded", "resulting_ids": sorted(set(expanded_ids)),
                 "reason": "expanded exact observed bounded call candidates",
+            })
+        elif _terminal_source_anchor(frontier, nodes):
+            frontier_dispositions.append({
+                "frontier_id": frontier_id, "state": "terminal", "resulting_ids": [],
+                "reason": "direct observed source anchor is the bounded semantic recovery unit; no exact call edge was observed",
             })
         else:
             frontier_dispositions.append({

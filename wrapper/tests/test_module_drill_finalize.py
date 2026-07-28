@@ -87,6 +87,19 @@ def test_missing_mandatory_async_output_fails_closed_without_module_model(tmp_pa
     assert not (module_run / "evidence" / "module-model.json").exists()
 
 
+def test_unresolved_mandatory_frontier_fails_closed_without_module_model(tmp_path):
+    module_run = _ready(tmp_path)
+    closure_path = module_run / "evidence" / "feature-graph-closure.json"
+    closure = json.loads(closure_path.read_text())
+    closure["frontier_dispositions"][0]["state"] = "unresolved"
+    closure_path.write_text(json.dumps(closure), encoding="utf-8")
+
+    model_path, audit = finalize(module_run)
+
+    assert model_path is None and not audit.passed
+    assert "mandatory feature frontiers" in audit.failed_checks[0]
+
+
 def test_cli_returns_nonzero_when_final_audit_fails(tmp_path, capsys):
     module_run = _prepared(tmp_path)
     assert main(["module-finalize-model", "--run", str(module_run)]) == 3
