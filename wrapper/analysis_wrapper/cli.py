@@ -286,6 +286,39 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--run", required=True, help="overview run directory")
     prepare.add_argument("--include-network", action="store_true",
                          help="explicitly authorize network-capable signal lanes")
+    module_init = sub.add_parser("module-init", help="mint an incomplete Module Drill run")
+    source = module_init.add_mutually_exclusive_group(required=True)
+    source.add_argument("--from-overview", default="", help="fresh overview source run")
+    source.add_argument("--workspace", default="", help="workspace for standalone evidence preparation")
+    module_init.add_argument("--output-root", required=True, help="analyzer-owned module output root")
+    module_init.add_argument("--project-key", required=True)
+    module_init.add_argument("--selector", required=True)
+    module_init.add_argument("--language", choices=["en", "zh-CN"], default="zh-CN")
+    module_init.add_argument("--run-id", default="")
+    module_init.add_argument("--model", default="unknown")
+    module_init.add_argument("--effort", default="unknown")
+    module_init.add_argument("--exclude", default="")
+    module_init.add_argument("--analyzer-root", default="")
+    module_init.add_argument("--include-network", action="store_true")
+    module_init.add_argument("--jobs", type=int, default=None)
+    module_status = sub.add_parser("module-status", help="show verified Module Drill state")
+    module_status.add_argument("--run", required=True)
+    module_register = sub.add_parser("module-register", help="register Module Drill task packets")
+    module_register.add_argument("--run", required=True)
+    module_register.add_argument("--packets", required=True, help="TaskPacket JSON array path, or - for stdin")
+    module_next = sub.add_parser("module-next", help="claim ready Module Drill tasks")
+    module_next.add_argument("--run", required=True)
+    module_next.add_argument("--claim", type=int, default=1)
+    module_next.add_argument("--executor-kind", default="manual")
+    module_next.add_argument("--model", default="unknown")
+    module_submit = sub.add_parser("module-submit", help="submit one Module Drill task result")
+    module_submit.add_argument("--run", required=True)
+    module_submit.add_argument("--task", required=True)
+    module_submit.add_argument("--result", required=True, help="TaskResult JSON path, or - for stdin")
+    module_spans = sub.add_parser("module-fetch-spans", help="fetch verified semantic source spans")
+    module_spans.add_argument("--run", required=True)
+    module_spans.add_argument("--requests", required=True, help="span-request JSON array path, or - for stdin")
+    module_spans.add_argument("--out", default="")
     finalize_map = sub.add_parser(
         "finalize-module-map",
         help="validate complete candidate dispositions in module-map.json, "
@@ -1425,6 +1458,9 @@ def main(argv: list[str] | None = None) -> int:
             return _system_model(args)
         if args.command == "prepare-overview":
             return prepare_deterministic_evidence(args)
+        if args.command.startswith("module-"):
+            from .module_drill import commands
+            return commands.run(args)
         if args.command == "finalize-module-map":
             return _finalize_module_map(args)
         if args.command == "finalize-findings":
