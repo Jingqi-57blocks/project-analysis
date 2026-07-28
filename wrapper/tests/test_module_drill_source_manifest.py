@@ -78,3 +78,16 @@ def test_long_canonical_artifact_names_stay_inside_the_contract_id_limit(tmp_pat
 
     manifest = build_from_overview(run, snapshot_id="a" * 64)
     assert max(len(record.artifact_id) for record in manifest.artifacts) <= 64
+
+
+def test_manifest_indexes_complete_callgraph_jsonl_as_canonical_evidence(tmp_path):
+    run, _ = _overview_run(tmp_path)
+    path = run / "callgraph" / "service.jsonl"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"caller_symbol": "handler", "callee_symbol": "service"}) + "\n",
+                    encoding="utf-8")
+
+    manifest = build_from_overview(run, snapshot_id="a" * 64)
+    record = next(item for item in manifest.artifacts if item.relative_path == "callgraph/service.jsonl")
+    assert record.kind == "canonical"
+    assert record.schema_version == "jsonl"
