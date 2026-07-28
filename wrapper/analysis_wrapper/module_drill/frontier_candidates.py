@@ -87,6 +87,7 @@ def _for_route_handler(frontier: dict[str, Any], edges: tuple[CallEdge, ...]) ->
                 (edge.callee_symbol + "\x1f" + edge.callee_citation).encode("utf-8")).hexdigest()[:20],
             "target_kind": "symbol",
             "target_repository_ref": callee_repo,
+            "target_ref": edge.callee_citation,
             "observation": "observed" if edge.resolution == "observed" else "inferred",
             "edge_kind": "call",
             "caller_symbol": edge.caller_symbol,
