@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +13,13 @@ SOURCE_MANIFEST_VERSION = "source-manifest/v1"
 SOURCE_MODES = frozenset({"overview-backed", "standalone"})
 ARTIFACT_KINDS = frozenset({"canonical", "fragment", "index", "view"})
 INTEGRITY_STATES = frozenset({"verified", "missing", "corrupt", "stale"})
+_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _overview_run_id(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not _RUN_ID.fullmatch(value):
+        raise ContractError(f"{label} must be a safe overview run id")
+    return value
 
 
 @dataclass(frozen=True)
@@ -130,6 +138,7 @@ class ProviderOutcome:
 @dataclass(frozen=True)
 class SourceManifest:
     source_mode: str
+    source_overview_run: str | None
     snapshot_id: str
     repositories: tuple[RepositorySnapshot, ...]
     preparation_options: dict[str, Any]
@@ -144,6 +153,10 @@ class SourceManifest:
 
     def __post_init__(self) -> None:
         enum(self.source_mode, SOURCE_MODES, "source_mode")
+        if self.source_mode == "overview-backed":
+            _overview_run_id(self.source_overview_run, "source_overview_run")
+        elif self.source_overview_run is not None:
+            raise ContractError("standalone source manifest must not name an overview run")
         sha256(self.snapshot_id, "snapshot_id")
         if not self.repositories:
             raise ContractError("source manifest must identify at least one repository")
@@ -171,6 +184,7 @@ class SourceManifest:
         return {
             "schema_version": SOURCE_MANIFEST_VERSION,
             "source_mode": self.source_mode,
+            "source_overview_run": self.source_overview_run,
             "snapshot_id": self.snapshot_id,
             "repositories": [item.to_dict() for item in self.repositories],
             "preparation_options": self.preparation_options,
@@ -182,7 +196,7 @@ class SourceManifest:
     @classmethod
     def from_dict(cls, value: Any, label: str = "source manifest") -> "SourceManifest":
         row = exact_object(value, {
-            "schema_version", "source_mode", "snapshot_id", "repositories",
+            "schema_version", "source_mode", "source_overview_run", "snapshot_id", "repositories",
             "preparation_options", "tools", "artifacts", "providers",
         }, label)
         if row["schema_version"] != SOURCE_MANIFEST_VERSION:
@@ -192,6 +206,10 @@ class SourceManifest:
             raise ContractError(f"{label} repositories/tools/artifacts/providers must be lists")
         return cls(
             source_mode=enum(row["source_mode"], SOURCE_MODES, f"{label}.source_mode"),
+            source_overview_run=(
+                _overview_run_id(row["source_overview_run"], f"{label}.source_overview_run")
+                if row["source_overview_run"] is not None else None
+            ),
             snapshot_id=sha256(row["snapshot_id"], f"{label}.snapshot_id"),
             repositories=tuple(RepositorySnapshot.from_dict(item, f"{label}.repositories[{index}]")
                                for index, item in enumerate(row["repositories"])),
