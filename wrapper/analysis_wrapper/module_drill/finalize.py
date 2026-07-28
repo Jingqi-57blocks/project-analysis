@@ -216,10 +216,14 @@ def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc
                   lane_status: str) -> CoverageStatus:
         provider_refs = tuple(sorted({ref for kind in node_kinds for ref in node_refs_by_kind.get(kind, ())}))
         semantic_refs = claim_refs(kinds=claim_kinds, roles=claim_roles, operations=claim_operations)
-        if not provider_refs:
+        if not provider_refs and not semantic_refs:
             return CoverageStatus(Coverage(
                 "unknown", "unavailable", (),
                 ("no feature-local provider evidence was observed",)), closure, ())
+        # A source-verified semantic claim is itself feature-local evidence.
+        # A provider may be unavailable or may not represent every supported
+        # access/data construct as a graph node; do not discard a verified
+        # claim merely because that optional structural projection is absent.
         return CoverageStatus(Coverage("applicable", lane_status,
                                        tuple(sorted(set(provider_refs) | set(semantic_refs))), ()), closure, ())
 

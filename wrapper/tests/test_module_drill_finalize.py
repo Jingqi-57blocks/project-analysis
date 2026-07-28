@@ -13,6 +13,7 @@ from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.driver import ModuleDriver
 from analysis_wrapper.module_drill.finalize import _coverage, finalize
 from analysis_wrapper.module_drill.frontier_candidates import write as write_candidates
+from analysis_wrapper.module_drill.model import FeatureClaim
 from analysis_wrapper.module_drill.graph_closure import write as write_graph_closure
 from analysis_wrapper.module_drill.span_fetch import write as write_spans
 from analysis_wrapper.module_drill.span_plan import write as write_plan
@@ -69,6 +70,11 @@ def _sync_output(packet, *, outcome="no-concern-observed", include_ui_claim=True
     requirements = json.loads(packet.inputs["sync-requirements.json"].content)["requirements"]
     graph = json.loads(packet.inputs["feature-graph.json"].content)
     nodes = {row["node_id"]: row for row in graph["nodes"]}
+    route_handlers = {}
+    for edge in graph["edges"]:
+        target = nodes.get(edge["target_node_id"], {})
+        if edge["kind"] == "routes-to" and target.get("kind") in {"handler", "symbol"}:
+            route_handlers.setdefault(edge["source_node_id"], []).append(edge["edge_id"])
     claims = []
     dispositions = []
     for index, row in enumerate(requirements):
@@ -90,7 +96,15 @@ def _sync_output(packet, *, outcome="no-concern-observed", include_ui_claim=True
             "claim_ids": claim_ids, "evidence_refs": row["evidence_refs"],
             "reason": "source span could not establish the required behaviour" if selected_outcome == "unknown" else "",
         })
-    return {"dispositions": dispositions, "claims": claims, "flows": []}
+    flows = [{
+        "flow_id": "flow-" + edge["edge_id"].removeprefix("edge-"),
+        "edge_ids": [edge["edge_id"], *route_handlers.get(edge["target_node_id"], [])[:1]],
+        "claim_ids": [
+            claim["claim_id"] for claim in claims
+            if set(claim["anchor_ids"]) & {edge["source_node_id"], edge["target_node_id"], edge["edge_id"]}
+        ],
+    } for edge in graph["edges"] if edge["kind"] == "ui-route"]
+    return {"dispositions": dispositions, "claims": claims, "flows": flows}
 
 
 def _submit(driver, packet, output):
@@ -208,6 +222,24 @@ def test_finalization_marks_observed_datastore_as_applicable_not_unavailable(tmp
     assert data["applicability"] == "applicable"
     assert data["status"] == "complete"
     assert data["positive_evidence_refs"]
+
+
+def test_verified_authorization_claim_is_feature_coverage_without_access_node():
+    async_doc = {"requirements": {"requirements": []}, "output": {"dispositions": [], "claims": [], "flows": []}}
+    claim = FeatureClaim(
+        "claim-access", "authorization", ("node-anchor",),
+        ("service@NON-GIT:routes/access.ts:10",), ("authorization",),
+        "actor", "allows", "action",
+    )
+    dimensions = _coverage(
+        SimpleNamespace(candidates=(), seeds=()),
+        ({"dispositions": [{"outcome": "no-concern-observed"}]},),
+        async_doc, "closed", nodes=(), claims=(claim,),
+    )
+    authorization = dimensions["authorization"].coverage.to_dict()
+    assert authorization["applicability"] == "applicable"
+    assert authorization["status"] == "complete"
+    assert authorization["positive_evidence_refs"] == ["service@NON-GIT:routes/access.ts:10"]
 
 
 def test_non_async_boundary_does_not_mark_async_coverage_complete(tmp_path):

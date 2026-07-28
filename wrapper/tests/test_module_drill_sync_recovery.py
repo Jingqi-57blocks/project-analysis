@@ -40,6 +40,20 @@ def _packet(tmp_path):
 
 def _output(packet):
     requirements = json.loads(packet.inputs["sync-requirements.json"].content)["requirements"]
+    graph = json.loads(packet.inputs["feature-graph.json"].content)
+    nodes = {row["node_id"]: row for row in graph["nodes"]}
+    route_handlers = {}
+    for edge in graph["edges"]:
+        if edge["kind"] == "routes-to" and nodes[edge["target_node_id"]]["kind"] in {"handler", "symbol"}:
+            route_handlers.setdefault(edge["source_node_id"], []).append(edge["edge_id"])
+    flows = []
+    for edge in graph["edges"]:
+        if edge["kind"] == "ui-route":
+            flows.append({
+                "flow_id": "flow-" + edge["edge_id"].removeprefix("edge-"),
+                "edge_ids": [edge["edge_id"], *route_handlers.get(edge["target_node_id"], [])[:1]],
+                "claim_ids": [],
+            })
     return {
         "dispositions": [{
             "requirement_id": row["requirement_id"],
@@ -49,7 +63,7 @@ def _output(packet):
             "reason": "",
         } for row in requirements],
         "claims": [],
-        "flows": [],
+        "flows": flows,
     }
 
 
@@ -187,6 +201,42 @@ def test_packet_keeps_observed_ui_to_route_bridge_without_provenance_fanout():
     assert [row["edge_id"] for row in local_graph["edges"]] == ["edge-ui-route"]
 
 
+def test_packet_keeps_route_handler_after_an_observed_ui_route_bridge():
+    ui_ref = "repo@NON-GIT:ui/button.tsx:10"
+    route_ref = "repo@NON-GIT:api/routes.ts:20"
+    handler_ref = "repo@NON-GIT:api/service.ts:30"
+    graph = {
+        "schema_version": "feature-graph/v1", "feature_id": "feature", "nodes": [
+            {"node_id": "node-ui", "kind": "ui-action", "repository_ref": "web",
+             "observation": "observed", "evidence_refs": [ui_ref]},
+            {"node_id": "node-route", "kind": "route", "repository_ref": "api",
+             "observation": "observed", "evidence_refs": [route_ref]},
+            {"node_id": "node-handler", "kind": "handler", "repository_ref": "api",
+             "observation": "observed", "evidence_refs": [handler_ref]},
+        ],
+        "edges": [
+            {"edge_id": "edge-ui-route", "kind": "ui-route", "source_node_id": "node-ui",
+             "target_node_id": "node-route", "observation": "observed", "evidence_refs": [ui_ref, route_ref]},
+            {"edge_id": "edge-route-handler", "kind": "routes-to", "source_node_id": "node-route",
+             "target_node_id": "node-handler", "observation": "observed", "evidence_refs": [route_ref, handler_ref]},
+        ],
+    }
+    requirements = {
+        "schema_version": "module-sync-recovery-requirements/v1",
+        "feature_graph_digest": "graph", "semantic_spans_digest": "spans", "feature_id": "feature",
+        "requirements": [{
+            "requirement_id": "requirement-anchor-node-ui", "kind": "graph-anchor",
+            "anchor_ids": ["node-ui"], "evidence_refs": [ui_ref],
+        }],
+    }
+    packet = _build_packet(None, partition_id="ui-async-01", requirements=requirements,
+                           graph=graph, spans={"schema_version": "semantic-spans/v1", "spans": []},
+                           rows=requirements["requirements"])
+    local_graph = json.loads(packet.inputs["feature-graph.json"].content)
+    assert {row["node_id"] for row in local_graph["nodes"]} == {"node-ui", "node-route", "node-handler"}
+    assert [row["edge_id"] for row in local_graph["edges"]] == ["edge-route-handler", "edge-ui-route"]
+
+
 def test_sync_output_requires_exact_requirement_dispositions(tmp_path):
     _, packet = _packet(tmp_path)
     inputs = {name: item.content for name, item in packet.inputs.items()}
@@ -196,6 +246,18 @@ def test_sync_output_requires_exact_requirement_dispositions(tmp_path):
     output["dispositions"] = output["dispositions"][:-1]
     failures = validate_output("module-sync-recovery", output, packet_inputs=inputs)
     assert any(failure["check"] == "sync-disposition-missing" for failure in failures)
+
+
+def test_sync_output_cannot_drop_a_supplied_ui_route_flow(tmp_path):
+    _, packet = _packet(tmp_path)
+    inputs = {name: item.content for name, item in packet.inputs.items()}
+    output = _output(packet)
+    graph = json.loads(inputs["feature-graph.json"])
+    if not any(row["kind"] == "ui-route" for row in graph["edges"]):
+        return
+    output["flows"] = []
+    failures = validate_output("module-sync-recovery", output, packet_inputs=inputs)
+    assert any(failure["check"] == "sync-flow-ui-route" for failure in failures)
 
 
 def test_sync_output_rejects_invented_claim_evidence_and_unknown_requirement(tmp_path):

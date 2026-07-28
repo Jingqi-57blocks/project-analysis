@@ -34,8 +34,13 @@ merge, or rename a requirement, graph anchor, edge, or evidence reference.
 Claims may use only supplied graph anchors and source references. Distinguish
 UI visibility from backend authorization. Do not infer runtime activation,
 asynchronous behaviour, configuration, notifications, or external-service
-semantics. A no-concern or not-applicable result needs cited evidence; unknown
-must name the missing semantic evidence. Do not write report prose or Mermaid.
+semantics. For every supplied observed ``ui-route`` edge, emit one flow that
+contains that edge. If the packet also contains a ``routes-to`` edge from that
+route to a handler or symbol, include one such edge in the same flow. A flow
+may have no semantic claim when the observed structural path is the only
+verified fact. A no-concern or not-applicable result needs cited evidence;
+unknown must name the missing semantic evidence. Do not write report prose or
+Mermaid.
 """
 
 _LANGUAGE_INSTRUCTIONS = {
@@ -201,7 +206,8 @@ def _packet_inputs(requirements: dict[str, Any], graph: dict[str, Any], spans: d
         if isinstance(row, dict) and isinstance(row.get("node_id"), str)
     }
     bridged_node_ids = set(node_ids)
-    bridged_edges: list[dict[str, Any]] = []
+    bridged_edges: dict[str, dict[str, Any]] = {}
+    route_bridge_ids: set[str] = set()
     for edge in graph.get("edges", []):
         if not isinstance(edge, dict):
             continue
@@ -211,14 +217,26 @@ def _packet_inputs(requirements: dict[str, Any], graph: dict[str, Any], spans: d
             continue
         if source_id in node_ids and source.get("kind") == "ui-action" and target.get("kind") == "route":
             bridged_node_ids.add(target_id)
-            bridged_edges.append(edge)
-        elif source_id in node_ids and source.get("kind") == "route" \
+            route_bridge_ids.add(target_id)
+            bridged_edges[edge["edge_id"]] = edge
+    # ``route_bridge_ids`` are introduced by the first, explicit UI -> route
+    # hop.  Traverse exactly one further observed hop to the registered
+    # handler/symbol so one packet can recover the complete local request
+    # chain without widening into arbitrary transitive dependencies.
+    for edge in graph.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        source_id, target_id = edge.get("source_node_id"), edge.get("target_node_id")
+        source, target = all_nodes.get(source_id), all_nodes.get(target_id)
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            continue
+        if source_id in route_bridge_ids and source.get("kind") == "route" \
                 and target.get("kind") in {"handler", "symbol"}:
             bridged_node_ids.add(target_id)
-            bridged_edges.append(edge)
+            bridged_edges[edge["edge_id"]] = edge
     local_nodes = [all_nodes[node_id] for node_id in sorted(bridged_node_ids) if node_id in all_nodes]
     local_node_ids = {row["node_id"] for row in local_nodes if isinstance(row.get("node_id"), str)}
-    local_edges = [row for row in bridged_edges
+    local_edges = [row for _, row in sorted(bridged_edges.items())
                    if row.get("source_node_id") in local_node_ids and row.get("target_node_id") in local_node_ids]
     requirement_doc = {**requirements, "requirements": rows}
     # The graph's full frontier inventory is a closure/audit artifact, not an
