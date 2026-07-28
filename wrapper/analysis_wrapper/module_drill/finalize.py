@@ -54,13 +54,65 @@ def _recovery(context: SourceContext, driver: ModuleDriver, *, task_id: str,
     return artifact
 
 
+def _sync_recovery_outputs(context: SourceContext, driver: ModuleDriver) -> tuple[dict[str, Any], ...]:
+    """Load every current, validated sync partition and prove full consumption."""
+    artifact = _load(context, "sync-recovery.json", "sync-recovery/v2")
+    tasks = artifact.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise ContractError("sync-recovery.json has no partition outputs")
+    expected_ids: set[str] = set()
+    expected_requirements: set[str] = set()
+    # Import locally to keep the Module Drill finalizer independent of the
+    # packet construction implementation at module import time.
+    from .sync_recovery import build_packets
+
+    for packet in build_packets(context):
+        expected_ids.add(packet.task_id)
+        partition = json.loads(packet.inputs["partition.json"].content)
+        expected_requirements.update(partition["requirement_ids"])
+    outputs: list[dict[str, Any]] = []
+    actual_ids: set[str] = set()
+    actual_requirements: set[str] = set()
+    for row in tasks:
+        if not isinstance(row, dict) or set(row) != {"task_id", "packet_input_digest", "partition", "output"}:
+            raise ContractError("sync recovery partition artifact has an invalid row")
+        task_id = row["task_id"]
+        if not isinstance(task_id, str) or task_id in actual_ids:
+            raise ContractError("sync recovery partition artifact has duplicate task IDs")
+        actual_ids.add(task_id)
+        packet, output = driver.validated_task(task_id)
+        if row["packet_input_digest"] != packet.input_digest or row["output"] != output:
+            raise ContractError("sync recovery partition is not current validated output")
+        partition = row["partition"]
+        expected_partition = json.loads(packet.inputs["partition.json"].content)
+        if partition != expected_partition:
+            raise ContractError("sync recovery partition receipt does not match its validated packet")
+        if not isinstance(partition, dict) or not isinstance(partition.get("requirement_ids"), list):
+            raise ContractError("sync recovery partition lacks its requirement universe")
+        ids = partition["requirement_ids"]
+        if not all(isinstance(value, str) and value for value in ids) or len(ids) != len(set(ids)):
+            raise ContractError("sync recovery partition has invalid requirement IDs")
+        actual_requirements.update(ids)
+        outputs.append(output)
+    if actual_ids != expected_ids or actual_requirements != expected_requirements:
+        raise ContractError("sync recovery partitions do not match the current complete task plan")
+    # A validated output may not silently omit an input requirement even when
+    # a malformed artifact copied a valid-looking partition receipt.
+    disposition_ids = [
+        row.get("requirement_id") for output in outputs
+        for row in output.get("dispositions", []) if isinstance(row, dict)
+    ]
+    if set(disposition_ids) != expected_requirements or len(disposition_ids) != len(set(disposition_ids)):
+        raise ContractError("sync recovery outputs do not disposition every planned requirement exactly once")
+    return tuple(outputs)
+
+
 def _claims(*outputs: dict[str, Any]) -> tuple[FeatureClaim, ...]:
     claims: list[FeatureClaim] = []
     consumed: set[str] = set()
-    for document in outputs:
-        output = document.get("output")
+    for output in outputs:
         if not isinstance(output, dict):
-            raise ContractError("recovery artifact output must be an object")
+            raise ContractError("recovery task output must be an object")
         for disposition in output.get("dispositions", []):
             if isinstance(disposition, dict) and disposition.get("outcome") == "claimed":
                 ids = disposition.get("claim_ids")
@@ -101,8 +153,7 @@ def _claims(*outputs: dict[str, Any]) -> tuple[FeatureClaim, ...]:
 
 def _flows(*outputs: dict[str, Any]) -> tuple[FeatureFlow, ...]:
     flows: list[FeatureFlow] = []
-    for document in outputs:
-        output = document.get("output", {})
+    for output in outputs:
         if not isinstance(output, dict):
             raise ContractError("recovery output is invalid")
         flows.extend(FeatureFlow.from_dict(row, "recovery flow") for row in output.get("flows", []))
@@ -112,16 +163,16 @@ def _flows(*outputs: dict[str, Any]) -> tuple[FeatureFlow, ...]:
     return tuple(sorted(flows, key=lambda flow: flow.flow_id))
 
 
-def _coverage(scope: ModuleScope, sync: dict[str, Any], async_doc: dict[str, Any],
+def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc: dict[str, Any],
               closure: str) -> dict[str, CoverageStatus]:
-    def status(output: dict[str, Any]) -> str:
-        rows = output.get("dispositions", [])
+    def status(outputs: tuple[dict[str, Any], ...]) -> str:
+        rows = [row for output in outputs for row in output.get("dispositions", [])]
         if not rows:
             return "unavailable"
         return "partial" if any(isinstance(row, dict) and row.get("outcome") == "unknown" for row in rows) else "complete"
 
-    sync_status = status(sync["output"])
-    async_status = status(async_doc["output"])
+    sync_status = status(sync_outputs)
+    async_status = status((async_doc["output"],))
     kinds = {
         row.get("boundary_kind") for row in async_doc.get("requirements", {}).get("requirements", [])
         if isinstance(row, dict)
@@ -140,9 +191,28 @@ def _coverage(scope: ModuleScope, sync: dict[str, Any], async_doc: dict[str, Any
         dimensions[dimension] = CoverageStatus(Coverage(
             "applicable" if present else "unknown", async_status if present else "unavailable", (),
             () if present else ("no feature-local provider evidence was observed",)), closure, ())
-    if any(seed.kind == "ui-action" for seed in scope.seeds):
+    selected_seed_ids = {
+        seed_id for candidate in scope.candidates if candidate.disposition == "selected"
+        for seed_id in candidate.seed_ids
+    }
+    if any(seed.kind == "ui-action" and seed.seed_id in selected_seed_ids for seed in scope.seeds):
         dimensions["ui-entry"] = CoverageStatus(Coverage("applicable", "complete", (), ()), closure, ())
+    else:
+        dimensions["ui-entry"] = CoverageStatus(Coverage(
+            "unknown", "unavailable", (),
+            ("no selected source-verified UI entry anchor was observed",)), closure, ())
     return dimensions
+
+
+def _require_authoritative_coverage(dimensions: dict[str, CoverageStatus]) -> None:
+    """A failed required provider can yield a partial run, never completion."""
+    incomplete = sorted(
+        name for name, value in dimensions.items()
+        if value.coverage.applicability == "applicable" and value.coverage.status != "complete"
+    )
+    if incomplete:
+        raise ContractError(
+            "mandatory feature dimensions are incomplete: " + ", ".join(incomplete))
 
 
 def build(context: SourceContext) -> ModuleModel:
@@ -168,7 +238,7 @@ def build(context: SourceContext) -> ModuleModel:
     if None in actual_boundary_ids or actual_boundary_ids != expected_boundary_ids \
             or len(actual_boundary_ids) != len(boundary_rows):
         raise ContractError("feature boundary closure must disposition every relevant provider item exactly once")
-    sync = _recovery(context, driver, task_id="module-sync-recovery", filename="sync-recovery.json", schema="sync-recovery/v1")
+    sync_outputs = _sync_recovery_outputs(context, driver)
     async_doc = _recovery(context, driver, task_id="module-async-recovery", filename="async-recovery.json", schema="async-recovery/v1")
     nodes = tuple(FeatureNode.from_dict(row, "boundary graph node") for row in graph.get("nodes", []))
     edges = tuple(FeatureEdge.from_dict(row, "boundary graph edge") for row in graph.get("edges", []))
@@ -187,11 +257,13 @@ def build(context: SourceContext) -> ModuleModel:
     closure = "blocked" if "blocked" in states else "open" if "unresolved" in states else "closed"
     if closure != "closed":
         raise ContractError("mandatory feature frontiers remain unresolved or blocked")
+    dimensions = _coverage(scope, sync_outputs, async_doc, closure)
+    _require_authoritative_coverage(dimensions)
     return ModuleModel(
         feature_id=scope.feature_id, nodes=tuple(sorted(nodes, key=lambda node: node.node_id)),
-        edges=tuple(sorted(edges, key=lambda edge: edge.edge_id)), claims=_claims(sync, async_doc),
-        flows=_flows(sync, async_doc), dispositions=tuple(sorted(dispositions, key=lambda item: item.frontier_id)),
-        dimension_coverage=_coverage(scope, sync, async_doc, closure), closure_status=closure,
+        edges=tuple(sorted(edges, key=lambda edge: edge.edge_id)), claims=_claims(*sync_outputs, async_doc["output"]),
+        flows=_flows(*sync_outputs, async_doc["output"]), dispositions=tuple(sorted(dispositions, key=lambda item: item.frontier_id)),
+        dimension_coverage=dimensions, closure_status=closure,
     )
 
 

@@ -9,7 +9,9 @@ from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.frontier_candidates import write as write_candidates
 from analysis_wrapper.module_drill.span_fetch import write as write_spans
 from analysis_wrapper.module_drill.span_plan import write as write_plan
-from analysis_wrapper.module_drill.sync_recovery import build_packet
+from analysis_wrapper.module_drill.sync_recovery import (
+    INPUT_BUDGET_TOKENS, _bounded_packets, _estimated_input_tokens, build_packets,
+)
 from analysis_wrapper.module_drill.sync_recovery import finalize, register
 from analysis_wrapper.module_drill.driver import ModuleDriver
 from analysis_wrapper.orchestrator.contracts import ExecutorInfo, TaskResult, TaskTiming, ValidationOutcome
@@ -18,12 +20,21 @@ from analysis_wrapper.orchestrator.schemas import validate_output
 from test_module_drill_frontier_candidates import _prepared
 
 
-def _packet(tmp_path):
+def _packets(tmp_path):
     module_run = _prepared(tmp_path)
     write_candidates(load(module_run))
     write_plan(load(module_run))
     write_spans(load(module_run))
-    return module_run, build_packet(load(module_run))
+    return module_run, build_packets(load(module_run))
+
+
+def _packet(tmp_path):
+    """Return a representative local packet for schema-level tests."""
+    module_run, packets = _packets(tmp_path)
+    return module_run, max(
+        packets,
+        key=lambda packet: len(json.loads(packet.inputs["sync-requirements.json"].content)["requirements"]),
+    )
 
 
 def _output(packet):
@@ -44,10 +55,66 @@ def _output(packet):
 def test_packet_uses_only_local_graph_and_plan_bound_semantic_spans(tmp_path):
     _, packet = _packet(tmp_path)
     assert packet.task_type == "module-sync-recovery"
-    assert set(packet.inputs) == {"sync-requirements.json", "feature-graph.json", "semantic-spans.json"}
+    assert set(packet.inputs) == {
+        "sync-requirements.json", "feature-graph.json", "semantic-spans.json", "partition.json",
+    }
     requirements = json.loads(packet.inputs["sync-requirements.json"].content)["requirements"]
     assert requirements
     assert len({row["requirement_id"] for row in requirements}) == len(requirements)
+
+
+def test_packets_are_bounded_and_disposition_the_complete_requirement_universe_once(tmp_path):
+    _, packets = _packets(tmp_path)
+    assert packets
+    requirement_ids = set()
+    packet_ids = set()
+    for packet in packets:
+        assert packet.task_id not in packet_ids
+        packet_ids.add(packet.task_id)
+        assert packet.task_id.startswith("module-sync-recovery-")
+        assert _estimated_input_tokens(packet) <= INPUT_BUDGET_TOKENS
+        partition = json.loads(packet.inputs["partition.json"].content)
+        local_ids = set(partition["requirement_ids"])
+        assert local_ids
+        assert not requirement_ids & local_ids
+        requirement_ids.update(local_ids)
+        local_requirements = {
+            row["requirement_id"]
+            for row in json.loads(packet.inputs["sync-requirements.json"].content)["requirements"]
+        }
+        assert local_requirements == local_ids
+    assert requirement_ids
+
+
+def test_large_semantic_group_splits_only_on_whole_requirements():
+    """A context limit never causes a requirement to be truncated or copied."""
+    graph = {
+        "nodes": [{
+            "node_id": f"node-{index}", "kind": "route",
+            "evidence_refs": [f"ref-{index}-" + "x" * 40_000],
+        } for index in range(3)],
+        "edges": [],
+    }
+    requirements = {
+        "schema_version": "module-sync-recovery-requirements/v1",
+        "feature_graph_digest": "graph", "semantic_spans_digest": "spans", "feature_id": "feature",
+        "requirements": [{
+            "requirement_id": f"requirement-anchor-node-{index}", "kind": "graph-anchor",
+            "anchor_ids": [f"node-{index}"], "evidence_refs": graph["nodes"][index]["evidence_refs"],
+        } for index in range(3)],
+    }
+    packets = _bounded_packets(
+        None, group="routes", requirements=requirements, graph=graph, spans={"spans": []},
+        rows=requirements["requirements"],
+    )
+    assert len(packets) > 1
+    seen = set()
+    for packet in packets:
+        assert _estimated_input_tokens(packet) <= INPUT_BUDGET_TOKENS
+        ids = set(json.loads(packet.inputs["partition.json"].content)["requirement_ids"])
+        assert not seen & ids
+        seen.update(ids)
+    assert seen == {row["requirement_id"] for row in requirements["requirements"]}
 
 
 def test_sync_output_requires_exact_requirement_dispositions(tmp_path):
@@ -95,25 +162,34 @@ def test_unresolved_semantic_span_cannot_be_disguised_as_a_clean_outcome(tmp_pat
 
 
 def test_sync_recovery_materializes_only_a_validated_current_packet(tmp_path):
-    module_run, packet = _packet(tmp_path)
+    module_run, packets = _packets(tmp_path)
     driver = ModuleDriver(module_run)
-    assert register(module_run) == ["module-sync-recovery"]
-    claim = driver.claim(1, executor_kind="test", model="test-model")[0]
-    at = now_iso()
-    output = _output(packet)
-    result = TaskResult(
-        task_id="module-sync-recovery", status="ok", output=output,
-        executor=ExecutorInfo(kind="test", model="test-model", params={}),
-        timing=TaskTiming(started_at=at, finished_at=at, wall_clock_s=0.0),
-        tokens=None, validation=ValidationOutcome(passed=True, failures=()), attempt=claim.attempt,
-    )
-    assert driver.submit(claim.packet.task_id, result.to_dict())["status"] == "validated"
+    created = register(module_run)
+    assert set(created) == {packet.task_id for packet in packets}
+    expected = {packet.task_id: packet for packet in packets}
+    outputs = {}
+    for _ in packets:
+        claim = driver.claim(1, executor_kind="test", model="test-model")[0]
+        packet = expected[claim.packet.task_id]
+        assert claim.packet.input_digest == packet.input_digest
+        at = now_iso()
+        output = _output(packet)
+        outputs[packet.task_id] = output
+        result = TaskResult(
+            task_id=packet.task_id, status="ok", output=output,
+            executor=ExecutorInfo(kind="test", model="test-model", params={}),
+            timing=TaskTiming(started_at=at, finished_at=at, wall_clock_s=0.0),
+            tokens=None, validation=ValidationOutcome(passed=True, failures=()), attempt=claim.attempt,
+        )
+        assert driver.submit(packet.task_id, result.to_dict())["status"] == "validated"
     document = json.loads(finalize(module_run).read_text())
-    assert document["schema_version"] == "sync-recovery/v1"
-    assert document["output"] == output
+    assert document["schema_version"] == "sync-recovery/v2"
+    assert {row["task_id"] for row in document["tasks"]} == set(outputs)
+    assert {row["task_id"]: row["output"] for row in document["tasks"]} == outputs
 
 
 def test_cli_registers_the_bounded_sync_recovery_task(tmp_path, capsys):
     module_run, _ = _packet(tmp_path)
     assert main(["module-plan-sync-recovery", "--run", str(module_run)]) == 0
-    assert json.loads(capsys.readouterr().out)["created"] == ["module-sync-recovery"]
+    created = json.loads(capsys.readouterr().out)["created"]
+    assert created and all(task_id.startswith("module-sync-recovery-") for task_id in created)

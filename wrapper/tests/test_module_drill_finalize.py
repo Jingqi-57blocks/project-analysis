@@ -15,7 +15,7 @@ from analysis_wrapper.module_drill.frontier_candidates import write as write_can
 from analysis_wrapper.module_drill.graph_closure import write as write_graph_closure
 from analysis_wrapper.module_drill.span_fetch import write as write_spans
 from analysis_wrapper.module_drill.span_plan import write as write_plan
-from analysis_wrapper.module_drill.sync_recovery import build_packet as sync_packet
+from analysis_wrapper.module_drill.sync_recovery import build_packets as sync_packets
 from analysis_wrapper.module_drill.sync_recovery import finalize as finalize_sync, register as register_sync
 from analysis_wrapper.orchestrator.contracts import ExecutorInfo, TaskResult, TaskTiming, ValidationOutcome
 from analysis_wrapper.orchestrator.engine import now_iso
@@ -42,7 +42,7 @@ def _submit(driver, packet, output):
     assert driver.submit(packet.task_id, result.to_dict())["status"] == "validated"
 
 
-def _ready(tmp_path):
+def _ready(tmp_path, *, sync_outcome="no-concern-observed"):
     module_run = _prepared(tmp_path)
     write_candidates(load(module_run))
     write_graph_closure(load(module_run))
@@ -50,9 +50,24 @@ def _ready(tmp_path):
     write_spans(load(module_run))
     write_boundary_closure(load(module_run))
     driver = ModuleDriver(module_run)
-    sync = sync_packet(load(module_run))
+    sync = sync_packets(load(module_run))
     register_sync(module_run)
-    _submit(driver, sync, _no_concern(sync, "sync-requirements.json"))
+    expected_sync = {packet.task_id: packet for packet in sync}
+    for _ in sync:
+        claim = driver.claim(1, executor_kind="test", model="test-model")[0]
+        packet = expected_sync[claim.packet.task_id]
+        now = now_iso()
+        output = _no_concern(packet, "sync-requirements.json")
+        if sync_outcome != "no-concern-observed":
+            output["dispositions"][0]["outcome"] = sync_outcome
+            output["dispositions"][0]["reason"] = "source span could not establish the required behaviour"
+        result = TaskResult(
+            task_id=packet.task_id, status="ok", output=output,
+            executor=ExecutorInfo(kind="test", model="test-model", params={}),
+            timing=TaskTiming(started_at=now, finished_at=now, wall_clock_s=0.0),
+            tokens=None, validation=ValidationOutcome(passed=True, failures=()), attempt=claim.attempt,
+        )
+        assert driver.submit(packet.task_id, result.to_dict())["status"] == "validated"
     finalize_sync(module_run)
     async_task = async_packet(load(module_run))
     register_async(module_run)
@@ -98,6 +113,28 @@ def test_unresolved_mandatory_frontier_fails_closed_without_module_model(tmp_pat
 
     assert model_path is None and not audit.passed
     assert "mandatory feature frontiers" in audit.failed_checks[0]
+
+
+def test_tampered_sync_partition_receipt_fails_closed_without_module_model(tmp_path):
+    module_run = _ready(tmp_path)
+    sync_path = module_run / "evidence" / "sync-recovery.json"
+    sync = json.loads(sync_path.read_text())
+    sync["tasks"][0]["partition"]["requirement_ids"] = ["requirement-invented"]
+    sync_path.write_text(json.dumps(sync), encoding="utf-8")
+
+    model_path, audit = finalize(module_run)
+
+    assert model_path is None and not audit.passed
+    assert "partition receipt" in audit.failed_checks[0]
+
+
+def test_incomplete_mandatory_provider_coverage_fails_closed(tmp_path):
+    module_run = _ready(tmp_path, sync_outcome="unknown")
+
+    model_path, audit = finalize(module_run)
+
+    assert model_path is None and not audit.passed
+    assert "mandatory feature dimensions are incomplete: synchronous-behavior" in audit.failed_checks[0]
 
 
 def test_cli_returns_nonzero_when_final_audit_fails(tmp_path, capsys):
