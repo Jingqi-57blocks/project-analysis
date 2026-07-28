@@ -24,14 +24,17 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from ..module_drill.protocol import MODULE_TASK_TYPES
+
 ORCHESTRATOR_CONTRACT_VERSION = "1.0.0"
 
 # One task packet per unit of LLM/tool work the orchestrator hands out. Every
 # task type maps to exactly one output schema in ``schemas.py``.
-TASK_TYPES = frozenset({
+OVERVIEW_TASK_TYPES = frozenset({
     "lens-findings", "formation-proposal", "boundary-resolution", "dedup-rank",
     "section-generate", "repair-edit-ops", "coherence-check", "selection-fetch",
 })
+TASK_TYPES = OVERVIEW_TASK_TYPES | MODULE_TASK_TYPES
 
 LEDGER_EVENTS = frozenset({"created", "claimed", "submitted", "validated", "failed"})
 RESULT_STATUSES = frozenset({"ok", "failed"})

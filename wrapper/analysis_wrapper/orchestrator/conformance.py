@@ -1,9 +1,9 @@
 """Executor conformance fixtures for the orchestrator protocol (57B-113 / 57B-115, M1).
 
 One realistic, minimal :class:`~.contracts.TaskPacket` PLUS one golden,
-schema-valid output per task type in :data:`~.contracts.TASK_TYPES` (eight
-fixtures total). ``run_conformance`` materializes a temp run dir, loads the
-fixture DAG (the eight fixtures are mutually independent — no
+schema-valid output per task type in :data:`~.contracts.TASK_TYPES`.
+``run_conformance`` materializes a temp run dir, loads the fixture DAG (the
+fixtures are mutually independent — no
 ``depends_on`` between them), and submits either:
 
   - the golden outputs (the default, no network, no model call — a
@@ -194,6 +194,60 @@ FIXTURES: tuple[Fixture, ...] = (
                 "quoted_text": "export const example = 1;",
             }],
         },
+    ),
+    # Module Drill uses the same packet/ledger/executor protocol as overview,
+    # but owns its task vocabulary and output envelopes. Keep one deliberately
+    # small golden per envelope here; later phases add semantic cross-check
+    # fixtures when their concrete source universes exist.
+    _fixture(
+        "module-candidate-ranking",
+        "Select only from the supplied candidate IDs and return the Module Drill ranking schema.",
+        {"candidates": "candidate-conformance-a: observed feature seed."},
+        "module-candidate-ranking/v1",
+        {"candidate_ids": ["candidate-conformance-a"],
+         "selected_candidate_id": "candidate-conformance-a"},
+    ),
+    _fixture(
+        "module-frontier-expansion",
+        "Return the Module Drill frontier-expansion output schema.",
+        {"frontiers": "No frontiers are supplied for this conformance fixture."},
+        "module-frontier-expansion/v1",
+        {"dispositions": []},
+    ),
+    _fixture(
+        "module-sync-recovery",
+        "Return the Module Drill synchronous-recovery output schema.",
+        {"anchors": "No semantic anchors are supplied for this conformance fixture."},
+        "module-sync-recovery/v1",
+        {"claims": [], "flows": []},
+    ),
+    _fixture(
+        "module-async-recovery",
+        "Return the Module Drill asynchronous-recovery output schema.",
+        {"anchors": "No semantic anchors are supplied for this conformance fixture."},
+        "module-async-recovery/v1",
+        {"claims": [], "flows": []},
+    ),
+    _fixture(
+        "module-model-merge",
+        "Return the Module Drill model-merge output schema.",
+        {"shards": "No model shards are supplied for this conformance fixture."},
+        "module-model-merge/v1",
+        {"module_model": {}},
+    ),
+    _fixture(
+        "module-claim-verification",
+        "Return the Module Drill claim-verification output schema.",
+        {"claims": "No claims are supplied for this conformance fixture."},
+        "module-claim-verification/v1",
+        {"verdicts": []},
+    ),
+    _fixture(
+        "module-section-generate",
+        "Return the Module Drill section-generation output schema.",
+        {"claims": "No claims are supplied for this conformance fixture."},
+        "module-section-generate/v1",
+        {"sections": []},
     ),
 )
 

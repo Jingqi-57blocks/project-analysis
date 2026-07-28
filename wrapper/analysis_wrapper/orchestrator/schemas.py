@@ -24,6 +24,8 @@ import re
 from typing import Any, Callable, Mapping
 
 from .. import module_map
+from ..module_drill import schemas as module_drill_schemas
+from ..module_drill.protocol import MODULE_TASK_TYPES
 from .contracts import TASK_TYPES
 
 Failure = dict[str, str]
@@ -702,6 +704,9 @@ _VALIDATORS: dict[str, Callable[[Any], list[Failure]]] = {
     "repair-edit-ops": _validate_repair_edit_ops,
     "coherence-check": _validate_coherence_check,
     "selection-fetch": _validate_selection_fetch,
+    **{task_type: (lambda output, task_type=task_type:
+                    module_drill_schemas.validate_output(task_type, output))
+       for task_type in MODULE_TASK_TYPES},
 }
 
 assert set(_VALIDATORS) == TASK_TYPES  # every task type has exactly one schema
