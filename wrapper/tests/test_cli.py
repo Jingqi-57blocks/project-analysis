@@ -427,6 +427,13 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
     run_provenance.write(run, run_provenance.create_document(
         TargetSpec([target]), analyzer_root=tmp_path,
         language="en", analyzed_at=state.analyzed_at))
+    # Simulate an interrupted first signals pass: it left write-once output
+    # but never committed the run-summary marker.  The next prepare call must
+    # clean only this pending stage and run it again, rather than permanently
+    # refusing the overview run.
+    partial_signals = run / "signals"
+    partial_signals.mkdir()
+    (partial_signals / "interrupted.view.txt").write_text("partial\n", "utf-8")
 
     def sweep(_args, _spec, out, _identities, **_kwargs):
         view = Path(out) / f"fixture-{repository.artifact_key}.view.txt"
