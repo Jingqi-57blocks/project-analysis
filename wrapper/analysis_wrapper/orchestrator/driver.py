@@ -177,11 +177,38 @@ def _phase_judgment(state: RunState) -> bool:
 
 def _phase_module_map(state: RunState) -> bool:
     from .. import module_map
-    outcome = state.phase("module map: write + finalize")
+    from . import planner
+    outcome = state.phase("module map: write + structural finalize")
     formation.write(state.run)
     module_map.expand_candidate_rules(state.run)
     module_map.validate(state.run)
-    outcome.detail = "zero-omission/zero-overlap gate passed"
+    refined = formation.apply_boundary_resolution(state.run)
+    if refined:
+        module_map.validate(state.run)
+    quality_path = formation.write_quality(state.run, refined=refined)
+    quality = json.loads(quality_path.read_text("utf-8"))
+    if quality.get("requires_boundary_resolution") and not refined:
+        boundary = state.phase("module map: resolve structural remainder")
+        planned = planner.plan_boundary_resolution(
+            state.run, context_budget_tokens=state.context_budget_tokens)
+        if planned is not None and not _drain(state, boundary):
+            boundary.finished_at = time.monotonic()
+            return False
+        if not formation.apply_boundary_resolution(state.run):
+            raise DriverError("boundary-resolution did not produce an applicable validated output")
+        module_map.validate(state.run)
+        quality_path = formation.write_quality(state.run, refined=True)
+        quality = json.loads(quality_path.read_text("utf-8"))
+        boundary.detail = "targeted unresolved candidates resolved with structural context"
+        boundary.finished_at = time.monotonic()
+    if quality.get("status") != "passed":
+        raise DriverError("module formation structural gate blocked completion: " +
+                          "; ".join(row.get("reason", "unknown")
+                                    for row in quality.get("blockers", [])[:5]))
+    diagnostics = quality.get("diagnostics", {})
+    outcome.detail = ("zero-omission/zero-overlap and structural gate passed; "
+                      f"partitions={diagnostics.get('partition_count', 0)}, "
+                      f"cross-links={diagnostics.get('cross_link_count', 0)}")
     outcome.finished_at = time.monotonic()
     return True
 
