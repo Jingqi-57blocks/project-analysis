@@ -240,9 +240,13 @@ FIXTURES: tuple[Fixture, ...] = (
     _fixture(
         "module-async-recovery",
         "Return the Module Drill asynchronous-recovery output schema.",
-        {"anchors": "No semantic anchors are supplied for this conformance fixture."},
+        {
+            "async-requirements.json": json.dumps({"requirements": []}),
+            "feature-boundary-closure.json": json.dumps({"nodes": [], "edges": [], "boundary_dispositions": []}),
+            "semantic-spans.json": json.dumps({"spans": []}),
+        },
         "module-async-recovery/v1",
-        {"claims": [], "flows": []},
+        {"dispositions": [], "claims": [], "flows": []},
     ),
     _fixture(
         "module-model-merge",

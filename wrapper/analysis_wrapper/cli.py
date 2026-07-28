@@ -358,6 +358,12 @@ def parser() -> argparse.ArgumentParser:
     module_finalize_sync = sub.add_parser(
         "module-finalize-sync-recovery", help="materialize validated synchronous Module Drill recovery")
     module_finalize_sync.add_argument("--run", required=True)
+    module_async_recovery = sub.add_parser(
+        "module-plan-async-recovery", help="register bounded asynchronous Module Drill recovery")
+    module_async_recovery.add_argument("--run", required=True)
+    module_finalize_async = sub.add_parser(
+        "module-finalize-async-recovery", help="materialize validated asynchronous Module Drill recovery")
+    module_finalize_async.add_argument("--run", required=True)
     finalize_map = sub.add_parser(
         "finalize-module-map",
         help="validate complete candidate dispositions in module-map.json, "

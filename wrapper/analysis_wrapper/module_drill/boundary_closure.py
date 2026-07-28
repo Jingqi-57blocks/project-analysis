@@ -111,6 +111,7 @@ def _disposition(item: dict[str, Any], *, state: str, reason: str,
         # This key prevents a later traversal wave from silently re-expanding
         # the same handler-to-boundary pair.
         "cycle_key": "boundary-" + _token(evidence_id),
+        "evidence_refs": sorted(item["source_refs"]),
         "data": dict(item.get("data", {})),
         "state": state, "reason": reason, "resulting_ids": resulting_ids,
         "coverage_impact": coverage_impact,
