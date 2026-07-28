@@ -251,6 +251,7 @@ def _crosscheck_sync_recovery(output: Any, packet_inputs: Mapping[str, str]) -> 
     if missing:
         failures += _failure("sync-disposition-missing", "missing dispositions: " + ", ".join(missing), "dispositions")
     flow_ids: set[str] = set()
+    flows: list[FeatureFlow] = []
     for index, row in enumerate(output.get("flows", [])):
         try:
             flow = FeatureFlow.from_dict(row, f"flows[{index}]")
@@ -260,8 +261,49 @@ def _crosscheck_sync_recovery(output: Any, packet_inputs: Mapping[str, str]) -> 
         if flow.flow_id in flow_ids:
             failures += _failure("sync-flow", "flow IDs must be unique", f"flows[{index}].flow_id")
         flow_ids.add(flow.flow_id)
+        flows.append(flow)
         if not set(flow.edge_ids) <= allowed_anchors or not set(flow.claim_ids) <= claim_ids:
             failures += _failure("sync-flow", "flow references an unknown edge or claim", f"flows[{index}]")
+    # UI-to-route linkage is a deterministic, source-backed path in the
+    # feature graph.  It must survive semantic recovery even if no additional
+    # business-rule claim is established for the path.  Otherwise an executor
+    # can return a schema-valid empty ``flows`` list and silently remove the
+    # user-visible request chain from the final report.
+    edges_by_id = {
+        row.get("edge_id"): row for row in graph["edges"]
+        if isinstance(row, dict) and isinstance(row.get("edge_id"), str)
+    }
+    nodes_by_id = {
+        row.get("node_id"): row for row in graph["nodes"]
+        if isinstance(row, dict) and isinstance(row.get("node_id"), str)
+    }
+    ui_route_edges = [
+        row for row in edges_by_id.values()
+        if row.get("kind") == "ui-route"
+    ]
+    for ui_edge in ui_route_edges:
+        ui_edge_id = ui_edge["edge_id"]
+        covering = [flow for flow in flows if ui_edge_id in flow.edge_ids]
+        if not covering:
+            failures += _failure(
+                "sync-flow-ui-route",
+                "every supplied observed ui-route edge must be included in a flow",
+                ui_edge_id,
+            )
+            continue
+        route_id = ui_edge.get("target_node_id")
+        handler_edges = {
+            edge_id for edge_id, edge in edges_by_id.items()
+            if edge.get("kind") == "routes-to" and edge.get("source_node_id") == route_id
+            and isinstance(nodes_by_id.get(edge.get("target_node_id")), dict)
+            and nodes_by_id[edge["target_node_id"]].get("kind") in {"handler", "symbol"}
+        }
+        if handler_edges and not any(set(flow.edge_ids) & handler_edges for flow in covering):
+            failures += _failure(
+                "sync-flow-route-handler",
+                "a flow covering a ui-route edge must include an observed route-to-handler bridge when supplied",
+                ui_edge_id,
+            )
     return failures
 
 
