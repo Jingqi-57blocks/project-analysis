@@ -114,6 +114,22 @@ class ModuleDriver:
         return outcome
 
     def status(self) -> DriverStatus:
+        """Return a verified projection without erasing an authoritative completion.
+
+        ``refresh`` is deliberately used after mutable ledger operations so an
+        incomplete run always advertises its pending final audit.  A completed
+        run is different: its finalizer has already written the authoritative
+        audit projection.  Recomputing the generic pre-final projection while
+        merely asking for status would otherwise turn a passing run back into
+        ``complete=false``.  Preserve it only while both the source context and
+        append-only ledger still match; any drift falls back to the fail-closed
+        pending projection.
+        """
+        self.context = load_source_context(self.run)
+        prior = self._state()
+        task_states = self.engine.task_states()
+        if prior.complete and prior.audit.passed and prior.ledger_digest == self._ledger_digest():
+            return DriverStatus(prior.run_id, task_states, True, prior.audit)
         return self.refresh()
 
     def validated_task(self, task_id: str) -> tuple[TaskPacket, Any]:

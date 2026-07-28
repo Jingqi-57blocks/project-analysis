@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from analysis_wrapper.module_drill.driver import ModuleDriver
+from analysis_wrapper.module_drill.run_state import AuditResult, RunStateProjection
 from analysis_wrapper.module_drill.runtime import initialize_from_overview
 from analysis_wrapper.module_drill.validation import ContractError, sha256_json
 from analysis_wrapper.orchestrator.contracts import (
@@ -91,3 +92,28 @@ def test_driver_refuses_a_stale_source_before_state_changes(tmp_path):
     with pytest.raises(ContractError, match="source snapshot is stale"):
         driver.register([_packet()])
     assert not driver.engine.ledger_exists()
+
+
+def test_status_preserves_a_current_passing_final_audit(tmp_path):
+    """Read-only status inspection must not downgrade a finalized module run."""
+    driver = _driver(tmp_path)
+    driver.register([_packet()])
+    claim = driver.claim(1, executor_kind="host", model="gpt-test")[0]
+    driver.submit(claim.packet.task_id, _result(claim.packet.task_id, claim.attempt))
+
+    prior = driver._state()
+    final = RunStateProjection(
+        run_id=prior.run_id,
+        source_manifest_digest=prior.source_manifest_digest,
+        ledger_digest=driver._ledger_digest(),
+        complete=True,
+        audit=AuditResult(True, ("final-audit",), ()),
+    )
+    path = driver.run / "run-state.json"
+    path.write_text(json.dumps(final.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    observed = ModuleDriver(driver.run).status()
+
+    assert observed.complete is True
+    assert observed.audit.passed is True
+    assert json.loads(path.read_text(encoding="utf-8")) == final.to_dict()
