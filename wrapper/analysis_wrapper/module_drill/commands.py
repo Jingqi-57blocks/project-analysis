@@ -11,6 +11,7 @@ from ..orchestrator.contracts import TaskPacket
 from ..orchestrator.engine import EngineError
 from .driver import ModuleDriver
 from .feature_evidence import write as write_feature_evidence
+from .candidate_universe import write as write_candidate_universe
 from .context import load as load_source_context
 from .runtime import initialize_from_overview
 from .spans import fetch
@@ -104,6 +105,12 @@ def _evidence(args) -> int:
     return 0
 
 
+def _candidates(args) -> int:
+    out = write_candidate_universe(load_source_context(args.run))
+    _print({"candidates": str(out)})
+    return 0
+
+
 def run(args) -> int:
     """Dispatch a Module Drill subcommand and preserve normal CLI exit codes."""
     try:
@@ -111,6 +118,7 @@ def run(args) -> int:
             "module-init": _init, "module-status": _status, "module-register": _register,
             "module-next": _next, "module-submit": _submit, "module-fetch-spans": _spans,
             "module-build-evidence": _evidence,
+            "module-build-candidates": _candidates,
         }
         handler = handlers.get(args.command)
         if handler is None:

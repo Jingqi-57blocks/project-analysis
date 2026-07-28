@@ -322,6 +322,9 @@ def parser() -> argparse.ArgumentParser:
     module_evidence = sub.add_parser(
         "module-build-evidence", help="index verified canonical feature evidence")
     module_evidence.add_argument("--run", required=True)
+    module_candidates = sub.add_parser(
+        "module-build-candidates", help="build deterministic Module Drill candidates")
+    module_candidates.add_argument("--run", required=True)
     finalize_map = sub.add_parser(
         "finalize-module-map",
         help="validate complete candidate dispositions in module-map.json, "
