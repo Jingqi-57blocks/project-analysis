@@ -212,6 +212,61 @@ func bind(engine Router) {
     assert stats["group_chain_ambiguous"] == 1
 
 
+def test_route_handler_references_resolve_exact_same_file_js_definition(tmp_path):
+    backend = tmp_path / "svc"
+    _write(backend / "app.ts", '''
+const create = () => true;
+router.post("/records", create);
+router.post("/comment", /* punctuation ) */ create);
+router.post("/dynamic", factory(name));
+''')
+
+    rows = liveness.route_handler_references(backend)
+
+    by_path = {row.path: row for row in rows}
+    assert by_path["/records"].symbols == ("create",)
+    assert by_path["/records"].anchors == (("create", "app.ts:2"),)
+    assert by_path["/comment"].anchors == (("create", "app.ts:2"),)
+    assert by_path["/dynamic"].symbols == ("factory", "name")
+    assert by_path["/dynamic"].anchors == ()
+
+
+def test_route_handler_references_resolve_named_relative_js_import(tmp_path):
+    backend = tmp_path / "svc"
+    _write(backend / "handlers.ts", "export function create() { return true; }\n")
+    _write(backend / "routes.ts", '''
+import { create as createHandler } from "./handlers";
+router.post("/records", createHandler);
+''')
+
+    rows = liveness.route_handler_references(backend)
+
+    assert len(rows) == 1
+    assert rows[0].anchors == (("createHandler", "handlers.ts:1"),)
+
+
+def test_route_handler_references_resolve_local_go_import_inside_wrapper(tmp_path):
+    backend = tmp_path / "svc"
+    _write(backend / "go.mod", "module example.com/svc\n")
+    _write(backend / "handlers" / "create.go", '''package handlers
+func Create() {}
+type service struct{}
+func (service) Create() {}
+''')
+    _write(backend / "routes.go", '''package svc
+import "example.com/svc/handlers"
+func bind(router Router) {
+    router.POST("/records", catch(handlers.Create))
+}
+''')
+
+    rows = liveness.route_handler_references(backend)
+
+    assert len(rows) == 1
+    assert rows[0].symbols == ("catch", "handlers.Create")
+    assert rows[0].anchors == (("handlers.Create", "handlers/create.go:2"),)
+
+
 def test_ui_linkage_requires_compatible_http_method(tmp_path):
     frontend = tmp_path / "web"
     _write(frontend / "src" / "api.ts",

@@ -17,6 +17,7 @@ is not falsely credited to the one the caller does not bind (57B-15).
 
 from __future__ import annotations
 
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -66,6 +67,27 @@ _GO_GROUP_ENDPOINT = re.compile(
     r"\b(?P<receiver>[A-Za-z_]\w*)\."
     r"(?P<method>GET|POST|PUT|PATCH|DELETE)\s*\(\s*\"(?P<path>[^\"]*)\"")
 
+# This parser only follows the final handler argument of endpoint calls which
+# the route inventory has already recognized.  It never turns a route-shaped
+# method call into a route by itself.
+_ROUTE_CALL_START = re.compile(
+    r"\b(?P<receiver>[A-Za-z_$][\w$]*)\s*\.\s*"
+    r"(?P<method>GET|POST|PUT|PATCH|DELETE|get|post|put|patch|delete)\s*\(")
+_IDENTIFIER = re.compile(r"\b[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)?\b")
+_GO_FUNC = re.compile(r"(?m)^\s*func\s+(?P<name>[A-Za-z_]\w*)\s*\(")
+_JS_FUNC = re.compile(
+    r"(?m)^\s*(?:export\s+)?(?:async\s+)?function\s+(?P<name>[A-Za-z_$][\w$]*)\s*\(")
+_JS_VALUE = re.compile(
+    r"(?m)^\s*(?:export\s+)?(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\b")
+_GO_IMPORT = re.compile(
+    r"(?m)^\s*(?:(?P<alias>[A-Za-z_]\w*)\s+)?\"(?P<path>[^\"]+)\"\s*$")
+_JS_IMPORT = re.compile(
+    r"(?m)^\s*import\s+(?P<bindings>[^;\n]+?)\s+from\s+[\"'](?P<path>[^\"']+)[\"']")
+_KEYWORDS = frozenset({
+    "async", "await", "const", "delete", "export", "false", "function", "new",
+    "null", "return", "true", "undefined", "void",
+})
+
 
 @dataclass
 class RouteHit:
@@ -83,6 +105,22 @@ class ComposedRouteHit:
     full_path: str
     evidence: str
     composition_evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RouteHandlerReference:
+    """Syntactic handler references and exactly resolved local definitions.
+
+    ``symbols`` are observed text tokens only.  An ``anchor`` is emitted only
+    when its definition can be uniquely located in the analyzed repository.
+    Callers must keep the two categories distinct.
+    """
+
+    method: str
+    path: str
+    evidence: str
+    symbols: tuple[str, ...]
+    anchors: tuple[tuple[str, str], ...]
 
 
 @dataclass
@@ -232,6 +270,254 @@ def compose_go_route_paths(repo_path: str | Path,
 
 def _line_of(text: str, index: int) -> int:
     return text.count("\n", 0, index) + 1
+
+
+def _call_arguments(text: str, open_paren: int) -> tuple[tuple[int, int], ...] | None:
+    """Return top-level argument spans for one syntactically complete call.
+
+    This is deliberately a small lexical reader rather than a language parser.
+    It understands quoted strings and balanced delimiters so that a wrapper
+    around a handler (or a middleware list before it) does not split the final
+    argument at an inner comma.  Dynamic/unclosed expressions return ``None``.
+    """
+    if open_paren >= len(text) or text[open_paren] != "(":
+        return None
+    depth = 1
+    start = open_paren + 1
+    spans: list[tuple[int, int]] = []
+    quote = ""
+    escaped = False
+    index = start
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char == "/" and index + 1 < len(text) and text[index + 1] == "/":
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline + 1
+            continue
+        if char == "/" and index + 1 < len(text) and text[index + 1] == "*":
+            end_comment = text.find("*/", index + 2)
+            if end_comment < 0:
+                return None
+            index = end_comment + 2
+            continue
+        if char in {"'", '\"', "`"}:
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth < 0:
+                return None
+            if depth == 0:
+                if text[start:index].strip():
+                    spans.append((start, index))
+                return tuple(spans)
+        elif char == "," and depth == 1:
+            spans.append((start, index))
+            start = index + 1
+        index += 1
+    return None
+
+
+def _literal_route_path(text: str, span: tuple[int, int]) -> str | None:
+    raw = text[span[0]:span[1]].strip()
+    if len(raw) < 2 or raw[0] not in {"'", '\"'} or raw[-1] != raw[0]:
+        return None
+    value = raw[1:-1]
+    return value if value.startswith("/") or value == "" else None
+
+
+def _handler_symbols(text: str, span: tuple[int, int]) -> tuple[str, ...]:
+    """Extract identifier-shaped references, not arbitrary expression text."""
+    symbols = {
+        match.group(0).replace(" ", "")
+        for match in _IDENTIFIER.finditer(text[span[0]:span[1]])
+        if match.group(0).replace(" ", "") not in _KEYWORDS
+    }
+    return tuple(sorted(symbols))
+
+
+def _route_calls(text: str, relative: str) -> tuple[tuple[str, str, str, tuple[str, ...]], ...]:
+    rows: list[tuple[str, str, str, tuple[str, ...]]] = []
+    for match in _ROUTE_CALL_START.finditer(text):
+        arguments = _call_arguments(text, match.end() - 1)
+        if arguments is None or len(arguments) < 2:
+            continue
+        path = _literal_route_path(text, arguments[0])
+        if path is None:
+            continue
+        symbols = _handler_symbols(text, arguments[-1])
+        rows.append((match.group("method").upper(), path,
+                     f"{relative}:{_line_of(text, match.start())}", symbols))
+    return tuple(rows)
+
+
+def _definitions(text: str, suffix: str) -> dict[str, tuple[int, ...]]:
+    patterns = (_GO_FUNC,) if suffix == ".go" else (_JS_FUNC, _JS_VALUE)
+    found: dict[str, set[int]] = {}
+    for pattern in patterns:
+        for match in pattern.finditer(text):
+            found.setdefault(match.group("name"), set()).add(_line_of(text, match.start("name")))
+    return {name: tuple(sorted(lines)) for name, lines in found.items()}
+
+
+def _go_module_path(root: Path) -> str:
+    try:
+        for line in (root / "go.mod").read_text("utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("module "):
+                return stripped.removeprefix("module ").strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _go_imports(text: str) -> dict[str, str]:
+    """Map explicit or conventional Go import aliases to their import paths."""
+    rows: dict[str, str] = {}
+    block = re.search(r"(?ms)^\s*import\s*\((?P<body>.*?)^\s*\)", text)
+    sources = [block.group("body")] if block else []
+    for match in re.finditer(r'(?m)^\s*import\s+"(?P<path>[^"]+)"', text):
+        sources.append(f'"{match.group("path")}"')
+    for source in sources:
+        for match in _GO_IMPORT.finditer(source):
+            path = match.group("path")
+            alias = match.group("alias") or path.rstrip("/").rsplit("/", 1)[-1]
+            if alias not in {"_", "."}:
+                rows.setdefault(alias, path)
+    return rows
+
+
+def _source_candidates(relative: str) -> tuple[str, ...]:
+    path = Path(relative)
+    if path.suffix:
+        return (path.as_posix(),)
+    return tuple((Path(relative + suffix)).as_posix()
+                 for suffix in (".ts", ".tsx", ".js", ".jsx")) + (
+                     (path / "index.ts").as_posix(), (path / "index.tsx").as_posix(),
+                     (path / "index.js").as_posix(), (path / "index.jsx").as_posix(),
+                 )
+
+
+def _js_import_bindings(text: str, relative: str) -> dict[str, tuple[str, str]]:
+    """Map a simple local import binding to (source file, exported name)."""
+    rows: dict[str, tuple[str, str]] = {}
+    base = Path(relative).parent
+    for match in _JS_IMPORT.finditer(text):
+        imported = match.group("path")
+        if not imported.startswith("."):
+            continue
+        resolved = posixpath.normpath((base / imported).as_posix())
+        bindings = match.group("bindings").strip()
+        if bindings.startswith("{") and bindings.endswith("}"):
+            for entry in bindings[1:-1].split(","):
+                bits = [part.strip() for part in entry.split(" as ", 1)]
+                if not bits or not bits[0]:
+                    continue
+                rows[bits[-1]] = (resolved, bits[0])
+        elif re.fullmatch(r"[A-Za-z_$][\w$]*", bindings):
+            rows[bindings] = (resolved, "default")
+    return rows
+
+
+def _unique_anchor(candidates: list[tuple[str, int]]) -> tuple[str, int] | None:
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _resolve_go_symbol(symbol: str, *, relative: str, text: str,
+                       sources: dict[str, str], module_path: str) -> tuple[str, int] | None:
+    pieces = symbol.split(".")
+    if len(pieces) == 1:
+        return _unique_anchor([(relative, line) for line in _definitions(text, ".go").get(symbol, ())])
+    if len(pieces) != 2 or not module_path:
+        return None
+    imported = _go_imports(text).get(pieces[0])
+    prefix = module_path.rstrip("/") + "/"
+    if not imported or not imported.startswith(prefix):
+        return None
+    package_dir = imported.removeprefix(prefix).strip("/")
+    candidates: list[tuple[str, int]] = []
+    for candidate_relative, candidate_text in sources.items():
+        path = Path(candidate_relative)
+        if path.suffix != ".go" or path.parent.as_posix() != package_dir:
+            continue
+        candidates.extend((candidate_relative, line)
+                          for line in _definitions(candidate_text, ".go").get(pieces[1], ()))
+    return _unique_anchor(candidates)
+
+
+def _resolve_js_symbol(symbol: str, *, relative: str, text: str,
+                       sources: dict[str, str]) -> tuple[str, int] | None:
+    if "." in symbol:
+        return None
+    direct = _unique_anchor([(relative, line)
+                             for line in _definitions(text, Path(relative).suffix).get(symbol, ())])
+    if direct is not None:
+        return direct
+    binding = _js_import_bindings(text, relative).get(symbol)
+    if binding is None:
+        return None
+    imported, exported = binding
+    if exported == "default":
+        return None
+    candidates: list[tuple[str, int]] = []
+    for candidate_relative in _source_candidates(imported):
+        candidate_text = sources.get(candidate_relative)
+        if candidate_text is None:
+            continue
+        candidates.extend((candidate_relative, line) for line in
+                          _definitions(candidate_text, Path(candidate_relative).suffix).get(exported, ()))
+    return _unique_anchor(candidates)
+
+
+def route_handler_references(repo_path: str | Path,
+                             tier2_exclusions: list[str] | None = None,
+                             stats: dict | None = None) -> tuple[RouteHandlerReference, ...]:
+    """Recover exact local handler anchors for literal endpoint registrations.
+
+    A handler spelling without a uniquely located local definition remains a
+    reference only.  This provides an explicit graph frontier instead of a
+    fabricated implementation edge for wrappers, dynamic dispatch, external
+    packages, or unsupported source shapes.
+    """
+    root = Path(repo_path).expanduser().resolve()
+    tier2 = set(tier2_exclusions or [])
+    sources: dict[str, str] = {}
+    for path in _iter_source(root, stats):
+        relative = path.relative_to(root)
+        if (relative.parts and relative.parts[0] in tier2) or path.suffix not in {".go", ".js", ".jsx", ".ts", ".tsx"}:
+            continue
+        text = _read(path, stats)
+        if text:
+            sources[relative.as_posix()] = text
+    module_path = _go_module_path(root)
+    rows: list[RouteHandlerReference] = []
+    for relative, text in sorted(sources.items()):
+        suffix = Path(relative).suffix
+        for method, path, evidence, symbols in _route_calls(text, relative):
+            anchors: list[tuple[str, str]] = []
+            for symbol in symbols:
+                target = (_resolve_go_symbol(symbol, relative=relative, text=text,
+                                             sources=sources, module_path=module_path)
+                          if suffix == ".go" else
+                          _resolve_js_symbol(symbol, relative=relative, text=text, sources=sources))
+                if target is not None:
+                    target_relative, line = target
+                    anchors.append((symbol, f"{target_relative}:{line}"))
+            rows.append(RouteHandlerReference(
+                method=method, path=path, evidence=evidence, symbols=symbols,
+                anchors=tuple(sorted(set(anchors))),
+            ))
+    return tuple(sorted(rows, key=lambda row: (row.evidence, row.method, row.path, row.symbols)))
 
 
 def _norm_segments(path: str) -> list[str]:

@@ -18,8 +18,8 @@ from analysis_wrapper.orchestrator.engine import now_iso
 from test_module_drill_feature_evidence import _run
 
 
-def _prepared_scope(tmp_path):
-    _, module_run = _run(tmp_path)
+def _prepared_scope(tmp_path, **kwargs):
+    _, module_run = _run(tmp_path, **kwargs)
     write_feature_evidence(load(module_run))
     write_candidates(load(module_run))
     driver = ModuleDriver(module_run)
@@ -48,6 +48,22 @@ def test_graph_contains_only_selected_observed_anchors_and_exact_ui_route_edge(t
     assert [edge["kind"] for edge in graph["edges"]] == ["ui-route"]
     assert graph["frontiers"]
     assert all(row["wave"] == 0 for row in graph["frontiers"])
+
+
+def test_graph_adds_a_route_to_exact_source_resolved_handler_only(tmp_path):
+    module_run = _prepared_scope(tmp_path, route_handler_anchors=[{
+        "symbol": "createRecord", "evidence": "src/service.ts:15",
+    }])
+
+    graph = build(load(module_run))
+
+    handlers = [node for node in graph["nodes"] if node["kind"] == "handler"]
+    route_edges = [edge for edge in graph["edges"] if edge["kind"] == "routes-to"]
+    assert len(handlers) == 1
+    assert handlers[0]["observation"] == "observed"
+    assert handlers[0]["evidence_refs"] == ["service@NON-GIT:src/service.ts:15"]
+    assert len(route_edges) == 1
+    assert route_edges[0]["observation"] == "observed"
 
 
 def test_graph_refuses_scope_changed_after_ranking(tmp_path):

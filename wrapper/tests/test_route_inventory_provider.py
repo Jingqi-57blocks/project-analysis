@@ -95,11 +95,24 @@ def test_provider_gate_and_rows_match_direct_liveness_scan_on_a_real_backend(tmp
     assert fragment["applicable"] is True
     direct_hits = liveness.route_registrations(
         target.path, target.tier2_exclusions, include_mounts=True)
-    expected_rows = sorted(({
-        "method": hit.method, "path": hit.path, "route_evidence": hit.evidence,
-        "registration_kind": (
-            "mount" if hit.method.upper() in liveness._MOUNTS else "endpoint"),
-    } for hit in direct_hits), key=lambda row: (
+    handlers = {(row.method, row.evidence): row for row in
+                liveness.route_handler_references(target.path, target.tier2_exclusions)}
+    expected_rows = []
+    for hit in direct_hits:
+        row = {
+            "method": hit.method, "path": hit.path, "route_evidence": hit.evidence,
+            "registration_kind": (
+                "mount" if hit.method.upper() in liveness._MOUNTS else "endpoint"),
+        }
+        handler = handlers.get((hit.method, hit.evidence))
+        if handler is not None:
+            row["handler_references"] = list(handler.symbols)
+            row["handler_anchors"] = [
+                {"symbol": symbol, "evidence": evidence}
+                for symbol, evidence in handler.anchors
+            ]
+        expected_rows.append(row)
+    expected_rows.sort(key=lambda row: (
         row["method"], row["path"], row["route_evidence"]))
     assert fragment["rows"] == expected_rows
     assert len(fragment["rows"]) == 2
@@ -124,6 +137,8 @@ func bind(engine Router) {
     records.POST("", create)
     records.GET("/:id", get)
 }
+func create() {}
+func get() {}
 ''')
     run = tmp_path / "run"
     spec, report = emit.discover(ws)
@@ -141,6 +156,8 @@ func bind(engine Router) {
     assert root_post["composition_evidence"] == ["handlers.go:3", "handlers.go:4"]
     assert nested_get["path"] == "/:id"
     assert nested_get["full_path"] == "/api/records/:id"
+    assert root_post["handler_anchors"] == [{"symbol": "create", "evidence": "handlers.go:8"}]
+    assert nested_get["handler_anchors"] == [{"symbol": "get", "evidence": "handlers.go:9"}]
 
 
 def test_provider_gate_is_false_with_no_route_signal_and_no_profile(tmp_path):

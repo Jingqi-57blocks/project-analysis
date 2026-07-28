@@ -27,7 +27,8 @@ def _json(path: Path, value: dict) -> None:
 
 def _run(tmp_path: Path, *, route_count: int = 1,
          call_edges: list[dict] | None = None,
-         integration_path: str = "src/service.ts") -> tuple[Path, Path]:
+         integration_path: str = "src/service.ts",
+         route_handler_anchors: list[dict] | None = None) -> tuple[Path, Path]:
     files = {
         "src/routes.ts": "\n" * 6 + "registerRoute();\n",
         "src/ui.ts": "\n" * 11 + "submitRecord();\n",
@@ -41,7 +42,9 @@ def _run(tmp_path: Path, *, route_count: int = 1,
     overview = _prepared_overview(tmp_path, files)
     routes = [
         {"repository_ref": "service", "method": "POST", "path": f"/records/{index}",
-         "route_evidence": "src/routes.ts:7", "status": "ui-called"}
+         "route_evidence": "src/routes.ts:7", "status": "ui-called",
+         "handler_references": ["createRecord"],
+         "handler_anchors": list(route_handler_anchors or [])}
         for index in range(route_count)
     ]
     _json(overview / "routes" / "route-inventory.json", {"rows": routes})
