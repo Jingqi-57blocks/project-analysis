@@ -118,16 +118,34 @@ def _route_items(artifact_id: str, document: dict[str, Any],
             raise ContractError("route inventory row lacks repository_ref, method, path, or route_evidence")
         full_path = row.get("full_path", path)
         composition = row.get("composition_evidence", [])
+        handler_references = row.get("handler_references", [])
+        handler_anchors = row.get("handler_anchors", [])
         if not isinstance(full_path, str) or not full_path.startswith("/") \
                 or not isinstance(composition, list) \
-                or not all(isinstance(value, str) and value for value in composition):
+                or not all(isinstance(value, str) and value for value in composition) \
+                or not isinstance(handler_references, list) \
+                or not all(isinstance(value, str) and value for value in handler_references) \
+                or not isinstance(handler_anchors, list):
             raise ContractError("route inventory row has invalid composed-path evidence")
-        refs = _source_refs((evidence, *composition), repository_ref, revisions)
+        normalized_anchors: list[dict[str, Any]] = []
+        anchor_sites: list[str] = []
+        for anchor in handler_anchors:
+            if not isinstance(anchor, dict) or set(anchor) != {"symbol", "evidence"} \
+                    or not isinstance(anchor["symbol"], str) or not anchor["symbol"] \
+                    or not isinstance(anchor["evidence"], str) or not anchor["evidence"]:
+                raise ContractError("route inventory handler anchor is invalid")
+            anchor_refs = _source_refs((anchor["evidence"],), repository_ref, revisions)
+            normalized_anchors.append({"symbol": anchor["symbol"], "source_refs": list(anchor_refs)})
+            anchor_sites.append(anchor["evidence"])
+        refs = _source_refs((evidence, *composition, *anchor_sites), repository_ref, revisions)
         items.append(EvidenceItem(
             _id(artifact_id, "route", repository_ref, method, full_path, evidence, *composition), "route",
             (repository_ref,), refs, artifact_id,
             {"method": method, "path": full_path, "declared_path": path,
-             "status": row.get("status", "")},
+             "status": row.get("status", ""),
+             "handler_references": sorted(set(handler_references)),
+             "handler_anchors": sorted(normalized_anchors,
+                                       key=lambda item: (item["symbol"], item["source_refs"]))},
         ))
     return items
 

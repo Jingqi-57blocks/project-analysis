@@ -63,6 +63,33 @@ def test_candidates_expose_only_call_edges_adjacent_to_pending_route_handler(tmp
     assert row["observation"] == "observed"
 
 
+def test_candidates_do_not_treat_same_file_adjacency_as_a_handler_link(tmp_path):
+    unrelated = _edge()
+    unrelated["callee_symbol"] = "unrelatedFunction"
+    unrelated["callee_citation"] = "service@NON-GIT:src/service.ts:15"
+    _, module_run = _run(tmp_path, call_edges=[unrelated])
+    write_feature_evidence(load(module_run))
+    write_candidates(load(module_run))
+    driver = ModuleDriver(module_run)
+    driver.register((build_packet(driver.context),))
+    claim = driver.claim(1, executor_kind="test", model="test-model")[0]
+    rows = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())["candidates"]
+    candidate_id = next(row["candidate_id"] for row in rows if len(row["evidence_ids"]) == 2)
+    now = now_iso()
+    driver.submit(claim.packet.task_id, TaskResult(
+        task_id=TASK_ID, status="ok",
+        output={"decision": "selected", "candidate_ids": [candidate_id], "reason_code": "clear-dominant"},
+        executor=ExecutorInfo(kind="test", model="test-model", params={}),
+        timing=TaskTiming(started_at=now, finished_at=now, wall_clock_s=0.0),
+        tokens=None, validation=ValidationOutcome(passed=True, failures=()), attempt=claim.attempt,
+    ).to_dict())
+    finalize(module_run)
+    write_graph(load(module_run))
+    write_receipts(load(module_run))
+
+    assert build(load(module_run))["candidates"] == []
+
+
 def test_candidates_refuse_changed_canonical_callgraph(tmp_path):
     module_run = _prepared(tmp_path)
     context = load(module_run)

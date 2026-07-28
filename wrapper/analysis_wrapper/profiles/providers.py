@@ -971,12 +971,18 @@ class RouteInventoryProvider:
         notes: list[str] = []
         if applicable:
             stats: dict = {"file_cap_hit": False, "oversized": 0, "group_chain_ambiguous": 0}
+            handler_stats: dict = {"file_cap_hit": False, "oversized": 0}
             hits = liveness.route_registrations(
                 target.path, target.tier2_exclusions, stats, include_mounts=True)
             composed = {
                 (hit.method, hit.evidence): hit
                 for hit in liveness.compose_go_route_paths(
                     target.path, target.tier2_exclusions, stats)
+            }
+            handlers = {
+                (reference.method, reference.evidence): reference
+                for reference in liveness.route_handler_references(
+                    target.path, target.tier2_exclusions, handler_stats)
             }
             seen: set[tuple[str, str]] = set()
             for hit in hits:
@@ -992,6 +998,13 @@ class RouteInventoryProvider:
                 if resolved is not None:
                     row["full_path"] = resolved.full_path
                     row["composition_evidence"] = list(resolved.composition_evidence)
+                handler = handlers.get(key)
+                if handler is not None:
+                    row["handler_references"] = list(handler.symbols)
+                    row["handler_anchors"] = [
+                        {"symbol": symbol, "evidence": evidence}
+                        for symbol, evidence in handler.anchors
+                    ]
                 rows.append(row)
             # The regular route adapter intentionally recognizes literal paths
             # beginning with '/'. Go router groups legitimately register their
@@ -999,13 +1012,21 @@ class RouteInventoryProvider:
             for key, resolved in composed.items():
                 if key in seen or resolved.path:
                     continue
-                rows.append({
+                row = {
                     "method": resolved.method, "path": resolved.path,
                     "full_path": resolved.full_path,
                     "route_evidence": resolved.evidence,
                     "composition_evidence": list(resolved.composition_evidence),
                     "registration_kind": "endpoint",
-                })
+                }
+                handler = handlers.get(key)
+                if handler is not None:
+                    row["handler_references"] = list(handler.symbols)
+                    row["handler_anchors"] = [
+                        {"symbol": symbol, "evidence": evidence}
+                        for symbol, evidence in handler.anchors
+                    ]
+                rows.append(row)
             rows = sorted(rows, key=lambda row: (
                 row["method"], row["path"], row["route_evidence"]))
             if stats["file_cap_hit"] or stats["oversized"]:
@@ -1016,6 +1037,10 @@ class RouteInventoryProvider:
                 notes.append(
                     f"{repository_ref}: {stats['group_chain_ambiguous']} Go router group receiver "
                     "chain(s) were ambiguous; full paths were not inferred.")
+            if handler_stats["file_cap_hit"] or handler_stats["oversized"]:
+                notes.append(
+                    f"{repository_ref}: COVERAGE CAP in route-handler scan "
+                    f"(file_cap={handler_stats['file_cap_hit']}, oversized={handler_stats['oversized']})")
 
         routes_dir = create_stage_dir(run_dir / "routes")
         fragments_dir = create_stage_dir(routes_dir / ".fragments")

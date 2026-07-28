@@ -33,16 +33,19 @@ def _load_graph(context: SourceContext) -> dict[str, Any]:
 
 def _state(frontier: dict[str, Any], edges: list[dict[str, Any]]) -> dict[str, Any]:
     anchor = frontier["anchor_id"]
-    if frontier["edge_kind"] == "ui-route":
+    if frontier["edge_kind"] in {"ui-route", "route-handler"}:
         source_node = "node-" + anchor.removeprefix("seed-")
+        expected_kind = "ui-route" if frontier["edge_kind"] == "ui-route" else "routes-to"
         targets = sorted({edge["target_node_id"] for edge in edges
-                          if edge.get("kind") == "ui-route"
+                          if edge.get("kind") == expected_kind
                           and edge.get("source_node_id") == source_node})
         if targets:
             return {
                 "frontier_id": frontier["frontier_id"], "state": "expanded",
                 "resulting_ids": targets,
-                "reason": "exact observed UI-to-route graph edge",
+                "reason": ("exact observed UI-to-route graph edge"
+                           if expected_kind == "ui-route"
+                           else "exact observed route-to-handler graph edge"),
             }
     return {
         "frontier_id": frontier["frontier_id"], "state": "pending",

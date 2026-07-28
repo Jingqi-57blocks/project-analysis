@@ -23,6 +23,21 @@ def test_receipts_expand_only_exact_ui_route_edges(tmp_path):
     assert expanded["reason"] == "exact observed UI-to-route graph edge"
 
 
+def test_receipts_expand_exact_route_to_handler_edges(tmp_path):
+    module_run = _prepared_scope(tmp_path, route_handler_anchors=[{
+        "symbol": "createRecord", "evidence": "src/service.ts:15",
+    }])
+    write_graph(load(module_run))
+
+    state = build(load(module_run))
+
+    expanded = [row for row in state["frontiers"] if row["state"] == "expanded"]
+    assert {row["reason"] for row in expanded} == {
+        "exact observed UI-to-route graph edge",
+        "exact observed route-to-handler graph edge",
+    }
+
+
 def test_receipts_refuse_a_tampered_graph_binding(tmp_path):
     module_run = _prepared_scope(tmp_path)
     graph_path = write_graph(load(module_run))

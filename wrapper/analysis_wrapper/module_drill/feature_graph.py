@@ -136,13 +136,57 @@ def _ui_route_edges(items: tuple[dict[str, Any], ...], nodes: dict[str, FeatureN
     return tuple(sorted(edges, key=lambda edge: edge.edge_id))
 
 
+def _route_handler_edges(items: tuple[dict[str, Any], ...],
+                         nodes: dict[str, FeatureNode]) -> tuple[FeatureEdge, ...]:
+    """Attach only uniquely source-resolved route handler definitions.
+
+    A route inventory may also carry handler *references* which could not be
+    resolved to a definition.  Those remain a pending frontier; constructing a
+    node for them here would turn a token spelling into an invented code unit.
+    """
+    edges: list[FeatureEdge] = []
+    for item in items:
+        if item.get("kind") != "route":
+            continue
+        data = item.get("data")
+        if not isinstance(data, dict):
+            raise ContractError("route evidence has invalid data")
+        anchors = data.get("handler_anchors", [])
+        if not isinstance(anchors, list):
+            raise ContractError("route handler anchors must be a list")
+        source_id = nodes[item["evidence_id"]].node_id
+        repository_ref = item["repository_refs"][0]
+        for anchor in anchors:
+            if not isinstance(anchor, dict):
+                raise ContractError("route handler anchor must be an object")
+            symbol, refs = anchor.get("symbol"), anchor.get("source_refs")
+            if not isinstance(symbol, str) or not symbol \
+                    or not isinstance(refs, list) or not refs \
+                    or not all(isinstance(ref, str) and ref for ref in refs):
+                raise ContractError("route handler anchor has invalid fields")
+            target_id = "node-handler-" + _token(repository_ref, symbol, *sorted(refs))
+            nodes.setdefault(target_id, FeatureNode(
+                node_id=target_id, kind="handler", repository_ref=repository_ref,
+                observation="observed", evidence_refs=tuple(sorted(set(refs))),
+            ))
+            edges.append(FeatureEdge(
+                edge_id="edge-" + _token(source_id, target_id, "routes-to"),
+                kind="routes-to", source_node_id=source_id, target_node_id=target_id,
+                observation="observed",
+                evidence_refs=tuple(sorted(set(item["source_refs"] + refs))),
+            ))
+    return tuple(sorted(edges, key=lambda edge: edge.edge_id))
+
+
 def build(context: SourceContext) -> dict[str, Any]:
     """Build only the observed seed graph; unresolved work remains frontiers."""
     scope = _load_scope(context)
     selected = _selected_items(context, scope, _load_items(context))
     nodes = {item["evidence_id"]: _node(item) for item in selected}
+    ui_edges = _ui_route_edges(selected, nodes)
+    handler_edges = _route_handler_edges(selected, nodes)
     node_rows = tuple(sorted(nodes.values(), key=lambda node: node.node_id))
-    edge_rows = _ui_route_edges(selected, nodes)
+    edge_rows = tuple(sorted((*ui_edges, *handler_edges), key=lambda edge: edge.edge_id))
     return {
         "schema_version": SCHEMA_VERSION,
         "source_manifest_digest": sha256_json(context.manifest.to_dict()),
