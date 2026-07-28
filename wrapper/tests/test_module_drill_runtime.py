@@ -14,8 +14,13 @@ from analysis_wrapper.module_drill.run_state import RunStateProjection
 from test_module_drill_source_manifest import _overview_run
 
 
-def _prepared_overview(tmp_path: Path) -> Path:
+def _prepared_overview(tmp_path: Path, files: dict[str, str] | None = None) -> Path:
     run, spec = _overview_run(tmp_path)
+    repository = Path(spec.repos[0].path)
+    for relative, content in (files or {}).items():
+        destination = repository / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(content, encoding="utf-8")
     analyzer = tmp_path / "analyzer"
     analyzer.mkdir()
     project_id = identity.load(run).project.internal_id
