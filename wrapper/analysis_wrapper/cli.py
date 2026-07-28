@@ -987,23 +987,28 @@ def _assert_fresh_run(run: Path, *, require_provenance: bool = True) -> "object"
     return state
 
 
-_INCOMPLETE_SIGNAL_STAGE_ARTIFACTS = (
+_INCOMPLETE_PREPARATION_ARTIFACTS = (
     "signals", "provider-execution.json", "evidence-catalog.json",
     "datastore", "deploy", "access", "integrations",
+    "callgraph", "callgraph-coverage.json", "imports", "routes",
+    "system-model.json", "module-candidates.json", "cohesion-bundle.json",
+    "capabilities.json", "coverage-summary.md", "workspace-metrics.json",
+    "synthesis-input.json", "consistency-audit.json",
 )
 
 
-def _discard_incomplete_signal_stage(run: Path, state: lifecycle.RunState) -> None:
-    """Discard only an uncommitted signals stage so it can be rerun safely.
+def _discard_incomplete_preparation(run: Path, state: lifecycle.RunState) -> None:
+    """Discard only an uncommitted preparation pass so it can rerun safely.
 
     ``run-summary.json`` is the stage commit marker: it is written only after
     the local sweep and provider-owned signal lanes have both reached a
     deterministic terminal state.  An interruption before that write used to
     leave write-once signal fragments behind, making the next normal
     ``prepare-overview`` invocation permanently refuse the run.  Those
-    fragments are not canonical evidence yet and must be regenerated as one
-    set; retaining some while retrying the sweep would instead hit collision
-    guards or produce a mixed pass.
+    fragments and any downstream preparation directories created before an
+    interruption are not canonical evidence yet.  They must be regenerated
+    as one set; retaining some would otherwise hit collision guards or
+    produce a mixed pass on callgraph/import/routes after signals recovers.
     """
     if state.stages.get("signals") == "done":
         raise ValueError("signals stage is marked done but signals/run-summary.json is missing")
@@ -1012,7 +1017,7 @@ def _discard_incomplete_signal_stage(run: Path, state: lifecycle.RunState) -> No
     if later_done:
         raise ValueError("cannot discard incomplete signals after later completed stage(s): "
                          + ", ".join(later_done))
-    for relative in _INCOMPLETE_SIGNAL_STAGE_ARTIFACTS:
+    for relative in _INCOMPLETE_PREPARATION_ARTIFACTS:
         path = run / relative
         if not path.exists() and not path.is_symlink():
             continue
@@ -1085,8 +1090,8 @@ def _prepare_overview(args: argparse.Namespace) -> int:
         print("signals: reused canonical run-summary.json")
     else:
         if signals.exists():
-            _discard_incomplete_signal_stage(run, state)
-            print("signals: discarded incomplete uncommitted stage; rerunning")
+            _discard_incomplete_preparation(run, state)
+            print("signals: discarded incomplete uncommitted preparation; rerunning")
         out = prepare_output_directory(signals, spec.repos)
         from . import identity
         fresh_sweep_results = _sweep(args, spec, out, identity.load(run),

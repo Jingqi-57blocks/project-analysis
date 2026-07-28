@@ -434,6 +434,10 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
     partial_signals = run / "signals"
     partial_signals.mkdir()
     (partial_signals / "interrupted.view.txt").write_text("partial\n", "utf-8")
+    partial_callgraph = run / "callgraph"
+    partial_callgraph.mkdir()
+    (partial_callgraph / "interrupted.jsonl").write_text("partial\n", "utf-8")
+    (run / "provider-execution.json").write_text('{"partial": true}\n', "utf-8")
 
     def sweep(_args, _spec, out, _identities, **_kwargs):
         view = Path(out) / f"fixture-{repository.artifact_key}.view.txt"
@@ -491,6 +495,8 @@ def test_prepare_overview_owns_canonical_paths_and_resumes(monkeypatch, tmp_path
                 "consistency-audit.json"}
     assert all((run / rel).exists() for rel in expected)
     assert not (run / "signals" / "callgraph-coverage.json").exists()
+    assert not (run / "signals" / "interrupted.view.txt").exists()
+    assert not (run / "callgraph" / "interrupted.jsonl").exists()
     first = (run / "synthesis-input.json").read_bytes()
     assert main(argv) == 0
     assert (run / "synthesis-input.json").read_bytes() == first
