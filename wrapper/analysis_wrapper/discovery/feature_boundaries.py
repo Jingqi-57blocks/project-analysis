@@ -25,6 +25,8 @@ _JS_TIMER = re.compile(r"\b(setTimeout|setInterval|queueMicrotask)\s*\(")
 _GO_TIMER = re.compile(r"\bgo\s+(?:func\b|[A-Za-z_]\w*\s*\()|\btime\.(AfterFunc|NewTicker|NewTimer)\s*\(")
 _JS_EVENT = re.compile(r"\.\s*(emit|publish|subscribe|addListener|on)\s*\(")
 _GO_EVENT = re.compile(r"\.\s*(Emit|Publish|Subscribe|On)\s*\(")
+_JS_IMPORT = re.compile(r"(?:\bfrom\s*|\bimport\s*\(|\brequire\s*\()\s*['\"]([^'\"]+)['\"]")
+_GO_IMPORT = re.compile(r'^\s*(?:import\s+)?(?:[A-Za-z_]\w*\s+)?"([^"\n]+)"', re.M)
 
 
 @dataclass
@@ -34,6 +36,7 @@ class FeatureBoundaries:
     async_boundaries: list[dict] = field(default_factory=list)
     configuration_references: list[dict] = field(default_factory=list)
     test_files: list[dict] = field(default_factory=list)
+    test_links: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -42,6 +45,7 @@ class FeatureBoundaries:
             "async_boundaries": self.async_boundaries,
             "configuration_references": self.configuration_references,
             "test_files": self.test_files,
+            "test_links": self.test_links,
             "notes": self.notes,
         }
 
@@ -99,12 +103,22 @@ def generate(target: RepoTarget) -> FeatureBoundaries:
         if not text:
             continue
         if path.suffix == ".go":
+            if _test_file(relative):
+                result.test_links.extend(
+                    {"path": relative, "specifier": match.group(1),
+                     "evidence": f"{relative}:{_line(text, match.start())}"}
+                    for match in _GO_IMPORT.finditer(text))
             result.configuration_references.extend(
                 {"name": match.group(1), "evidence": f"{relative}:{_line(text, match.start())}"}
                 for match in _GO_CONFIG.finditer(text))
             result.async_boundaries.extend(_matches(_GO_TIMER, text, relative, "timer-or-goroutine"))
             result.async_boundaries.extend(_matches(_GO_EVENT, text, relative, "event-operation"))
         else:
+            if _test_file(relative):
+                result.test_links.extend(
+                    {"path": relative, "specifier": match.group(1),
+                     "evidence": f"{relative}:{_line(text, match.start())}"}
+                    for match in _JS_IMPORT.finditer(text))
             result.configuration_references.extend(
                 {"name": match.group(1), "evidence": f"{relative}:{_line(text, match.start())}"}
                 for match in _JS_CONFIG.finditer(text))
@@ -116,4 +130,5 @@ def generate(target: RepoTarget) -> FeatureBoundaries:
     result.configuration_references = sorted(
         {tuple(sorted(row.items())): row for row in result.configuration_references}.values(), key=key)
     result.test_files = sorted({tuple(sorted(row.items())): row for row in result.test_files}.values(), key=key)
+    result.test_links = sorted({tuple(sorted(row.items())): row for row in result.test_links}.values(), key=key)
     return result
