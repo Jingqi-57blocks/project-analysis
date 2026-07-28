@@ -109,6 +109,19 @@ def test_index_never_applies_overview_bounding_to_complete_route_inventory(tmp_p
     assert len([item for item in document["items"] if item["kind"] == "route"]) == 205
 
 
+def test_index_leaves_canonical_jsonl_callgraph_fragments_for_graph_recovery(tmp_path):
+    _, module_run = _run(tmp_path, call_edges=[{
+        "repository_ref": "service", "caller_symbol": "createRecord",
+        "callee_symbol": "persistRecord", "caller_evidence": "src/service.ts:15",
+        "callee_evidence": "src/service.ts:15",
+    }])
+
+    document = build(load(module_run))
+
+    assert document["schema_version"] == "feature-evidence/v1"
+    assert document["items"]
+
+
 def test_index_refuses_a_tampered_source_artifact(tmp_path):
     overview, module_run = _run(tmp_path)
     (overview / "routes" / "route-inventory.json").write_text('{"rows": []}', encoding="utf-8")

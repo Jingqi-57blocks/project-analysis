@@ -79,6 +79,11 @@ def _documents(context: SourceContext) -> dict[str, tuple[str, dict[str, Any]]]:
     for artifact in context.manifest.artifacts:
         if artifact.kind != "canonical" or artifact.integrity != "verified":
             continue
+        # Complete callgraph fragments are canonical JSONL evidence.  They
+        # are consumed by the frontier/closure providers, not by this
+        # object-oriented feature-anchor index.
+        if artifact.schema_version == "jsonl":
+            continue
         path = context.source_run / artifact.relative_path
         try:
             resolved = path.resolve(strict=True)
