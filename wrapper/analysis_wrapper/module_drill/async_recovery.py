@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..executor import create_stage_dir, write_new_text
+from ..orchestrator.composer import estimate_tokens
 from ..orchestrator.contracts import TaskPacket
 from .context import SourceContext
 from .driver import ModuleDriver
@@ -18,6 +19,7 @@ TEMPLATE_ID = "module-async-recovery"
 TEMPLATE_VERSION = "v1"
 OUTPUT_SCHEMA_ID = "module-async-recovery/v1"
 CONTEXT_BUDGET_TOKENS = 32_000
+INPUT_BUDGET_TOKENS = 24_000
 SCHEMA_VERSION = "async-recovery/v1"
 FILENAME = "async-recovery.json"
 
@@ -72,6 +74,7 @@ def _requirements(closure: dict[str, Any]) -> dict[str, Any]:
             raise ContractError("feature boundary disposition has invalid resulting IDs")
         requirements.append({
             "requirement_id": "requirement-boundary-" + evidence_id.removeprefix("evidence-"),
+            "evidence_id": evidence_id,
             "kind": "feature-boundary",
             "anchor_ids": sorted(value for value in resulting if value.startswith(("node-", "edge-"))),
             "evidence_refs": sorted(set(refs)),
@@ -92,6 +95,67 @@ def _requirements(closure: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _packet_inputs(closure: dict[str, Any], spans: dict[str, Any],
+                   requirements: dict[str, Any]) -> dict[str, str]:
+    """Project shared evidence down to the one bounded semantic task.
+
+    The closure artifact preserves every provider boundary for audit, but a
+    semantic task must see only its applicable boundary requirements.  In
+    particular, excluded boundaries and unrelated source spans must not be
+    copied into the task merely because they share the feature's closure file.
+    """
+    rows = requirements["requirements"]
+    evidence_ids = {row.get("evidence_id") for row in rows if isinstance(row, dict)}
+    if not evidence_ids or not all(isinstance(value, str) and value for value in evidence_ids):
+        raise ContractError("asynchronous recovery requirements lack stable evidence IDs")
+    local_boundaries = [row for row in closure.get("boundary_dispositions", [])
+                        if isinstance(row, dict) and row.get("evidence_id") in evidence_ids]
+    if {row.get("evidence_id") for row in local_boundaries} != evidence_ids:
+        raise ContractError("asynchronous recovery boundary projection is incomplete")
+    anchor_ids = {
+        anchor for row in rows for anchor in row.get("anchor_ids", [])
+        if isinstance(anchor, str) and anchor
+    }
+    edge_by_id = {row.get("edge_id"): row for row in closure.get("edges", [])
+                  if isinstance(row, dict) and isinstance(row.get("edge_id"), str)}
+    node_ids = {row.get("node_id") for row in closure.get("nodes", [])
+                if isinstance(row, dict) and isinstance(row.get("node_id"), str)
+                and row.get("node_id") in anchor_ids}
+    local_edges = [edge_by_id[edge_id] for edge_id in sorted(anchor_ids & set(edge_by_id))]
+    for edge in local_edges:
+        node_ids.update(value for value in (edge.get("source_node_id"), edge.get("target_node_id"))
+                        if isinstance(value, str) and value)
+    local_nodes = [row for row in closure.get("nodes", []) if isinstance(row, dict)
+                   and row.get("node_id") in node_ids]
+    refs = {ref for row in rows for ref in row.get("evidence_refs", [])
+            if isinstance(ref, str) and ref}
+    local_spans = [row for row in spans.get("spans", []) if isinstance(row, dict)
+                   and any(row.get(key) in refs for key in ("ref", "start_ref", "end_ref"))]
+    closure_doc = {
+        "schema_version": closure.get("schema_version"),
+        "source_manifest_digest": closure.get("source_manifest_digest"),
+        "feature_id": closure.get("feature_id"),
+        "semantic_spans_digest": closure.get("semantic_spans_digest"),
+        "nodes": local_nodes,
+        "edges": local_edges,
+        "boundary_dispositions": local_boundaries,
+    }
+    spans_doc = {
+        "schema_version": spans.get("schema_version"),
+        "source_manifest_digest": spans.get("source_manifest_digest"),
+        "feature_id": spans.get("feature_id"),
+        "feature_graph_digest": spans.get("feature_graph_digest"),
+        "semantic_span_plan_digest": spans.get("semantic_span_plan_digest"),
+        "frontier_candidates_digest": spans.get("frontier_candidates_digest"),
+        "spans": local_spans,
+    }
+    return {
+        "async-requirements.json": json.dumps(requirements, sort_keys=True),
+        "feature-boundary-closure.json": json.dumps(closure_doc, sort_keys=True),
+        "semantic-spans.json": json.dumps(spans_doc, sort_keys=True),
+    }
+
+
 def build_packet(context: SourceContext) -> TaskPacket:
     """Build one semantic partition from span-bound feature boundaries."""
     closure = _load(context, "feature-boundary-closure.json", "feature-boundary-closure/v1")
@@ -99,20 +163,23 @@ def build_packet(context: SourceContext) -> TaskPacket:
     if closure.get("semantic_spans_digest") != sha256_json(spans):
         raise ContractError("feature boundary closure does not bind current semantic spans")
     requirements = _requirements(closure)
-    return TaskPacket.create(
+    packet = TaskPacket.create(
         task_id=TASK_ID,
         task_type=TASK_TYPE,
         template_id=TEMPLATE_ID,
         template_version=TEMPLATE_VERSION,
         instructions=_INSTRUCTIONS,
-        inputs={
-            "async-requirements.json": json.dumps(requirements, sort_keys=True),
-            "feature-boundary-closure.json": json.dumps(closure, sort_keys=True),
-            "semantic-spans.json": json.dumps(spans, sort_keys=True),
-        },
+        inputs=_packet_inputs(closure, spans, requirements),
         output_schema_id=OUTPUT_SCHEMA_ID,
         context_budget_tokens=CONTEXT_BUDGET_TOKENS,
     )
+    input_tokens = estimate_tokens(packet.instructions) + sum(
+        estimate_tokens(item.content) for item in packet.inputs.values())
+    if input_tokens > INPUT_BUDGET_TOKENS:
+        raise ContractError(
+            "asynchronous recovery input exceeds the "
+            f"{INPUT_BUDGET_TOKENS}-token budget")
+    return packet
 
 
 def register(module_run: str | Path) -> list[str]:

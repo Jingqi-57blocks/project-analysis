@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 
 from analysis_wrapper.cli import main
-from analysis_wrapper.module_drill.async_recovery import build_packet, finalize, register
+from analysis_wrapper.module_drill.async_recovery import INPUT_BUDGET_TOKENS, build_packet, finalize, register
 from analysis_wrapper.module_drill.boundary_closure import write as write_boundary_closure
 from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.driver import ModuleDriver
 from analysis_wrapper.orchestrator.contracts import ExecutorInfo, TaskResult, TaskTiming, ValidationOutcome
 from analysis_wrapper.orchestrator.engine import now_iso
+from analysis_wrapper.orchestrator.composer import estimate_tokens
 from analysis_wrapper.orchestrator.schemas import validate_output
 from test_module_drill_boundary_closure import _ready
 
@@ -40,6 +41,12 @@ def test_packet_uses_only_span_bound_boundary_closure_and_semantic_spans(tmp_pat
     requirements = json.loads(packet.inputs["async-requirements.json"].content)["requirements"]
     assert requirements
     assert len({row["requirement_id"] for row in requirements}) == len(requirements)
+    local_closure = json.loads(packet.inputs["feature-boundary-closure.json"].content)
+    expected_ids = {row["evidence_id"] for row in requirements}
+    assert {row["evidence_id"] for row in local_closure["boundary_dispositions"]} == expected_ids
+    assert all(row["state"] != "excluded" for row in local_closure["boundary_dispositions"])
+    assert estimate_tokens(packet.instructions) + sum(
+        estimate_tokens(item.content) for item in packet.inputs.values()) <= INPUT_BUDGET_TOKENS
 
 
 def test_async_output_requires_exact_dispositions_and_packet_local_claims(tmp_path):
