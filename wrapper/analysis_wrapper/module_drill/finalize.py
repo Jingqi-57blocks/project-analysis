@@ -1,0 +1,221 @@
+"""Deterministic ModuleModel finalization and fail-closed Module Drill audit."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from ..executor import create_stage_dir, replace_artifact_text, write_new_text
+from .context import SourceContext, load as load_context
+from .coverage import Coverage, CoverageStatus
+from .driver import ModuleDriver
+from .model import FeatureClaim, FeatureEdge, FeatureFlow, FeatureNode, ModuleModel
+from .run_state import AuditResult, RunStateProjection
+from .scope import FrontierDisposition, ModuleScope
+from .validation import ContractError, sha256_json
+
+MODEL_SCHEMA = "module-model-artifact/v1"
+MODEL_FILENAME = "module-model.json"
+AUDIT_FILENAME = "module-audit.json"
+
+
+def _load(context: SourceContext, filename: str, schema: str) -> dict[str, Any]:
+    path = context.module_run / "evidence" / filename
+    try:
+        document = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ContractError(f"{filename} is required for Module Drill finalization") from exc
+    if not isinstance(document, dict) or document.get("schema_version") != schema:
+        raise ContractError(f"{filename} has an unsupported schema")
+    if document.get("source_manifest_digest") != sha256_json(context.manifest.to_dict()):
+        raise ContractError(f"{filename} does not bind the current source manifest")
+    return document
+
+
+def _scope(context: SourceContext) -> ModuleScope:
+    path = context.module_run / "evidence" / "module-scope.json"
+    try:
+        scope = ModuleScope.from_dict(json.loads(path.read_text("utf-8")))
+    except (OSError, ValueError) as exc:
+        raise ContractError("validated module scope is required for finalization") from exc
+    if scope.source_manifest_digest != sha256_json(context.manifest.to_dict()):
+        raise ContractError("module scope does not bind the current source manifest")
+    return scope
+
+
+def _recovery(context: SourceContext, driver: ModuleDriver, *, task_id: str,
+              filename: str, schema: str) -> dict[str, Any]:
+    artifact = _load(context, filename, schema)
+    packet, output = driver.validated_task(task_id)
+    if artifact.get("task_id") != task_id or artifact.get("packet_input_digest") != packet.input_digest \
+            or artifact.get("output") != output:
+        raise ContractError(f"{filename} is not the current validated {task_id} output")
+    return artifact
+
+
+def _claims(*outputs: dict[str, Any]) -> tuple[FeatureClaim, ...]:
+    claims: list[FeatureClaim] = []
+    consumed: set[str] = set()
+    for document in outputs:
+        output = document.get("output")
+        if not isinstance(output, dict):
+            raise ContractError("recovery artifact output must be an object")
+        for disposition in output.get("dispositions", []):
+            if isinstance(disposition, dict) and disposition.get("outcome") == "claimed":
+                ids = disposition.get("claim_ids")
+                if isinstance(ids, list):
+                    consumed.update(value for value in ids if isinstance(value, str))
+        for row in output.get("claims", []):
+            if not isinstance(row, dict):
+                raise ContractError("recovery claim must be an object")
+            support = row.get("support")
+            if not isinstance(support, list):
+                raise ContractError("recovery claim support must be a list")
+            refs = tuple(sorted({item.get("ref") for item in support if isinstance(item, dict) and isinstance(item.get("ref"), str)}))
+            roles = tuple(sorted({item.get("role") for item in support if isinstance(item, dict) and isinstance(item.get("role"), str)}))
+            claims.append(FeatureClaim(
+                claim_id=row.get("claim_id"), kind=row.get("kind"),
+                anchor_ids=tuple(row.get("anchor_ids", [])), evidence_refs=refs, support_roles=roles,
+                subject=row.get("subject"), operation=row.get("operation"), value=row.get("value"),
+            ))
+    ids = [claim.claim_id for claim in claims]
+    if len(ids) != len(set(ids)):
+        raise ContractError("recovery outputs contain duplicate claim IDs")
+    if set(ids) != consumed:
+        missing = sorted(set(ids) - consumed)
+        orphaned = sorted(consumed - set(ids))
+        raise ContractError(f"claim disposition mismatch: missing={missing}; unknown={orphaned}")
+    contradictions: set[tuple[str, str]] = set()
+    by_semantic: dict[tuple[str, str], object] = {}
+    for claim in claims:
+        key = (claim.subject, claim.operation)
+        prior = by_semantic.get(key)
+        if prior is not None and prior != claim.value:
+            contradictions.add(key)
+        by_semantic[key] = claim.value
+    if contradictions:
+        raise ContractError("contradictory claim values: " + ", ".join("/".join(key) for key in sorted(contradictions)))
+    return tuple(sorted(claims, key=lambda claim: claim.claim_id))
+
+
+def _flows(*outputs: dict[str, Any]) -> tuple[FeatureFlow, ...]:
+    flows: list[FeatureFlow] = []
+    for document in outputs:
+        output = document.get("output", {})
+        if not isinstance(output, dict):
+            raise ContractError("recovery output is invalid")
+        flows.extend(FeatureFlow.from_dict(row, "recovery flow") for row in output.get("flows", []))
+    ids = [flow.flow_id for flow in flows]
+    if len(ids) != len(set(ids)):
+        raise ContractError("recovery outputs contain duplicate flow IDs")
+    return tuple(sorted(flows, key=lambda flow: flow.flow_id))
+
+
+def _coverage(scope: ModuleScope, sync: dict[str, Any], async_doc: dict[str, Any],
+              closure: str) -> dict[str, CoverageStatus]:
+    def status(output: dict[str, Any]) -> str:
+        rows = output.get("dispositions", [])
+        if not rows:
+            return "unavailable"
+        return "partial" if any(isinstance(row, dict) and row.get("outcome") == "unknown" for row in rows) else "complete"
+
+    sync_status = status(sync["output"])
+    async_status = status(async_doc["output"])
+    kinds = {
+        row.get("boundary_kind") for row in async_doc.get("requirements", {}).get("requirements", [])
+        if isinstance(row, dict)
+    }
+    dimensions: dict[str, CoverageStatus] = {
+        "synchronous-behavior": CoverageStatus(Coverage("applicable", sync_status, (), ()), closure, ()),
+        "asynchronous-behavior": CoverageStatus(Coverage(
+            "applicable" if kinds else "unknown", async_status if kinds else "unavailable", (),
+            () if kinds else ("no feature-local asynchronous boundary was observed",)), closure, ()),
+    }
+    for dimension, kinds_for_dimension in {
+        "configuration": {"configuration"}, "integration": {"integration-host", "integration-package"},
+        "data": {"datastore"}, "authorization": {"access-check"},
+    }.items():
+        present = bool(kinds & kinds_for_dimension)
+        dimensions[dimension] = CoverageStatus(Coverage(
+            "applicable" if present else "unknown", async_status if present else "unavailable", (),
+            () if present else ("no feature-local provider evidence was observed",)), closure, ())
+    if any(seed.kind == "ui-action" for seed in scope.seeds):
+        dimensions["ui-entry"] = CoverageStatus(Coverage("applicable", "complete", (), ()), closure, ())
+    return dimensions
+
+
+def build(context: SourceContext) -> ModuleModel:
+    """Merge only current validated artifacts into one canonical ModuleModel."""
+    driver = ModuleDriver(context.module_run)
+    scope = _scope(context)
+    graph = _load(context, "feature-boundary-closure.json", "feature-boundary-closure/v1")
+    evidence = _load(context, "feature-evidence.json", "feature-evidence/v1")
+    relevant_kinds = {
+        "async-boundary", "configuration", "datastore", "access-check",
+        "integration-host", "integration-package",
+    }
+    expected_boundary_ids = {
+        row.get("evidence_id") for row in evidence.get("items", [])
+        if isinstance(row, dict) and row.get("kind") in relevant_kinds
+    }
+    boundary_rows = graph.get("boundary_dispositions")
+    if not isinstance(boundary_rows, list):
+        raise ContractError("feature boundary closure lacks boundary dispositions")
+    actual_boundary_ids = {
+        row.get("evidence_id") for row in boundary_rows if isinstance(row, dict)
+    }
+    if None in actual_boundary_ids or actual_boundary_ids != expected_boundary_ids \
+            or len(actual_boundary_ids) != len(boundary_rows):
+        raise ContractError("feature boundary closure must disposition every relevant provider item exactly once")
+    sync = _recovery(context, driver, task_id="module-sync-recovery", filename="sync-recovery.json", schema="sync-recovery/v1")
+    async_doc = _recovery(context, driver, task_id="module-async-recovery", filename="async-recovery.json", schema="async-recovery/v1")
+    nodes = tuple(FeatureNode.from_dict(row, "boundary graph node") for row in graph.get("nodes", []))
+    edges = tuple(FeatureEdge.from_dict(row, "boundary graph edge") for row in graph.get("edges", []))
+    initial = _load(context, "feature-graph.json", "feature-graph/v1")
+    if initial.get("module_scope_digest") != sha256_json(scope.to_dict()):
+        raise ContractError("feature graph does not bind the current module scope")
+    graph_closure = _load(context, "feature-graph-closure.json", "feature-graph-closure/v1")
+    rows = graph_closure.get("frontier_dispositions", [])
+    if not isinstance(rows, list):
+        raise ContractError("feature graph closure lacks frontier dispositions")
+    dispositions = tuple(FrontierDisposition.from_dict(row, "feature frontier disposition") for row in rows)
+    expected_frontiers = {item.frontier_id for item in scope.frontiers}
+    if {item.frontier_id for item in dispositions} != expected_frontiers:
+        raise ContractError("finalization requires exactly one disposition for every scope frontier")
+    states = {item.state for item in dispositions}
+    closure = "blocked" if "blocked" in states else "open" if "unresolved" in states else "closed"
+    return ModuleModel(
+        feature_id=scope.feature_id, nodes=tuple(sorted(nodes, key=lambda node: node.node_id)),
+        edges=tuple(sorted(edges, key=lambda edge: edge.edge_id)), claims=_claims(sync, async_doc),
+        flows=_flows(sync, async_doc), dispositions=tuple(sorted(dispositions, key=lambda item: item.frontier_id)),
+        dimension_coverage=_coverage(scope, sync, async_doc, closure), closure_status=closure,
+    )
+
+
+def _projection(context: SourceContext, driver: ModuleDriver, audit: AuditResult, *, complete: bool) -> None:
+    prior = RunStateProjection.from_dict(json.loads((context.module_run / "run-state.json").read_text("utf-8")))
+    state = RunStateProjection(prior.run_id, prior.source_manifest_digest, driver._ledger_digest(), complete, audit)
+    replace_artifact_text(context.module_run / "run-state.json", json.dumps(state.to_dict(), indent=2, sort_keys=True) + "\n")
+
+
+def finalize(module_run: str | Path) -> tuple[Path | None, AuditResult]:
+    """Audit independently, and only write an authoritative model on success."""
+    context = load_context(module_run)
+    driver = ModuleDriver(context.module_run)
+    checks = ("source-integrity", "scope-frontier-dispositions", "validated-task-consumption", "claim-flow-lineage", "feature-coverage")
+    try:
+        model = build(context)
+        audit = AuditResult(True, checks, ())
+    except ContractError as exc:
+        audit = AuditResult(False, checks, (str(exc),))
+        _projection(context, driver, audit, complete=False)
+        replace_artifact_text(context.module_run / AUDIT_FILENAME, json.dumps(audit.to_dict(), indent=2, sort_keys=True) + "\n")
+        return None, audit
+    out = create_stage_dir(context.module_run / "evidence") / MODEL_FILENAME
+    document = {"schema_version": MODEL_SCHEMA, "source_manifest_digest": sha256_json(context.manifest.to_dict()),
+                "model": model.to_dict()}
+    write_new_text(out, json.dumps(document, indent=2, sort_keys=True) + "\n")
+    replace_artifact_text(context.module_run / AUDIT_FILENAME, json.dumps(audit.to_dict(), indent=2, sort_keys=True) + "\n")
+    _projection(context, driver, audit, complete=True)
+    return out, audit

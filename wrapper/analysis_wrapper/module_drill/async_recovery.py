@@ -134,6 +134,7 @@ def finalize(module_run: str | Path) -> Path:
         "packet_input_digest": packet.input_digest,
         "feature_boundary_closure_digest": requirements["feature_boundary_closure_digest"],
         "semantic_spans_digest": sha256_json(json.loads(packet.inputs["semantic-spans.json"].content)),
+        "requirements": requirements,
         "output": output,
     }
     out = create_stage_dir(driver.run / "evidence") / FILENAME
