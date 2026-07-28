@@ -210,6 +210,51 @@ def test_formation_proposal_rejects_duplicate_module_ids():
     assert "module-id-unique" in _checks(schemas.validate_output("formation-proposal", doc))
 
 
+def test_partitioned_formation_rejects_repository_ordinal_placeholder_module_id():
+    packet_inputs = {
+        "module-candidates.json": json.dumps([{"candidate_id": "mc-a"}]),
+        "formation-partition-context.json": json.dumps({
+            "global_identity": {"candidate_universe_digest": "digest"},
+            "merge_order": ["formation-0000"],
+            "partition": {
+                "partition_id": "formation-0000", "repository_ref": "wcp_review_service",
+                "candidate_ids": ["mc-a"],
+            },
+        }),
+    }
+    output = {
+        "modules": [{"module_id": "wcp-review-service-0022", "name": "Service 22",
+                     "classification": "business", "confidence": "low", "aliases": []}],
+        "candidate_dispositions": [{"candidate_id": "mc-a", "disposition": "merged",
+                                    "module_ids": ["wcp-review-service-0022"],
+                                    "reason": "fixture"}],
+    }
+    assert "formation-module-placeholder-id" in _checks(
+        schemas.validate_output("formation-proposal", output, packet_inputs=packet_inputs))
+
+
+def test_partitioned_formation_allows_empty_modules_only_for_unresolved_or_excluded_rows():
+    packet_inputs = {
+        "module-candidates.json": json.dumps([{"candidate_id": "mc-a"}]),
+        "formation-partition-context.json": json.dumps({
+            "global_identity": {"candidate_universe_digest": "digest"},
+            "merge_order": ["formation-0000"],
+            "partition": {"partition_id": "formation-0000", "candidate_ids": ["mc-a"]},
+        }),
+    }
+    output = {
+        "modules": [],
+        "candidate_dispositions": [{"candidate_id": "mc-a", "disposition": "unresolved",
+                                    "module_ids": [], "reason": "insufficient boundary evidence"}],
+    }
+    assert schemas.validate_output("formation-proposal", output, packet_inputs=packet_inputs) == []
+    output["candidate_dispositions"][0].update({
+        "disposition": "merged", "module_ids": ["invented-module"],
+    })
+    assert "formation-empty-modules-disposition" in _checks(
+        schemas.validate_output("formation-proposal", output, packet_inputs=packet_inputs))
+
+
 def test_formation_proposal_validates_candidate_rules_and_dispositions():
     doc = {
         "modules": [{"module_id": "sample-capability", "name": "Sample",
@@ -265,6 +310,25 @@ def test_boundary_resolution_packet_requires_contextual_exact_evidence_accountin
     assert schemas.validate_output("boundary-resolution", output, packet_inputs=packet_inputs) == []
     output["dispositions"][0].pop("evidence_refs")
     assert "boundary-evidence-refs" in _checks(
+        schemas.validate_output("boundary-resolution", output, packet_inputs=packet_inputs))
+
+
+def test_boundary_resolution_rejects_repository_ordinal_placeholder_module_id():
+    packet_inputs = {"unresolved-candidates.json": json.dumps([{
+        "candidate_id": "mc-a", "repository_ref": "wcp_review_service",
+        "evidence_refs": ["signals/imports.view.txt:1"], "immediate_graph": [],
+        "prior_module_ids": [], "prior_reason": "first pass limit",
+    }])}
+    output = {
+        "modules": [{"module_id": "wcp-review-service-0022", "name": "Service 22",
+                     "classification": "business", "confidence": "low", "aliases": []}],
+        "dispositions": [{
+            "candidate_id": "mc-a", "disposition": "standalone",
+            "module_ids": ["wcp-review-service-0022"], "reason": "fixture",
+            "evidence_refs": ["signals/imports.view.txt:1"],
+        }],
+    }
+    assert "boundary-module-placeholder-id" in _checks(
         schemas.validate_output("boundary-resolution", output, packet_inputs=packet_inputs))
 
 
@@ -370,6 +434,40 @@ def test_section_generate_accepts_correct_word_count():
 def test_section_generate_rejects_wrong_word_count():
     doc = {"section_id": "overview-section-2", "content_md": "one two three", "word_count": 99}
     assert "word-count" in _checks(schemas.validate_output("section-generate", doc))
+
+
+def test_section_generate_rejects_generic_unknown_that_bypasses_its_floor():
+    content = ("unknown: 当前 host judgment 没有足以在本节逐项陈述并逐条引用的受限证据；"
+               "该类别在本次概览中保持未知。")
+    doc = {"section_id": "overview.s3", "content_md": content,
+           "word_count": len(content.split())}
+    failures = _checks(schemas.validate_output("section-generate", doc, packet_inputs={
+        "floor.json": json.dumps({"min_words": 120}),
+        "capabilities.json": json.dumps({"aggregate_status": "partial"}),
+    }))
+    assert "section-generic-unknown" in failures
+
+
+def test_section_generate_allows_a_short_unknown_with_a_named_evidence_reference():
+    content = "unknown: signals/missing-provider.view.txt:1 reports the provider did not run."
+    doc = {"section_id": "overview.s3", "content_md": content,
+           "word_count": len(content.split())}
+    assert schemas.validate_output("section-generate", doc, packet_inputs={
+        "floor.json": json.dumps({"min_words": 120}),
+    }) == []
+
+
+def test_section_generate_rejects_an_internal_repository_identifier():
+    content = "The wcp_review_service deployment boundary needs review."
+    doc = {"section_id": "technical.summary", "content_md": content,
+           "word_count": len(content.split())}
+    failures = _checks(schemas.validate_output("section-generate", doc, packet_inputs={
+        "floor.json": json.dumps({"min_words": 3}),
+        "identity-boundary.json": json.dumps({
+            "forbidden_internal_ids": ["wcp_review_service"],
+        }),
+    }))
+    assert "section-internal-identity-leak" in failures
 
 
 # --------------------------------------------------------------------------- #

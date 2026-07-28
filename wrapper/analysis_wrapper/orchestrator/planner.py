@@ -756,7 +756,14 @@ FORMATION_PREAMBLE = (
     "An unresolved disposition is allowed only when its reason is bounded by "
     "the supplied immediate evidence and it will be handed to the targeted "
     "boundary-resolution pass. Follow the project-agnostic granularity contract below (ported verbatim from "
-    "synthesis.md). Return ONLY this JSON object -- no prose outside it."
+    "synthesis.md). A module_id must describe an actual product capability, "
+    "platform responsibility, or named integration from the candidate values. "
+    "Never use a repository name plus an ordinal (for example `service-0001`) "
+    "or a repository plus a generic path/wildcard as a module name. A singleton "
+    "structural candidate such as `src`, `deploy`, `config`, or `*any` with no "
+    "semantic boundary evidence must be dispositioned `unresolved`; return an "
+    "empty modules list for that partition rather than minting a placeholder. "
+    "Return ONLY this JSON object -- no prose outside it."
 )
 
 
@@ -954,8 +961,12 @@ ids, partition id and prior_reason. Choose standalone, merged, platform,
 shared-infrastructure, excluded, or unresolved. An unresolved result is allowed
 only when evidence still cannot justify a boundary; keep its evidence_refs and
 state the exact limitation plus a non-empty coverage_impact describing the
-Overview Coverage degradation. Do not use a blanket remaining rule and do not
-rewrite candidates outside this packet.\n"""
+Overview Coverage degradation. A new module_id must name an actual product
+capability, platform responsibility, or named integration supported by this
+packet. Never mint a repository-name-plus-ordinal placeholder (for example
+`service-0001`); retain the candidate as unresolved when the packet cannot
+support a meaningful module boundary. Do not use a blanket remaining rule and
+do not rewrite candidates outside this packet.\n"""
 
 
 def plan_boundary_resolution(run_dir: str | Path, *,
