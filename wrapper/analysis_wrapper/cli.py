@@ -319,6 +319,9 @@ def parser() -> argparse.ArgumentParser:
     module_spans.add_argument("--run", required=True)
     module_spans.add_argument("--requests", required=True, help="span-request JSON array path, or - for stdin")
     module_spans.add_argument("--out", default="")
+    module_evidence = sub.add_parser(
+        "module-build-evidence", help="index verified canonical feature evidence")
+    module_evidence.add_argument("--run", required=True)
     finalize_map = sub.add_parser(
         "finalize-module-map",
         help="validate complete candidate dispositions in module-map.json, "

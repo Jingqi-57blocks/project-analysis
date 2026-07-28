@@ -10,6 +10,8 @@ from typing import Any
 from ..orchestrator.contracts import TaskPacket
 from ..orchestrator.engine import EngineError
 from .driver import ModuleDriver
+from .feature_evidence import write as write_feature_evidence
+from .context import load as load_source_context
 from .runtime import initialize_from_overview
 from .spans import fetch
 from .standalone import initialize as initialize_standalone
@@ -96,12 +98,19 @@ def _spans(args) -> int:
     return 0
 
 
+def _evidence(args) -> int:
+    out = write_feature_evidence(load_source_context(args.run))
+    _print({"evidence": str(out)})
+    return 0
+
+
 def run(args) -> int:
     """Dispatch a Module Drill subcommand and preserve normal CLI exit codes."""
     try:
         handlers = {
             "module-init": _init, "module-status": _status, "module-register": _register,
             "module-next": _next, "module-submit": _submit, "module-fetch-spans": _spans,
+            "module-build-evidence": _evidence,
         }
         handler = handlers.get(args.command)
         if handler is None:
