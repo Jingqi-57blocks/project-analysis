@@ -557,7 +557,7 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
     if require_final:
         # The expected consumption set is derived afresh from the current
         # ledger generations; the persisted manifest cannot approve itself.
-        from .orchestrator import consumption, sections
+        from .orchestrator import consumption, sections, semantic_partitions
         manifest_path = run / "tasks" / consumption.FILENAME
         expected_manifest = consumption.build(run)
         try:
@@ -585,6 +585,13 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
               "every consumed task names an existing canonical consumer artifact"
               if not bad_consumers else
               "missing consumer artifact for: " + ", ".join(row["task_id"] for row in bad_consumers[:20]))
+
+        semantic_path = run / "tasks" / semantic_partitions.PLAN_FILENAME
+        if semantic_path.is_file():
+            semantic_errors = semantic_partitions.validate_manifest(run)
+            check("semantic-evidence-partitions", not semantic_errors,
+                  "active semantic packets exactly match the planned lossless partition graph"
+                  if not semantic_errors else "; ".join(semantic_errors[:20]))
 
         missing_markdown = [name for name in FINAL_MARKDOWN if not (run / name).is_file()]
         check("final-markdown-set", not missing_markdown,

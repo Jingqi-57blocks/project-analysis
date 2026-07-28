@@ -438,7 +438,8 @@ def parser() -> argparse.ArgumentParser:
         "plan-judgment",
         help="(orchestrator, 57B-116) compose + register the judgment DAG for a "
              "prepared run: one lens-findings task per repo-sharded lens x repo "
-             "(plus one per workspace-sharded lens), the independent "
+             "(plus one per workspace-sharded lens; oversized normal-budget "
+             "packets become deterministic semantic work items), the independent "
              "formation-proposal task, and -- for a source_reads lens -- its "
              "paired selection-fetch task in place of the lens task directly "
              "(fetch-selections + plan-lens-finalize compose the real one)")
@@ -501,8 +502,8 @@ def parser() -> argparse.ArgumentParser:
     plan_lens_finalize_cmd.add_argument("--run", required=True, help="run directory")
     plan_lens_finalize_cmd.add_argument(
         "--lens", required=True, dest="lens",
-        help="the ORIGINAL lens task_id (not the -select id) plan-judgment "
-             "would have used directly for a non-source_reads lens")
+        help="the lens work-item task_id (not the -select id); use the semantic "
+             "child id shown by plan-judgment when that lens was partitioned")
     plan_lens_finalize_cmd.add_argument(
         "--context-budget", type=int, default=96000, dest="context_budget",
         help="per-packet context budget in estimated tokens (default: 96000)")

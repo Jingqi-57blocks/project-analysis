@@ -667,6 +667,62 @@ def test_a_large_extra_section_now_composes_and_shards_instead_of_failing(tmp_pa
         assert "graph-meta.json" in packet.inputs
 
 
+def test_normal_budget_large_workspace_uses_semantic_partitions_and_compact_select_indexes(tmp_path):
+    """57B-150: semantic work items precede composer.py's generic fallback.
+
+    The fixture's long api signal makes the workspace open lens genuinely
+    oversized at a normal (not artificial 6k test) budget.  Its source
+    selection packets must receive local compact indexes, while the persisted
+    graph proves every final-evidence input has one deterministic owner.
+    """
+    run, _ = _build_run(tmp_path, inflate_lizard_lines=8000)
+    planned = planner.plan_judgment(run, context_budget_tokens=24_000)
+    assert planned
+
+    from analysis_wrapper.orchestrator import semantic_partitions
+    manifest = json.loads((run / "tasks" / semantic_partitions.PLAN_FILENAME).read_text("utf-8"))
+    by_task = {row["task_id"]: row for row in manifest["plans"]}
+    open_plan = by_task["lens-open-lens"]
+    assert open_plan["active"] is True
+    assert {row["kind"] for row in open_plan["partitions"]} == {
+        "repository", "cross-boundary",
+    }
+    assert all(row["source_input_digests"] for row in open_plan["partitions"])
+    assert semantic_partitions.validate_manifest(run) == []
+
+    engine = Engine(run)
+    created = [record.detail["task"] for record in engine._read_records()
+               if record.event == "created"]
+    open_selects = [packet for packet in created
+                    if packet["task_type"] == "selection-fetch"
+                    and packet["task_id"].startswith("lens-open-lens-sp-")]
+    assert len(open_selects) == len(open_plan["partitions"])
+    for packet in open_selects:
+        # The final lens contract/evidence is intentionally not copied into
+        # selection work.  Typed input names remain, but their contents are
+        # small locator indexes and the actual partition descriptor is exact.
+        assert "requirements.json" not in packet["inputs"]
+        descriptor = json.loads(packet["inputs"]["semantic-partition.json"]["content"])
+        assert descriptor["active"] is True
+        assert descriptor["parent_task_id"] == "lens-open-lens"
+        for input_id, item in packet["inputs"].items():
+            if "lizard-api" in input_id:
+                index = json.loads(item["content"])
+                assert len(index) <= 1 + semantic_partitions.MAX_SELECTION_INDEX_ROWS
+                assert index[0]["index_summary"]["truncated"] is True
+
+
+def test_semantic_source_partitions_finalize_before_dedup(tmp_path):
+    """A semantic select child is a real select/fetch/finalize pair, not an
+    advisory index that later stages can accidentally omit."""
+    run, _ = _build_run(tmp_path, inflate_lizard_lines=8000)
+    planner.plan_judgment(run, context_budget_tokens=24_000)
+    validated_lenses = _drive_dag_to_completion(run, context_budget_tokens=24_000)
+    assert any("-sp-" in task_id for task_id in validated_lenses)
+    dedup = planner.plan_dedup(run, context_budget_tokens=24_000)
+    assert dedup.task_id == "dedup-rank"
+
+
 # --------------------------------------------------------------------------- #
 # idempotent re-planning
 # --------------------------------------------------------------------------- #
@@ -857,7 +913,8 @@ def _submit(engine, item, output, *, status="ok"):
 
 def _drive_dag_to_completion(run, *, hold_back_lens_task_ids=frozenset(),
                             fail_lens_task_ids=frozenset(),
-                            lens_output_fn=_lens_output):
+                            lens_output_fn=_lens_output,
+                            context_budget_tokens=planner.DEFAULT_CONTEXT_BUDGET_TOKENS):
     """Claims and validates every ready task (formation, direct lens-findings,
     and select tasks), running the REAL fetch-selections + plan_lens_finalize
     as soon as a select task validates so its paired lens-findings task
@@ -901,7 +958,11 @@ def _drive_dag_to_completion(run, *, hold_back_lens_task_ids=frozenset(),
                 elif task_type == "formation-proposal":
                     _submit(engine, item, _FORMATION_PLACEHOLDER_OUTPUT)
                 elif task_type == "selection-fetch":
-                    outcome = _submit(engine, item, _SELECT_OUTPUT)
+                    selection_contract = json.loads(
+                        item.packet.inputs["selection-requirements.json"].content)
+                    selection_output = (_SELECT_OUTPUT if selection_contract["roles"]
+                                        else {"selections": []})
+                    outcome = _submit(engine, item, selection_output)
                     assert outcome["status"] == "validated", outcome
                     pending_finalize.add(task_id)
                 else:
@@ -910,7 +971,8 @@ def _drive_dag_to_completion(run, *, hold_back_lens_task_ids=frozenset(),
         for select_task_id in list(pending_finalize):
             lens_task_id = select_task_id[:-len("-select")]
             selection.fetch(run, select_task_id)
-            planner.plan_lens_finalize(run, lens_task_id)
+            planner.plan_lens_finalize(run, lens_task_id,
+                                       context_budget_tokens=context_budget_tokens)
             pending_finalize.discard(select_task_id)
             progressed = True
 
