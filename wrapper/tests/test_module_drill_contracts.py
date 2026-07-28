@@ -107,7 +107,7 @@ def test_module_task_types_use_the_shared_packet_and_schema_dispatch():
             "selected_candidate_id": "candidate-a", "reason_code": "clear-dominant",
         },
         "module-frontier-expansion": {"dispositions": []},
-        "module-sync-recovery": {"claims": [], "flows": []},
+        "module-sync-recovery": {"dispositions": [], "claims": [], "flows": []},
         "module-async-recovery": {"claims": [], "flows": []},
         "module-model-merge": {"module_model": {}},
         "module-claim-verification": {"verdicts": []},

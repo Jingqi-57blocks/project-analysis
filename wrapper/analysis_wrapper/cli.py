@@ -346,6 +346,12 @@ def parser() -> argparse.ArgumentParser:
     module_planned_spans = sub.add_parser(
         "module-fetch-planned-spans", help="fetch the current Module Drill semantic span plan")
     module_planned_spans.add_argument("--run", required=True)
+    module_sync_recovery = sub.add_parser(
+        "module-plan-sync-recovery", help="register bounded synchronous Module Drill recovery")
+    module_sync_recovery.add_argument("--run", required=True)
+    module_finalize_sync = sub.add_parser(
+        "module-finalize-sync-recovery", help="materialize validated synchronous Module Drill recovery")
+    module_finalize_sync.add_argument("--run", required=True)
     finalize_map = sub.add_parser(
         "finalize-module-map",
         help="validate complete candidate dispositions in module-map.json, "

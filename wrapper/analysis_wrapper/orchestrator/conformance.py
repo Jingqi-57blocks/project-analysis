@@ -19,6 +19,7 @@ uses. A model/executor "passes" when every fixture task validates.
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -217,9 +218,24 @@ FIXTURES: tuple[Fixture, ...] = (
     _fixture(
         "module-sync-recovery",
         "Return the Module Drill synchronous-recovery output schema.",
-        {"anchors": "No semantic anchors are supplied for this conformance fixture."},
+        {
+            "sync-requirements.json": json.dumps({"requirements": [{
+                "requirement_id": "requirement-anchor-node-conformance",
+                "kind": "graph-anchor", "anchor_ids": ["node-conformance"],
+                "evidence_refs": ["repo@NON-GIT:src/handler.ts:1"],
+            }]}),
+            "feature-graph.json": json.dumps({"nodes": [{
+                "node_id": "node-conformance",
+                "evidence_refs": ["repo@NON-GIT:src/handler.ts:1"],
+            }], "edges": []}),
+            "semantic-spans.json": json.dumps({"spans": []}),
+        },
         "module-sync-recovery/v1",
-        {"claims": [], "flows": []},
+        {"dispositions": [{
+            "requirement_id": "requirement-anchor-node-conformance",
+            "outcome": "no-concern-observed", "claim_ids": [],
+            "evidence_refs": ["repo@NON-GIT:src/handler.ts:1"], "reason": "",
+        }], "claims": [], "flows": []},
     ),
     _fixture(
         "module-async-recovery",
