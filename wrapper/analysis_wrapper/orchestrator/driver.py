@@ -197,7 +197,8 @@ def _phase_judgment(state: RunState) -> bool:
 
 
 def _phase_module_map(state: RunState) -> bool:
-    from .. import module_map
+    from .. import module_map, module_render, synthesis_input
+    from ..system_model import write_system_model
     from . import planner
     outcome = state.phase("module map: write + structural finalize")
     formation.write(state.run)
@@ -226,6 +227,14 @@ def _phase_module_map(state: RunState) -> bool:
         raise DriverError("module formation structural gate blocked completion: " +
                           "; ".join(row.get("reason", "unknown")
                                     for row in quality.get("blockers", [])[:5]))
+    # prepare-overview builds an initial system model before module formation
+    # exists, so it cannot yet contain module nodes.  Rebuild the derived
+    # artifacts only after the final module map (including any boundary
+    # resolution) is validated.  Reports and the final audit consume these
+    # exact artifacts, not an earlier zero-module projection.
+    write_system_model(state.run)
+    module_render.write(state.run)
+    synthesis_input.write(state.run)
     diagnostics = quality.get("diagnostics", {})
     outcome.detail = ("zero-omission/zero-overlap and structural gate passed; "
                       f"partitions={diagnostics.get('partition_count', 0)}, "

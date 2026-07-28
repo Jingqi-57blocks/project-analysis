@@ -419,8 +419,8 @@ def _validate_formation_proposal(obj: Any) -> list[Failure]:
         failures.add("output-shape", "formation-proposal output must be an object")
         return failures.rows
     modules = obj.get("modules")
-    if failures.require(isinstance(modules, list) and bool(modules), "modules-shape",
-                         "modules must be a non-empty list", "modules"):
+    if failures.require(isinstance(modules, list), "modules-shape",
+                         "modules must be a list", "modules"):
         seen_ids: set[str] = set()
         for index, row in enumerate(modules):
             _validate_module_row(row, f"modules[{index}]", failures)
@@ -1167,6 +1167,26 @@ def _crosscheck_formation_partitions(obj: Any,
         failures.add("formation-explicit-dispositions",
                      "partitioned formation packets must use explicit candidate_dispositions",
                      "candidate_rules")
+    modules = obj.get("modules") if isinstance(obj, dict) else None
+    if isinstance(modules, list):
+        repository_ref = str(partition.get("repository_ref", "")) \
+            if isinstance(partition, dict) else ""
+        repository_slug = re.sub(r"[^a-z0-9]+", "-", repository_ref.lower()).strip("-")
+        placeholder_pattern = re.compile(rf"^{re.escape(repository_slug)}-\d+$") \
+            if repository_slug else None
+        for index, row in enumerate(modules):
+            module_id = row.get("module_id") if isinstance(row, dict) else None
+            if isinstance(module_id, str) and placeholder_pattern \
+                    and placeholder_pattern.fullmatch(module_id):
+                failures.add("formation-module-placeholder-id",
+                             "module_id must express a responsibility, not a repository ordinal",
+                             f"modules[{index}].module_id")
+        if not modules and isinstance(rows, list) and any(
+                isinstance(row, dict) and row.get("disposition") not in {"excluded", "unresolved"}
+                for row in rows):
+            failures.add("formation-empty-modules-disposition",
+                         "an empty modules list can only disposition candidates as excluded or unresolved",
+                         "candidate_dispositions")
     return failures.rows
 
 
@@ -1232,6 +1252,35 @@ def _crosscheck_boundary_resolution(obj: Any,
                         failures.add("boundary-module-id-unique", f"duplicate module_id: {module_id}",
                                      f"modules[{index}].module_id")
                     seen.add(module_id)
+            # A boundary-resolution task may add a module after the initial
+            # formation partition deliberately left a pure structural signal
+            # unresolved.  Apply the same no-repository-ordinal rule here;
+            # otherwise this later path could reintroduce exactly the
+            # placeholder identifiers formation-proposal rejects.
+            repository_refs_by_module: dict[str, set[str]] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                candidate = expected_by_id.get(row.get("candidate_id"), {})
+                repository_ref = candidate.get("repository_ref") \
+                    if isinstance(candidate, dict) else ""
+                if not isinstance(repository_ref, str) or not repository_ref:
+                    continue
+                for module_id in row.get("module_ids", []) or []:
+                    if isinstance(module_id, str):
+                        repository_refs_by_module.setdefault(module_id, set()).add(repository_ref)
+            for index, row in enumerate(modules):
+                module_id = row.get("module_id") if isinstance(row, dict) else None
+                if not isinstance(module_id, str):
+                    continue
+                for repository_ref in repository_refs_by_module.get(module_id, set()):
+                    repository_slug = re.sub(r"[^a-z0-9]+", "-", repository_ref.lower()).strip("-")
+                    if repository_slug and re.fullmatch(
+                            rf"{re.escape(repository_slug)}-\d+", module_id):
+                        failures.add("boundary-module-placeholder-id",
+                                     "module_id must express a responsibility, not a repository ordinal",
+                                     f"modules[{index}].module_id")
+                        break
     return failures.rows
 
 
@@ -1310,6 +1359,24 @@ HONEST_INAPPLICABILITY_MARKERS = (
     "not found in the analyzed")
 
 
+_INLINE_EVIDENCE_REFERENCE = re.compile(
+    r"(?:signals/[^\s:]+:\d+|metric:[^\s,;]+|"
+    r"[A-Za-z0-9_-]+@[0-9a-f]{7,}:[^\s:]+:\d+|\]\([^)]+\))")
+
+
+def _short_unknown_is_grounded(content: str) -> bool:
+    """Whether a short ``unknown`` section identifies its actual evidence gap.
+
+    The floor exception is for a category that genuinely could not be
+    determined from a named input. It must not let a model bypass every
+    section with an identical generic disclaimer while evidence was supplied.
+    """
+    lowered = content.lower()
+    if "host judgment" in lowered:
+        return False
+    return bool(_INLINE_EVIDENCE_REFERENCE.search(content))
+
+
 def _crosscheck_section_generate(obj: Any, packet_inputs: Mapping[str, str]) -> list[Failure]:
     """A section's completeness FLOOR, enforced at submit time.
 
@@ -1335,10 +1402,33 @@ def _crosscheck_section_generate(obj: Any, packet_inputs: Mapping[str, str]) -> 
     content = obj.get("content_md") if isinstance(obj, dict) else None
     if not isinstance(content, str):
         return []  # the schema check already reported this
+    raw_boundary = packet_inputs.get("identity-boundary.json")
+    if raw_boundary is not None:
+        try:
+            boundary = json.loads(raw_boundary)
+            forbidden = boundary.get("forbidden_internal_ids", []) \
+                if isinstance(boundary, dict) else []
+        except ValueError:
+            forbidden = []
+        if isinstance(forbidden, list):
+            leaked = sorted({item for item in forbidden
+                             if isinstance(item, str) and item and item in content})
+            if leaked:
+                return [{
+                    "check": "section-internal-identity-leak", "location": "content_md",
+                    "detail": ("section exposes forbidden internal repository identifier(s): "
+                               + ", ".join(leaked)),
+                }]
     if len(content.split()) >= min_words:
         return []
     lowered = content.lower()
     if any(marker in lowered for marker in HONEST_INAPPLICABILITY_MARKERS):
+        if "unknown" in lowered and not _short_unknown_is_grounded(content):
+            return [{
+                "check": "section-generic-unknown", "location": "content_md",
+                "detail": ("a short unknown section must name and cite the unavailable "
+                           "evidence input; generic host-judgment fallback is not allowed"),
+            }]
         return []  # short is fine when it is an honest inapplicability line
     return [{
         "check": "floor-section-thin", "location": "content_md",

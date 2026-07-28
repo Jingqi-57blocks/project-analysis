@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .. import coverage_render, module_render
 from ..sanitize import sanitize_text
 from . import renders, schemas, sections as catalog
 from .composer import compose
@@ -61,6 +62,14 @@ Hard rules for this section:
 - An inapplicable or unavailable category is ONE honest line, never silence.
 - Absence of evidence is never rendered as health: write "no concern observed"
   scoped to the signals that ran, or "unknown" when a signal did not run.
+- Never emit a generic "unknown" fallback when the packet contains evidence.
+  A short unknown line is valid only when it names the unavailable input and
+  cites its exact source reference; "host judgment lacks evidence" is not an
+  evidence statement and will be rejected. Synthesize the supplied facts
+  instead, even when their confidence is low or their coverage is partial.
+- Never expose an internal repository identifier. Use the corresponding
+  repository reference from identity-boundary.json in prose and citations;
+  that packet names the identifiers which are forbidden in final reports.
 """
 
 
@@ -171,6 +180,18 @@ def _section_inputs(run: Path, section: catalog.Section,
         path = run / name
         if path.is_file():
             inputs[name.replace("/", "__")] = path.read_text("utf-8")
+    # A final-report boundary, supplied to every author task and validated at
+    # submit time.  The task ledger is not a shipped artifact, so it may carry
+    # the internal join keys solely to prevent them leaking into assembled MD.
+    from .. import identity
+    mapping = identity.load(run)
+    restricted = [item for item in (mapping.project, *mapping.repositories)
+                  if item.internal_id != item.reference]
+    if restricted:
+        inputs["identity-boundary.json"] = json.dumps({
+            "forbidden_internal_ids": sorted(item.internal_id for item in restricted),
+            "repository_references": sorted(item.reference for item in mapping.repositories),
+        }, sort_keys=True)
     return {name: sanitize_text(content) for name, content in inputs.items()}
 
 
@@ -355,7 +376,15 @@ def assemble_document(run_dir: str | Path, document: str, *,
     title = {catalog.OVERVIEW: f"# {project} — Project Overview",
              catalog.TECHNICAL: f"# {project} — Technical Overview & Diagnosis",
              catalog.PROJECT_MAP: f"# {project} — Project Map"}[document]
-    text = title + "\n\n" + "\n\n".join(parts) + "\n"
+    # These projections are deliberately rendered at final assembly.  The
+    # audit compares them byte-for-byte with their canonical artifacts, so a
+    # model cannot omit, paraphrase, or duplicate either accountability table.
+    machine_blocks: tuple[str, ...] = ()
+    if document == catalog.TECHNICAL:
+        machine_blocks = (coverage_render.render(run).strip(),)
+    elif document == catalog.PROJECT_MAP:
+        machine_blocks = (module_render.render(run).strip(),)
+    text = title + "\n\n" + "\n\n".join(parts + list(machine_blocks)) + "\n"
     path = Path(out).expanduser().resolve() if out else run / document
     path.write_text(sanitize_text(text), "utf-8")
     return path
