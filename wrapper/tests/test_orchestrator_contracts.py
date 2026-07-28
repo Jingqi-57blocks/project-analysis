@@ -187,6 +187,14 @@ def test_ledger_record_claimed_and_failed_require_positive_attempt():
         _ledger_record("failed", {"reason": "x", "attempt": -1})
 
 
+def test_ledger_record_released_requires_a_reason_and_positive_attempt():
+    _ledger_record("released", {"reason": "host interrupted", "attempt": 1})
+    with pytest.raises(ValueError, match="non-empty"):
+        _ledger_record("released", {"reason": "", "attempt": 1})
+    with pytest.raises(ValueError, match="positive integer"):
+        _ledger_record("released", {"reason": "x", "attempt": 0})
+
+
 def test_ledger_record_rejects_wrong_detail_keys_for_its_event():
     with pytest.raises(ValueError, match="must contain exactly"):
         _ledger_record("created", {"task": _packet().to_dict(), "extra": 1})

@@ -1,10 +1,10 @@
 """Bundled headless executor for the orchestrator protocol (57B-113 / 57B-115, M1).
 
-**This module performs model-API network calls.** It is invoked EXPLICITLY
-by a user (the ``run-executor`` CLI subcommand) supplying their own API key
-through an environment variable; nothing in the analysis pipeline
-(``prepare-overview``, ``finalize-*``, ``audit-overview``, ...) imports it,
-and it never runs implicitly as a side effect of any other command.
+**This module performs model-API network calls.** It is invoked ONLY by an
+explicit ``run-executor`` call or by ``run-pipeline --executor api``, supplying
+the user's own API key through an environment variable. The normal pipeline
+default is ``--executor host``; host execution never imports this module,
+inspects API-key environment variables, or makes model-API calls.
 
 It is one possible implementation of the executor protocol defined by
 ``engine.py``'s ``next-task``/``submit-task`` verbs (claim -> build a
@@ -58,6 +58,13 @@ class ExecutorError(RuntimeError):
     goes through the normal per-task ledger accounting."""
 
 
+HOST_EXECUTOR_GUIDANCE = (
+    "Codex CLI and Claude Code users should run `run-pipeline --executor host` "
+    "and use `next-task` / `submit-task` in the current agent session instead "
+    "of supplying a second project-level API key."
+)
+
+
 def urllib_transport(url: str, headers: Mapping[str, str], body: bytes,
                      timeout: float) -> tuple[int, bytes]:
     """The real network transport."""
@@ -95,8 +102,33 @@ def _api_key(env_var: str) -> str:
     if not key:
         raise ExecutorError(
             f"missing API key: set the {env_var} environment variable before "
-            "running run-executor")
+            f"running the bundled API executor. {HOST_EXECUTOR_GUIDANCE}")
     return key
+
+
+def preflight(config: AdapterConfig) -> None:
+    """Validate every API-wide prerequisite before a task can be claimed.
+
+    This intentionally makes no network call. ``run_executor`` invokes it
+    before constructing an :class:`Engine`, and the pipeline driver invokes it
+    before planning phases, so a bad API configuration can never strand a
+    ledger claim.
+    """
+    if config.name not in _ADAPTERS:
+        raise ExecutorError(
+            f"unknown executor adapter: {config.name!r}. {HOST_EXECUTOR_GUIDANCE}")
+    if not isinstance(config.model, str) or not config.model.strip():
+        raise ExecutorError(
+            f"--model is required for the bundled API executor. {HOST_EXECUTOR_GUIDANCE}")
+    if config.name == "openai-compatible" and not config.base_url:
+        raise ExecutorError(
+            f"the openai-compatible adapter requires --base-url. {HOST_EXECUTOR_GUIDANCE}")
+    env_var = config.api_key_env or (
+        "ANTHROPIC_API_KEY" if config.name == "anthropic" else "OPENAI_API_KEY")
+    if not isinstance(env_var, str) or not env_var.strip():
+        raise ExecutorError(
+            f"--api-key-env must name an environment variable. {HOST_EXECUTOR_GUIDANCE}")
+    _api_key(env_var)
 
 
 def _packet_user_content(packet: TaskPacket) -> str:
@@ -191,8 +223,7 @@ def run_one(packet: TaskPacket, config: AdapterConfig, attempt: int, *,
     missing --base-url) raises :class:`ExecutorError` (build_request runs
     before any network call, so this always happens before the timing clock
     below would even start)."""
-    if config.name not in _ADAPTERS:
-        raise ExecutorError(f"unknown executor adapter: {config.name!r}")
+    preflight(config)
     build_request, parse_response = _ADAPTERS[config.name]
     executor_info = ExecutorInfo(kind=config.name, model=config.model,
                                  params={"temperature": config.temperature})
@@ -237,6 +268,9 @@ def run_executor(run_dir, config: AdapterConfig, *, concurrency: int = 1,
     appears once, in "failed", not three times). An :class:`ExecutorError`
     (config-level) propagates out immediately rather than being swallowed
     into the summary."""
+    # Do this before Engine.claim. A configuration problem is global, so
+    # claiming even one task first would leave an abandoned ledger record.
+    preflight(config)
     engine = Engine(run_dir, max_attempts=max_attempts)
     while True:
         batch: list[ClaimedTask] = engine.claim(

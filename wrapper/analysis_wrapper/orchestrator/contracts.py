@@ -33,7 +33,7 @@ TASK_TYPES = frozenset({
     "section-generate", "repair-edit-ops", "coherence-check", "selection-fetch",
 })
 
-LEDGER_EVENTS = frozenset({"created", "claimed", "submitted", "validated", "failed"})
+LEDGER_EVENTS = frozenset({"created", "claimed", "released", "submitted", "validated", "failed"})
 RESULT_STATUSES = frozenset({"ok", "failed"})
 
 # A stable kebab-case slug — shared shape for task_id/finding-id-like handles
@@ -461,6 +461,7 @@ _LEDGER_RECORD_FIELDS = {"contract_version", "event", "task_id", "at", "detail"}
 _EVENT_DETAIL_FIELDS = {
     "created": {"task"},
     "claimed": {"executor", "attempt"},
+    "released": {"reason", "attempt"},
     "submitted": {"result"},
     "validated": {"validation"},
     "failed": {"reason", "attempt"},
@@ -490,6 +491,9 @@ class LedgerRecord:
             TaskPacket.from_dict(self.detail["task"])
         elif self.event == "claimed":
             ExecutorInfo.from_dict(self.detail["executor"])
+            _require_positive_int(self.detail["attempt"], "detail.attempt")
+        elif self.event == "released":
+            _require_text(self.detail["reason"], "detail.reason", allow_multiline=True)
             _require_positive_int(self.detail["attempt"], "detail.attempt")
         elif self.event == "submitted":
             TaskResult.from_dict(self.detail["result"])
