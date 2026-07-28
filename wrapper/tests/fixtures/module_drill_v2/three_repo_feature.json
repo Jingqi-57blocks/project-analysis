@@ -26,7 +26,7 @@
     ]
   },
   "module_scope": {
-    "schema_version": "module-scope/v2",
+    "schema_version": "module-scope/v3",
     "feature_id": "sample-capability",
     "selector": "create a record",
     "source_manifest_digest": "de6a89df6a122ca930be817a203478e6ecfebd118292754d53f24e3a227c1603",
@@ -51,8 +51,8 @@
       {"seed_id": "seed-ui-create", "kind": "ui-action", "repository_ref": "web-app", "evidence_refs": ["web-app@1111111:src/create.tsx:10"], "coverage": {"applicability": "applicable", "status": "complete", "positive_evidence_refs": [], "limitations": []}}
     ],
     "frontiers": [
-      {"frontier_id": "frontier-api", "anchor_id": "node-ui-create", "edge_kind": "invokes", "direction": "outbound", "reason": "trace UI action to its interface"},
-      {"frontier_id": "frontier-worker", "anchor_id": "node-event", "edge_kind": "emits", "direction": "outbound", "reason": "trace asynchronous side effect"}
+      {"frontier_id": "frontier-api", "anchor_id": "node-ui-create", "edge_kind": "invokes", "direction": "outbound", "wave": 0, "cycle_key": "cycle-ui-create", "evidence_refs": ["web-app@1111111:src/create.tsx:10"], "reason": "trace UI action to its interface"},
+      {"frontier_id": "frontier-worker", "anchor_id": "node-event", "edge_kind": "emits", "direction": "outbound", "wave": 1, "cycle_key": "cycle-event", "evidence_refs": ["api-service@2222222:service/create.ts:50"], "reason": "trace asynchronous side effect"}
     ],
     "closure_status": "closed"
   },

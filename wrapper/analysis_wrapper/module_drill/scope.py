@@ -8,7 +8,7 @@ from typing import Any
 from .coverage import CLOSURE_STATUS, Coverage
 from .validation import ContractError, enum, exact_object, ref_list, sha256, slug, string_list, text, unique_ids
 
-MODULE_SCOPE_VERSION = "module-scope/v2"
+MODULE_SCOPE_VERSION = "module-scope/v3"
 SEED_KINDS = frozenset({
     "ui-action", "route", "symbol", "package", "datastore", "job-event", "path", "module",
 })
@@ -88,6 +88,9 @@ class FrontierWorkItem:
     anchor_id: str
     edge_kind: str
     direction: str
+    wave: int
+    cycle_key: str
+    evidence_refs: tuple[str, ...]
     reason: str
 
     def __post_init__(self) -> None:
@@ -95,20 +98,30 @@ class FrontierWorkItem:
         slug(self.anchor_id, "frontier anchor_id")
         slug(self.edge_kind, "frontier edge_kind")
         enum(self.direction, FRONTIER_DIRECTIONS, "frontier direction")
+        if isinstance(self.wave, bool) or not isinstance(self.wave, int) or self.wave < 0:
+            raise ContractError("frontier wave must be a non-negative integer")
+        slug(self.cycle_key, "frontier cycle_key")
         text(self.reason, "frontier reason")
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {"frontier_id": self.frontier_id, "anchor_id": self.anchor_id,
                 "edge_kind": self.edge_kind, "direction": self.direction,
-                "reason": self.reason}
+                "wave": self.wave, "cycle_key": self.cycle_key,
+                "evidence_refs": list(self.evidence_refs), "reason": self.reason}
 
     @classmethod
     def from_dict(cls, value: Any, label: str) -> "FrontierWorkItem":
-        row = exact_object(value, {"frontier_id", "anchor_id", "edge_kind", "direction", "reason"}, label)
+        row = exact_object(value, {
+            "frontier_id", "anchor_id", "edge_kind", "direction", "wave", "cycle_key",
+            "evidence_refs", "reason",
+        }, label)
         return cls(slug(row["frontier_id"], f"{label}.frontier_id"),
                    slug(row["anchor_id"], f"{label}.anchor_id"),
                    slug(row["edge_kind"], f"{label}.edge_kind"),
                    enum(row["direction"], FRONTIER_DIRECTIONS, f"{label}.direction"),
+                   row["wave"],
+                   slug(row["cycle_key"], f"{label}.cycle_key"),
+                   ref_list(row["evidence_refs"], f"{label}.evidence_refs"),
                    text(row["reason"], f"{label}.reason"))
 
 

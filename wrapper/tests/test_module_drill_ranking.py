@@ -114,6 +114,12 @@ def test_selected_ranking_materializes_one_open_scope_from_canonical_evidence(tm
     assert scope.selected_candidate_id == candidate_id
     assert scope.closure_status == "open"
     assert {candidate.disposition for candidate in scope.candidates} >= {"selected", "alternative"}
+    assert scope.frontiers
+    assert all(frontier.wave == 0 for frontier in scope.frontiers)
+    assert {frontier.anchor_id for frontier in scope.frontiers} == {
+        seed_id for candidate in scope.candidates if candidate.candidate_id == candidate_id
+        for seed_id in candidate.seed_ids
+    }
 
 
 def test_ambiguous_ranking_never_materializes_a_scope(tmp_path):
