@@ -25,7 +25,8 @@ def _json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def _run(tmp_path: Path, *, route_count: int = 1) -> tuple[Path, Path]:
+def _run(tmp_path: Path, *, route_count: int = 1,
+         call_edges: list[dict] | None = None) -> tuple[Path, Path]:
     files = {
         "src/routes.ts": "\n" * 6 + "registerRoute();\n",
         "src/ui.ts": "\n" * 11 + "submitRecord();\n",
@@ -70,6 +71,10 @@ def _run(tmp_path: Path, *, route_count: int = 1) -> tuple[Path, Path]:
         "test_links": [{"path": "src/service.spec.ts", "specifier": "./service",
                         "evidence": "src/service.ts:15"}],
     })
+    if call_edges is not None:
+        path = overview / "callgraph" / "service.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(row) + "\n" for row in call_edges), encoding="utf-8")
     initialized = initialize_from_overview(
         overview, output_root=tmp_path / "output", project_key="workspace",
         selector="record", language="en", run_label="feature-evidence")
