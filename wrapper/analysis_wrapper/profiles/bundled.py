@@ -11,7 +11,7 @@ from .providers import (AccessEvidenceProvider, CallgraphGoProvider,
                         CallgraphJsProvider, DatastoreEvidenceProvider,
                         DependencyRiskProvider, DeployUnitsProvider,
                         DepmapGoProvider, DepmapJsProvider, GitHistoryProvider,
-                        IntegrationEvidenceProvider, RouteInventoryProvider,
+                        FeatureBoundariesProvider, IntegrationEvidenceProvider, RouteInventoryProvider,
                         UiRouteLinkageProvider)
 from .registry import ProfileRegistry
 
@@ -165,6 +165,7 @@ BUNDLED_PROVIDERS: tuple[CapabilityProvider, ...] = (
     DeployUnitsProvider(),
     DepmapGoProvider(), DepmapJsProvider(),
     GitHistoryProvider(),
+    FeatureBoundariesProvider(),
     IntegrationEvidenceProvider(),
     # RouteInventoryProvider/UiRouteLinkageProvider (57B-84 B2): also
     # zero-profile universal, same registry carve-out as DeployUnitsProvider

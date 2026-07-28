@@ -25,7 +25,7 @@ _CANONICAL_FILES = frozenset({
     "module-candidates.json", "callgraph-coverage.json",
 })
 _CANONICAL_DIRECTORIES = frozenset({
-    "access", "callgraph", "datastore", "deploy", "imports", "integrations", "routes",
+    "access", "callgraph", "datastore", "deploy", "feature-boundaries", "imports", "integrations", "routes",
 })
 _INDEX_FILES = frozenset({"synthesis-input.json", "evidence-catalog.json"})
 _EXCLUDED_PARTS = frozenset({"raw", "tasks", ".git", "__pycache__"})
