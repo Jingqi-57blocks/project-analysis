@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .validation import ContractError, exact_object, sha256, slug, string_list
+from .validation import ContractError, exact_object, run_id, sha256, string_list
 
 AUDIT_RESULT_VERSION = "module-audit/v1"
 RUN_STATE_VERSION = "module-run-state/v2"
@@ -45,7 +45,7 @@ class RunStateProjection:
     audit: AuditResult
 
     def __post_init__(self) -> None:
-        slug(self.run_id, "run_id")
+        run_id(self.run_id, "run_id")
         sha256(self.source_manifest_digest, "source_manifest_digest")
         sha256(self.ledger_digest, "ledger_digest")
         if not isinstance(self.complete, bool):
@@ -66,7 +66,7 @@ class RunStateProjection:
         }, label)
         if row["schema_version"] != RUN_STATE_VERSION:
             raise ContractError(f"{label}.schema_version must be {RUN_STATE_VERSION!r}")
-        return cls(slug(row["run_id"], f"{label}.run_id"),
+        return cls(run_id(row["run_id"], f"{label}.run_id"),
                    sha256(row["source_manifest_digest"], f"{label}.source_manifest_digest"),
                    sha256(row["ledger_digest"], f"{label}.ledger_digest"),
                    row["complete"], AuditResult.from_dict(row["audit"], f"{label}.audit"))

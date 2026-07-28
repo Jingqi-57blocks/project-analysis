@@ -9,6 +9,7 @@ from typing import Any, Iterable, Mapping
 
 _SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 class ContractError(ValueError):
@@ -40,6 +41,12 @@ def text(value: Any, label: str, *, multiline: bool = False) -> str:
 def slug(value: Any, label: str) -> str:
     if not isinstance(value, str) or not _SLUG.fullmatch(value):
         raise ContractError(f"{label} must be a stable kebab-case slug")
+    return value
+
+
+def run_id(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not _RUN_ID.fullmatch(value):
+        raise ContractError(f"{label} must be a safe run id")
     return value
 
 

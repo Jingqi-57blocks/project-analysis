@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .. import identity
+from ..executor import write_new_text
 from .coverage import Coverage
 from .source import ArtifactRecord, ProviderOutcome, RepositorySnapshot, SourceManifest, ToolIdentity
 from .validation import ContractError, sha256_json
@@ -189,3 +190,10 @@ def build_from_overview(source_run: str | Path, *, snapshot_id: str) -> SourceMa
         tools=_tool_identities(provenance), artifacts=artifacts,
         providers=_provider_outcomes(execution, artifacts),
     )
+
+
+def write(path: str | Path, manifest: SourceManifest) -> Path:
+    """Persist a newly-created manifest without overwriting a run checkpoint."""
+    out = Path(path).expanduser().resolve()
+    write_new_text(out, json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n")
+    return out
