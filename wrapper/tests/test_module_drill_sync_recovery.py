@@ -155,6 +155,38 @@ def test_packet_does_not_expand_every_node_that_shares_a_provenance_ref():
     assert next(row for row in shared_span if row["kind"] == "semantic-span")["anchor_ids"] == []
 
 
+def test_packet_keeps_observed_ui_to_route_bridge_without_provenance_fanout():
+    ui_ref = "repo@NON-GIT:ui/button.tsx:10"
+    route_ref = "repo@NON-GIT:api/routes.ts:20"
+    graph = {
+        "schema_version": "feature-graph/v1", "feature_id": "feature", "nodes": [
+            {"node_id": "node-ui", "kind": "ui-action", "repository_ref": "web",
+             "observation": "observed", "evidence_refs": [ui_ref]},
+            {"node_id": "node-route", "kind": "route", "repository_ref": "api",
+             "observation": "observed", "evidence_refs": [route_ref]},
+            {"node_id": "node-unrelated", "kind": "route", "repository_ref": "api",
+             "observation": "observed", "evidence_refs": [ui_ref]},
+        ],
+        "edges": [{"edge_id": "edge-ui-route", "kind": "ui-to-route",
+                   "source_node_id": "node-ui", "target_node_id": "node-route",
+                   "observation": "observed", "evidence_refs": [ui_ref, route_ref]}],
+    }
+    requirements = {
+        "schema_version": "module-sync-recovery-requirements/v1",
+        "feature_graph_digest": "graph", "semantic_spans_digest": "spans", "feature_id": "feature",
+        "requirements": [{
+            "requirement_id": "requirement-anchor-node-ui", "kind": "graph-anchor",
+            "anchor_ids": ["node-ui"], "evidence_refs": [ui_ref],
+        }],
+    }
+    packet = _build_packet(None, partition_id="ui-async-01", requirements=requirements,
+                           graph=graph, spans={"schema_version": "semantic-spans/v1", "spans": []},
+                           rows=requirements["requirements"])
+    local_graph = json.loads(packet.inputs["feature-graph.json"].content)
+    assert {row["node_id"] for row in local_graph["nodes"]} == {"node-ui", "node-route"}
+    assert [row["edge_id"] for row in local_graph["edges"]] == ["edge-ui-route"]
+
+
 def test_sync_output_requires_exact_requirement_dispositions(tmp_path):
     _, packet = _packet(tmp_path)
     inputs = {name: item.content for name, item in packet.inputs.items()}
