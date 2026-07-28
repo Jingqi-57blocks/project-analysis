@@ -337,6 +337,9 @@ def parser() -> argparse.ArgumentParser:
     module_frontiers = sub.add_parser(
         "module-build-frontier-receipts", help="record exact observed Module Drill frontier expansions")
     module_frontiers.add_argument("--run", required=True)
+    module_frontier_candidates = sub.add_parser(
+        "module-build-frontier-candidates", help="index bounded Module Drill frontier candidates")
+    module_frontier_candidates.add_argument("--run", required=True)
     finalize_map = sub.add_parser(
         "finalize-module-map",
         help="validate complete candidate dispositions in module-map.json, "
