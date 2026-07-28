@@ -50,7 +50,7 @@ class ModuleTaskDefinition:
 
 MODULE_TASK_DEFINITIONS = (
     ModuleTaskDefinition("module-candidate-ranking", "module-candidate-ranking/v1",
-                         "candidate IDs must be selected from the supplied universe"),
+                         "only supplied candidate IDs may be selected; ambiguity must stay unresolved"),
     ModuleTaskDefinition("module-frontier-expansion", "module-frontier-expansion/v1",
                          "every supplied frontier receives exactly one disposition"),
     ModuleTaskDefinition("module-sync-recovery", "module-sync-recovery/v1",

@@ -48,7 +48,10 @@ def test_cli_drives_overview_backed_module_task_lifecycle(tmp_path, capsys):
     at = now_iso()
     result = TaskResult(
         task_id="candidate-ranking", status="ok",
-        output={"candidate_ids": ["candidate-a"], "selected_candidate_id": "candidate-a"},
+        output={
+            "decision": "selected", "candidate_ids": ["candidate-a"],
+            "selected_candidate_id": "candidate-a", "reason_code": "clear-dominant",
+        },
         executor=ExecutorInfo(kind="test", model="test-model", params={}),
         timing=TaskTiming(started_at=at, finished_at=at, wall_clock_s=0.0),
         tokens=None, validation=ValidationOutcome(passed=True, failures=()),

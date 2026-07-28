@@ -102,7 +102,10 @@ def test_scope_rejects_selected_candidate_outside_deterministic_candidates():
 
 def test_module_task_types_use_the_shared_packet_and_schema_dispatch():
     outputs = {
-        "module-candidate-ranking": {"candidate_ids": ["candidate-a"], "selected_candidate_id": "candidate-a"},
+        "module-candidate-ranking": {
+            "decision": "selected", "candidate_ids": ["candidate-a"],
+            "selected_candidate_id": "candidate-a", "reason_code": "clear-dominant",
+        },
         "module-frontier-expansion": {"dispositions": []},
         "module-sync-recovery": {"claims": [], "flows": []},
         "module-async-recovery": {"claims": [], "flows": []},

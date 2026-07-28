@@ -704,8 +704,9 @@ _VALIDATORS: dict[str, Callable[[Any], list[Failure]]] = {
     "repair-edit-ops": _validate_repair_edit_ops,
     "coherence-check": _validate_coherence_check,
     "selection-fetch": _validate_selection_fetch,
-    **{task_type: (lambda output, task_type=task_type:
-                    module_drill_schemas.validate_output(task_type, output))
+    **{task_type: (lambda output, packet_inputs=None, task_type=task_type:
+                    module_drill_schemas.validate_output(
+                        task_type, output, packet_inputs=packet_inputs))
        for task_type in MODULE_TASK_TYPES},
 }
 
@@ -826,6 +827,10 @@ def validate_output(task_type: str, obj: Any, *,
     if task_type not in _VALIDATORS:
         return [{"check": "task-type", "detail": f"unknown task_type: {task_type!r}",
                  "location": "task_type"}]
+    if task_type in MODULE_TASK_TYPES:
+        # Module Drill owns both the output envelope and its packet-bound
+        # checks.  Keep the shared dispatcher as the one submit path.
+        return _VALIDATORS[task_type](obj, packet_inputs)
     failures = _VALIDATORS[task_type](obj)
     crosscheck = _CROSSCHECKS.get(task_type)
     if crosscheck is not None and packet_inputs is not None:
