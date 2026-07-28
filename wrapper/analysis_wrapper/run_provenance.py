@@ -26,6 +26,7 @@ _ANALYZER_IGNORED_DIRS = {
     ".git", ".venv", "__pycache__", ".pytest_cache", "node_modules",
     "vendor", "dist", "build", "coverage", "state", "output", "exported",
 }
+_ANALYZER_IGNORED_FILENAMES = {".DS_Store"}
 
 
 def _source_tree_digest(
@@ -64,7 +65,7 @@ def analyzer_source_state(analyzer_root: str | Path) -> str:
         root,
         excluded=lambda relative: any(
             part in _ANALYZER_IGNORED_DIRS for part in Path(relative).parts
-        ),
+        ) or Path(relative).name in _ANALYZER_IGNORED_FILENAMES,
     )
 
 

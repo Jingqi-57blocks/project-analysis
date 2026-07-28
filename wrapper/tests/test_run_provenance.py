@@ -125,6 +125,19 @@ def test_analyzer_source_state_detects_same_dirty_path_content_change(tmp_path):
     assert problems and "source_state_sha256" in problems[0]
 
 
+def test_analyzer_source_state_ignores_macos_finder_metadata(tmp_path):
+    analyzer = tmp_path / "analyzer"
+    analyzer.mkdir()
+    (analyzer / "wrapper.py").write_text("source\n")
+    recorded = run_provenance.analyzer_observation(analyzer)
+
+    metadata = analyzer / ".DS_Store"
+    metadata.write_bytes(b"first")
+    assert run_provenance.analyzer_staleness(recorded) == []
+    metadata.write_bytes(b"second")
+    assert run_provenance.analyzer_staleness(recorded) == []
+
+
 def test_legacy_run_state_remains_loadable_without_new_provenance(tmp_path, target):
     state = lifecycle.RunState.create("run", "project", TargetSpec([target]))
     state.save(tmp_path)
