@@ -26,14 +26,17 @@ def _json(path: Path, value: dict) -> None:
 
 
 def _run(tmp_path: Path, *, route_count: int = 1,
-         call_edges: list[dict] | None = None) -> tuple[Path, Path]:
+         call_edges: list[dict] | None = None,
+         integration_path: str = "src/service.ts") -> tuple[Path, Path]:
     files = {
         "src/routes.ts": "\n" * 6 + "registerRoute();\n",
         "src/ui.ts": "\n" * 11 + "submitRecord();\n",
         "src/schema.ts": "\n" * 2 + "defineStore();\n",
-        "src/service.ts": "\n" * 14 + "saveRecord();\n",
+        "src/service.ts": "\n" * 14 + (
+            "function createRecord() { setInterval(() => {}, 1); "
+            "const enabled = process.env.RECORDS_ENABLED; callRemote(); }\n"),
         "src/access.ts": "\n" * 4 + "checkAccess();\n",
-        "src/integration.ts": "\n" * 8 + "callRemote();\n",
+        "src/integration.ts": "\n" * 14 + "callRemote();\n",
     }
     overview = _prepared_overview(tmp_path, files)
     routes = [
@@ -60,8 +63,8 @@ def _run(tmp_path: Path, *, route_count: int = 1,
         "contextual_identity": {"count": 0, "sample": []},
     })
     _json(overview / "integrations" / "service.json", {
-        "host_fragments": [{"value": "api.example.com", "evidence": ["src/integration.ts:9"]}],
-        "integration_packages": [{"package": "remote-client", "evidence": ["src/integration.ts:9"]}],
+        "host_fragments": [{"value": "api.example.com", "evidence": [f"{integration_path}:15"]}],
+        "integration_packages": [{"package": "remote-client", "evidence": [f"{integration_path}:15"]}],
     })
     _json(overview / "feature-boundaries" / "service.json", {
         "async_boundaries": [{"category": "timer", "operation": "setInterval",
