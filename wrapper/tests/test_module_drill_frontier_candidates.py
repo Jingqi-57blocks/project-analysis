@@ -29,8 +29,13 @@ def _edge():
     }
 
 
-def _prepared(tmp_path, *, integration_path="src/service.ts"):
-    _, module_run = _run(tmp_path, call_edges=[_edge()], integration_path=integration_path)
+def _prepared(tmp_path, *, integration_path="src/service.ts", route_handler_anchors=None):
+    _, module_run = _run(
+        tmp_path,
+        call_edges=[_edge()],
+        integration_path=integration_path,
+        route_handler_anchors=route_handler_anchors,
+    )
     write_feature_evidence(load(module_run))
     write_candidates(load(module_run))
     driver = ModuleDriver(module_run)
