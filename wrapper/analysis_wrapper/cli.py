@@ -340,6 +340,9 @@ def parser() -> argparse.ArgumentParser:
     module_frontier_candidates = sub.add_parser(
         "module-build-frontier-candidates", help="index bounded Module Drill frontier candidates")
     module_frontier_candidates.add_argument("--run", required=True)
+    module_graph_closure = sub.add_parser(
+        "module-build-graph-closure", help="materialize bounded Module Drill structural graph closure")
+    module_graph_closure.add_argument("--run", required=True)
     module_spans_plan = sub.add_parser(
         "module-plan-spans", help="plan revision-checked Module Drill semantic spans")
     module_spans_plan.add_argument("--run", required=True)
