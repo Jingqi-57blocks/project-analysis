@@ -15,6 +15,7 @@ from .candidate_universe import write as write_candidate_universe
 from .context import load as load_source_context
 from .ranking import register as register_ranking
 from .selection import finalize as finalize_selection
+from .feature_graph import write as write_feature_graph
 from .runtime import initialize_from_overview
 from .spans import fetch
 from .standalone import initialize as initialize_standalone
@@ -126,6 +127,12 @@ def _finalize_ranking(args) -> int:
     return 0 if result.scope_path is not None else 3
 
 
+def _graph(args) -> int:
+    out = write_feature_graph(load_source_context(args.run))
+    _print({"graph": str(out)})
+    return 0
+
+
 def run(args) -> int:
     """Dispatch a Module Drill subcommand and preserve normal CLI exit codes."""
     try:
@@ -136,6 +143,7 @@ def run(args) -> int:
             "module-build-candidates": _candidates,
             "module-plan-ranking": _rank_candidates,
             "module-finalize-ranking": _finalize_ranking,
+            "module-build-graph": _graph,
         }
         handler = handlers.get(args.command)
         if handler is None:

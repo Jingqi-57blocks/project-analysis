@@ -97,6 +97,7 @@ def finalize(module_run: str | Path) -> FinalizedSelection:
     if current_universe != universe:
         raise ContractError("validated ranking packet no longer matches current candidate universe")
     evidence_dir = create_stage_dir(driver.run / "evidence")
+    scope = _scope(driver.context, universe, output) if output["decision"] == "selected" else None
     resolution = {
         "schema_version": RESOLUTION_VERSION,
         "source_manifest_digest": sha256_json(driver.context.manifest.to_dict()),
@@ -105,12 +106,12 @@ def finalize(module_run: str | Path) -> FinalizedSelection:
         "candidate_ids": output["candidate_ids"],
         "selected_candidate_id": output["selected_candidate_id"],
         "reason_code": output["reason_code"],
+        "module_scope_digest": sha256_json(scope.to_dict()) if scope is not None else "",
     }
     resolution_path = evidence_dir / RESOLUTION_FILENAME
     write_new_text(resolution_path, json.dumps(resolution, indent=2, sort_keys=True) + "\n")
-    if output["decision"] != "selected":
+    if scope is None:
         return FinalizedSelection(output["decision"], resolution_path, None)
     scope_path = evidence_dir / SCOPE_FILENAME
-    write_new_text(scope_path, json.dumps(_scope(driver.context, universe, output).to_dict(),
-                                          indent=2, sort_keys=True) + "\n")
+    write_new_text(scope_path, json.dumps(scope.to_dict(), indent=2, sort_keys=True) + "\n")
     return FinalizedSelection("selected", resolution_path, scope_path)
