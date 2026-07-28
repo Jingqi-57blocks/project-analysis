@@ -17,7 +17,7 @@ MODULE_TASK_TYPES = frozenset({
 })
 
 _SCHEMA_BY_TASK = {
-    "module-candidate-ranking": "module-candidate-ranking/v1",
+    "module-candidate-ranking": "module-candidate-ranking/v2",
     "module-frontier-expansion": "module-frontier-expansion/v1",
     "module-sync-recovery": "module-sync-recovery/v1",
     "module-async-recovery": "module-async-recovery/v1",
@@ -49,8 +49,8 @@ class ModuleTaskDefinition:
 
 
 MODULE_TASK_DEFINITIONS = (
-    ModuleTaskDefinition("module-candidate-ranking", "module-candidate-ranking/v1",
-                         "only supplied candidate IDs may be selected; ambiguity must stay unresolved"),
+    ModuleTaskDefinition("module-candidate-ranking", "module-candidate-ranking/v2",
+                         "only supplied candidate IDs may be selected; every selected ID enters scope"),
     ModuleTaskDefinition("module-frontier-expansion", "module-frontier-expansion/v1",
                          "every supplied frontier receives exactly one disposition"),
     ModuleTaskDefinition("module-sync-recovery", "module-sync-recovery/v1",

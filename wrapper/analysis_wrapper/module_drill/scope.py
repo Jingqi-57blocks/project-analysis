@@ -8,7 +8,7 @@ from typing import Any
 from .coverage import CLOSURE_STATUS, Coverage
 from .validation import ContractError, enum, exact_object, ref_list, sha256, slug, string_list, text, unique_ids
 
-MODULE_SCOPE_VERSION = "module-scope/v3"
+MODULE_SCOPE_VERSION = "module-scope/v4"
 SEED_KINDS = frozenset({
     "ui-action", "route", "symbol", "package", "datastore", "job-event", "path", "module",
 })
@@ -155,7 +155,7 @@ class ModuleScope:
     feature_id: str
     selector: str
     source_manifest_digest: str
-    selected_candidate_id: str
+    selected_candidate_ids: tuple[str, ...]
     candidates: tuple[ScopeCandidate, ...]
     seeds: tuple[FeatureSeed, ...]
     frontiers: tuple[FrontierWorkItem, ...]
@@ -165,7 +165,11 @@ class ModuleScope:
         slug(self.feature_id, "feature_id")
         text(self.selector, "selector", multiline=True)
         sha256(self.source_manifest_digest, "source_manifest_digest")
-        slug(self.selected_candidate_id, "selected_candidate_id")
+        if not self.selected_candidate_ids:
+            raise ContractError("module scope requires at least one selected candidate")
+        for candidate_id in self.selected_candidate_ids:
+            slug(candidate_id, "selected_candidate_ids")
+        unique_ids(self.selected_candidate_ids, "module scope selected candidates")
         if not self.candidates:
             raise ContractError("module scope requires deterministic scope candidates")
         if not self.seeds:
@@ -175,15 +179,10 @@ class ModuleScope:
         unique_ids((seed.seed_id for seed in self.seeds), "module scope seeds")
         unique_ids((item.frontier_id for item in self.frontiers), "module scope frontiers")
         candidate_by_id = {candidate.candidate_id: candidate for candidate in self.candidates}
-        selected = candidate_by_id.get(self.selected_candidate_id)
-        if selected is None:
-            raise ContractError("module scope selected_candidate_id must name a scope candidate")
-        if selected.disposition != "selected":
-            raise ContractError("module scope selected candidate must have selected disposition")
         selected_ids = {candidate.candidate_id for candidate in self.candidates
                         if candidate.disposition == "selected"}
-        if selected_ids != {self.selected_candidate_id}:
-            raise ContractError("module scope must have exactly one selected candidate")
+        if selected_ids != set(self.selected_candidate_ids):
+            raise ContractError("module scope selected candidates must match selected dispositions")
         seed_ids = {seed.seed_id for seed in self.seeds}
         for candidate in self.candidates:
             if not set(candidate.seed_ids) <= seed_ids:
@@ -197,7 +196,7 @@ class ModuleScope:
             "feature_id": self.feature_id,
             "selector": self.selector,
             "source_manifest_digest": self.source_manifest_digest,
-            "selected_candidate_id": self.selected_candidate_id,
+            "selected_candidate_ids": list(self.selected_candidate_ids),
             "candidates": [candidate.to_dict() for candidate in self.candidates],
             "seeds": [seed.to_dict() for seed in self.seeds],
             "frontiers": [item.to_dict() for item in self.frontiers],
@@ -208,7 +207,7 @@ class ModuleScope:
     def from_dict(cls, value: Any, label: str = "module scope") -> "ModuleScope":
         row = exact_object(value, {
             "schema_version", "feature_id", "selector", "source_manifest_digest",
-            "selected_candidate_id", "candidates", "seeds", "frontiers", "closure_status",
+            "selected_candidate_ids", "candidates", "seeds", "frontiers", "closure_status",
         }, label)
         if row["schema_version"] != MODULE_SCOPE_VERSION:
             raise ContractError(f"{label}.schema_version must be {MODULE_SCOPE_VERSION!r}")
@@ -219,8 +218,8 @@ class ModuleScope:
             selector=text(row["selector"], f"{label}.selector", multiline=True),
             source_manifest_digest=sha256(row["source_manifest_digest"],
                                           f"{label}.source_manifest_digest"),
-            selected_candidate_id=slug(row["selected_candidate_id"],
-                                       f"{label}.selected_candidate_id"),
+            selected_candidate_ids=tuple(string_list(row["selected_candidate_ids"],
+                                                      f"{label}.selected_candidate_ids", allow_empty=False)),
             candidates=tuple(ScopeCandidate.from_dict(item, f"{label}.candidates[{index}]")
                              for index, item in enumerate(row["candidates"])),
             seeds=tuple(FeatureSeed.from_dict(item, f"{label}.seeds[{index}]")

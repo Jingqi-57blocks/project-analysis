@@ -204,9 +204,9 @@ FIXTURES: tuple[Fixture, ...] = (
         "module-candidate-ranking",
         "Select only from the supplied candidate IDs and return the Module Drill ranking schema.",
         {"candidates": "candidate-conformance-a: observed feature seed."},
-        "module-candidate-ranking/v1",
+        "module-candidate-ranking/v2",
         {"decision": "selected", "candidate_ids": ["candidate-conformance-a"],
-         "selected_candidate_id": "candidate-conformance-a", "reason_code": "clear-dominant"},
+         "reason_code": "clear-dominant"},
     ),
     _fixture(
         "module-frontier-expansion",

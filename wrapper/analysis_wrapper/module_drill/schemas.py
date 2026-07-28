@@ -15,7 +15,7 @@ from .protocol import MODULE_TASK_TYPES
 Failure = dict[str, str]
 
 _REQUIRED_FIELDS = {
-    "module-candidate-ranking": {"decision", "candidate_ids", "selected_candidate_id", "reason_code"},
+    "module-candidate-ranking": {"decision", "candidate_ids", "reason_code"},
     "module-frontier-expansion": {"dispositions"},
     "module-sync-recovery": {"dispositions", "claims", "flows"},
     "module-async-recovery": {"dispositions", "claims", "flows"},
@@ -46,7 +46,6 @@ def _validate_candidate_ranking(output: Any) -> list[Failure]:
 
     decision = output["decision"]
     candidate_ids = output["candidate_ids"]
-    selected = output["selected_candidate_id"]
     reason_code = output["reason_code"]
     if decision not in _RANKING_DECISIONS:
         return _failure("ranking-decision", "decision must be selected, ambiguous, or no-match", "decision")
@@ -55,26 +54,24 @@ def _validate_candidate_ranking(output: Any) -> list[Failure]:
         return _failure("ranking-candidate-ids", "candidate_ids must be a string list", "candidate_ids")
     if len(candidate_ids) != len(set(candidate_ids)):
         return _failure("ranking-candidate-ids", "candidate_ids must not contain duplicates", "candidate_ids")
-    if selected is not None and (not isinstance(selected, str) or not selected):
-        return _failure("selected-candidate", "selected_candidate_id must be a string or null", "selected_candidate_id")
     if reason_code not in _RANKING_REASON_CODES:
         return _failure("ranking-reason-code", "reason_code is not recognized", "reason_code")
     if decision == "selected":
-        if len(candidate_ids) != 1 or selected != candidate_ids[0] or reason_code != "clear-dominant":
+        if not candidate_ids or reason_code != "clear-dominant":
             return _failure(
                 "ranking-selected-shape",
-                "selected requires one candidate, the same selected_candidate_id, and clear-dominant",
+                "selected requires one or more candidates and clear-dominant",
             )
     elif decision == "ambiguous":
-        if len(candidate_ids) < 2 or selected is not None or reason_code != "equally-supported":
+        if len(candidate_ids) < 2 or reason_code != "equally-supported":
             return _failure(
                 "ranking-ambiguous-shape",
-                "ambiguous requires at least two candidates, null selected_candidate_id, and equally-supported",
+                "ambiguous requires at least two candidates and equally-supported",
             )
-    elif candidate_ids or selected is not None or reason_code != "insufficient-evidence":
+    elif candidate_ids or reason_code != "insufficient-evidence":
         return _failure(
             "ranking-no-match-shape",
-            "no-match requires no candidates, null selected_candidate_id, and insufficient-evidence",
+            "no-match requires no candidates and insufficient-evidence",
         )
     return []
 

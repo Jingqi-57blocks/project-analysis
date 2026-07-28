@@ -30,7 +30,7 @@ def _driver(tmp_path: Path) -> ModuleDriver:
 
 
 def _packet(*, task_type: str = "module-candidate-ranking",
-            schema_id: str = "module-candidate-ranking/v1") -> TaskPacket:
+            schema_id: str = "module-candidate-ranking/v2") -> TaskPacket:
     return TaskPacket.create(
         task_id="candidate-ranking", task_type=task_type,
         template_id="module-candidate-ranking", template_version="v1",
@@ -46,7 +46,7 @@ def _result(task_id: str, attempt: int) -> dict:
         task_id=task_id, status="ok",
         output={
             "decision": "selected", "candidate_ids": ["candidate-a"],
-            "selected_candidate_id": "candidate-a", "reason_code": "clear-dominant",
+            "reason_code": "clear-dominant",
         },
         executor=ExecutorInfo(kind="test", model="test-model", params={}),
         timing=TaskTiming(started_at=at, finished_at=at, wall_clock_s=0.0),

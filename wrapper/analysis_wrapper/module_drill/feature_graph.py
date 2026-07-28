@@ -36,7 +36,7 @@ def _load_scope(context: SourceContext) -> ModuleScope:
     if not isinstance(resolution, dict) \
             or resolution.get("schema_version") != "selector-resolution/v1" \
             or resolution.get("decision") != "selected" \
-            or resolution.get("selected_candidate_id") != scope.selected_candidate_id \
+            or resolution.get("selected_candidate_ids") != list(scope.selected_candidate_ids) \
             or resolution.get("module_scope_digest") != sha256_json(scope.to_dict()):
         raise ContractError("module scope does not match its validated selection receipt")
     return scope
@@ -74,15 +74,13 @@ def _load_items(context: SourceContext) -> dict[str, dict[str, Any]]:
 def _selected_items(context: SourceContext, scope: ModuleScope,
                     items: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], ...]:
     universe = load_universe(context)
-    selected = next((row for row in universe["candidates"]
-                     if row["candidate_id"] == scope.selected_candidate_id), None)
-    if selected is None:
+    selected = [row for row in universe["candidates"] if row["candidate_id"] in scope.selected_candidate_ids]
+    if {row["candidate_id"] for row in selected} != set(scope.selected_candidate_ids):
         raise ContractError("module scope selected candidate is absent from the current universe")
-    scope_candidate = next(row for row in scope.candidates
-                           if row.candidate_id == scope.selected_candidate_id)
-    if tuple(selected["seed_ids"]) != scope_candidate.seed_ids:
+    scope_candidates = {row.candidate_id: row for row in scope.candidates if row.candidate_id in scope.selected_candidate_ids}
+    if any(tuple(row["seed_ids"]) != scope_candidates[row["candidate_id"]].seed_ids for row in selected):
         raise ContractError("module scope selected candidate differs from the current universe")
-    evidence_ids = selected["evidence_ids"]
+    evidence_ids = [evidence_id for row in selected for evidence_id in row["evidence_ids"]]
     missing = [evidence_id for evidence_id in evidence_ids if evidence_id not in items]
     if missing:
         raise ContractError("selected candidate references missing feature evidence: " + ", ".join(missing))

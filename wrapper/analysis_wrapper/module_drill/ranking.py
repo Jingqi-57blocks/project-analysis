@@ -21,21 +21,19 @@ from .validation import ContractError, sha256_json
 TASK_ID = "module-candidate-ranking"
 TASK_TYPE = "module-candidate-ranking"
 TEMPLATE_ID = "module-candidate-ranking"
-TEMPLATE_VERSION = "v1"
-OUTPUT_SCHEMA_ID = "module-candidate-ranking/v1"
+TEMPLATE_VERSION = "v2"
+OUTPUT_SCHEMA_ID = "module-candidate-ranking/v2"
 CONTEXT_BUDGET_TOKENS = 24_000
 
 _INSTRUCTIONS = """Resolve the user's selector against only the supplied deterministic candidates.
 
-Return exactly one JSON object matching module-candidate-ranking/v1.
+Return exactly one JSON object matching module-candidate-ranking/v2.
 Never create, rename, merge, or infer a candidate ID. Do not claim any source
-fact in this response. A selected result is allowed only when one supplied
-candidate is materially more directly supported by the selector and its
-attached evidence than every other candidate. If two or more candidates are
-equally supported, return decision=ambiguous with those existing IDs. If the
-packet does not provide enough evidence to select an existing candidate,
-return decision=no-match. Do not use a candidate merely because its identifier
-looks similar to the selector; identifiers are opaque handles.
+fact in this response. For a whole feature, select every supplied candidate
+directly supported by the selector; do not silently discard a directly
+supported candidate. If the packet cannot distinguish competing feature
+interpretations, return decision=ambiguous with those existing IDs. If it
+provides no supporting candidate, return decision=no-match.
 """
 
 

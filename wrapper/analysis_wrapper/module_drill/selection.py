@@ -58,27 +58,26 @@ def _validated_ranking(driver: ModuleDriver) -> tuple[dict[str, Any], dict[str, 
 
 
 def _scope(context: SourceContext, universe: dict[str, Any], output: dict[str, Any]) -> ModuleScope:
-    selected_id = output["selected_candidate_id"]
-    assert isinstance(selected_id, str)  # established by the schema gate
+    selected_ids = tuple(output["candidate_ids"])
     candidates = tuple(
         ScopeCandidate(
             candidate_id=row["candidate_id"], seed_ids=tuple(row["seed_ids"]),
             repository_refs=tuple(row["repository_refs"]),
-            disposition="selected" if row["candidate_id"] == selected_id else "alternative",
+            disposition="selected" if row["candidate_id"] in selected_ids else "alternative",
             reason=row["reason"],
         )
         for row in universe["candidates"]
     )
-    selected = next(candidate for candidate in candidates if candidate.candidate_id == selected_id)
+    selected = tuple(candidate for candidate in candidates if candidate.candidate_id in selected_ids)
     seeds = _feature_seeds(context)
     return ModuleScope(
-        feature_id="feature-" + selected_id.removeprefix("candidate-"),
+        feature_id="feature-" + selected_ids[0].removeprefix("candidate-"),
         selector=json.loads((context.module_run / "provenance.json").read_text("utf-8"))["selector"],
         source_manifest_digest=sha256_json(context.manifest.to_dict()),
-        selected_candidate_id=selected_id,
+        selected_candidate_ids=selected_ids,
         candidates=candidates,
         seeds=seeds,
-        frontiers=initial_frontiers(selected.seed_ids, seeds),
+        frontiers=initial_frontiers(tuple(seed_id for candidate in selected for seed_id in candidate.seed_ids), seeds),
         closure_status="open",
     )
 
@@ -104,7 +103,7 @@ def finalize(module_run: str | Path) -> FinalizedSelection:
         "ranking_packet_digest": build_packet(driver.context).input_digest,
         "decision": output["decision"],
         "candidate_ids": output["candidate_ids"],
-        "selected_candidate_id": output["selected_candidate_id"],
+        "selected_candidate_ids": output["candidate_ids"],
         "reason_code": output["reason_code"],
         "module_scope_digest": sha256_json(scope.to_dict()) if scope is not None else "",
     }

@@ -42,7 +42,7 @@ def _prepared(tmp_path, *, integration_path="src/service.ts"):
     driver.submit(claim.packet.task_id, TaskResult(
         task_id=TASK_ID, status="ok",
         output={"decision": "selected", "candidate_ids": [candidate_id],
-                "selected_candidate_id": candidate_id, "reason_code": "clear-dominant"},
+                "reason_code": "clear-dominant"},
         executor=ExecutorInfo(kind="test", model="test-model", params={}),
         timing=TaskTiming(started_at=now, finished_at=now, wall_clock_s=0.0),
         tokens=None, validation=ValidationOutcome(passed=True, failures=()), attempt=claim.attempt,
