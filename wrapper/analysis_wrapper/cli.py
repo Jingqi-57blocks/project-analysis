@@ -334,6 +334,9 @@ def parser() -> argparse.ArgumentParser:
     module_graph = sub.add_parser(
         "module-build-graph", help="build the observed Module Drill feature graph")
     module_graph.add_argument("--run", required=True)
+    module_frontiers = sub.add_parser(
+        "module-build-frontier-receipts", help="record exact observed Module Drill frontier expansions")
+    module_frontiers.add_argument("--run", required=True)
     finalize_map = sub.add_parser(
         "finalize-module-map",
         help="validate complete candidate dispositions in module-map.json, "

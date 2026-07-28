@@ -16,6 +16,7 @@ from .context import load as load_source_context
 from .ranking import register as register_ranking
 from .selection import finalize as finalize_selection
 from .feature_graph import write as write_feature_graph
+from .frontier_receipts import write as write_frontier_receipts
 from .runtime import initialize_from_overview
 from .spans import fetch
 from .standalone import initialize as initialize_standalone
@@ -133,6 +134,12 @@ def _graph(args) -> int:
     return 0
 
 
+def _frontier_receipts(args) -> int:
+    out = write_frontier_receipts(load_source_context(args.run))
+    _print({"frontier_state": str(out)})
+    return 0
+
+
 def run(args) -> int:
     """Dispatch a Module Drill subcommand and preserve normal CLI exit codes."""
     try:
@@ -144,6 +151,7 @@ def run(args) -> int:
             "module-plan-ranking": _rank_candidates,
             "module-finalize-ranking": _finalize_ranking,
             "module-build-graph": _graph,
+            "module-build-frontier-receipts": _frontier_receipts,
         }
         handler = handlers.get(args.command)
         if handler is None:
