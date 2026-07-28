@@ -30,6 +30,35 @@ def _no_concern(packet, name):
         for row in requirements], "claims": [], "flows": []}
 
 
+def _sync_output(packet, *, outcome="no-concern-observed", include_ui_claim=True):
+    """Keep the happy-path fixture semantically complete for its UI seed."""
+    requirements = json.loads(packet.inputs["sync-requirements.json"].content)["requirements"]
+    graph = json.loads(packet.inputs["feature-graph.json"].content)
+    nodes = {row["node_id"]: row for row in graph["nodes"]}
+    claims = []
+    dispositions = []
+    for index, row in enumerate(requirements):
+        anchors = [anchor for anchor in row.get("anchor_ids", []) if anchor in nodes]
+        ui_anchor = next((anchor for anchor in anchors if nodes[anchor].get("kind") == "ui-action"), None)
+        selected_outcome = outcome if index == 0 and outcome != "no-concern-observed" else "no-concern-observed"
+        claim_ids = []
+        if selected_outcome == "no-concern-observed" and include_ui_claim and ui_anchor is not None:
+            claim_id = "claim-ui-action-" + str(index)
+            claim_ids = [claim_id]
+            claims.append({
+                "claim_id": claim_id, "kind": "ui-visibility", "anchor_ids": [ui_anchor],
+                "support": [{"ref": row["evidence_refs"][0], "role": "trigger"}],
+                "subject": "record UI action", "operation": "allows", "value": "submitRecord",
+            })
+            selected_outcome = "claimed"
+        dispositions.append({
+            "requirement_id": row["requirement_id"], "outcome": selected_outcome,
+            "claim_ids": claim_ids, "evidence_refs": row["evidence_refs"],
+            "reason": "source span could not establish the required behaviour" if selected_outcome == "unknown" else "",
+        })
+    return {"dispositions": dispositions, "claims": claims, "flows": []}
+
+
 def _submit(driver, packet, output):
     claim = driver.claim(1, executor_kind="test", model="test-model")[0]
     now = now_iso()
@@ -42,7 +71,7 @@ def _submit(driver, packet, output):
     assert driver.submit(packet.task_id, result.to_dict())["status"] == "validated"
 
 
-def _ready(tmp_path, *, sync_outcome="no-concern-observed"):
+def _ready(tmp_path, *, sync_outcome="no-concern-observed", include_ui_claim=True):
     module_run = _prepared(tmp_path)
     write_candidates(load(module_run))
     write_graph_closure(load(module_run))
@@ -57,10 +86,7 @@ def _ready(tmp_path, *, sync_outcome="no-concern-observed"):
         claim = driver.claim(1, executor_kind="test", model="test-model")[0]
         packet = expected_sync[claim.packet.task_id]
         now = now_iso()
-        output = _no_concern(packet, "sync-requirements.json")
-        if sync_outcome != "no-concern-observed":
-            output["dispositions"][0]["outcome"] = sync_outcome
-            output["dispositions"][0]["reason"] = "source span could not establish the required behaviour"
+        output = _sync_output(packet, outcome=sync_outcome, include_ui_claim=include_ui_claim)
         result = TaskResult(
             task_id=packet.task_id, status="ok", output=output,
             executor=ExecutorInfo(kind="test", model="test-model", params={}),
@@ -134,7 +160,29 @@ def test_incomplete_mandatory_provider_coverage_fails_closed(tmp_path):
     model_path, audit = finalize(module_run)
 
     assert model_path is None and not audit.passed
-    assert "mandatory feature dimensions are incomplete: synchronous-behavior" in audit.failed_checks[0]
+    assert "synchronous-behavior" in audit.failed_checks[0]
+
+
+def test_finalization_marks_observed_datastore_as_applicable_not_unavailable(tmp_path):
+    module_run = _ready(tmp_path)
+
+    model_path, audit = finalize(module_run)
+
+    assert audit.passed and model_path is not None
+    model = json.loads(model_path.read_text())["model"]
+    data = model["dimension_coverage"]["data"]["coverage"]
+    assert data["applicability"] == "applicable"
+    assert data["status"] == "complete"
+    assert data["positive_evidence_refs"]
+
+
+def test_selected_ui_action_without_a_semantic_claim_fails_closed(tmp_path):
+    module_run = _ready(tmp_path, include_ui_claim=False)
+
+    model_path, audit = finalize(module_run)
+
+    assert model_path is None and not audit.passed
+    assert "ui-entry" in audit.failed_checks[0]
 
 
 def test_cli_returns_nonzero_when_final_audit_fails(tmp_path, capsys):

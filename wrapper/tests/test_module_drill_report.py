@@ -71,6 +71,22 @@ def test_render_localizes_presentation_without_translating_source_claim_values(t
     assert "| 流程 | 观察到的路径 | 关联声明 | 证据 |" in behavior
 
 
+def test_render_localizes_supported_operations_without_translating_ui_literals(tmp_path):
+    module_run = _ready(tmp_path)
+    assert finalize(module_run)[1].passed
+    _add_claim_and_flow(module_run, language="zh-CN")
+    model_path = module_run / "evidence" / "module-model.json"
+    document = json.loads(model_path.read_text())
+    document["model"]["claims"][0].update({"operation": "allows", "value": "Submit"})
+    model_path.write_text(json.dumps(document), encoding="utf-8")
+
+    paths = render(module_run)
+
+    behavior = paths["details/behavior.md"].read_text()
+    assert "record submission 可执行 `Submit`" in behavior
+    assert "record submission allows" not in behavior
+
+
 def test_cli_renders_the_complete_catalog(tmp_path, capsys):
     module_run = _ready(tmp_path)
     assert finalize(module_run)[1].passed

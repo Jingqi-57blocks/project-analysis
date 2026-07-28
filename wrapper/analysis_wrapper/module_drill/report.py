@@ -39,6 +39,7 @@ _TEXT = {
         "coverage": "Coverage", "unknown": "Unknowns", "nodes": "Evidence index: nodes",
         "edges": "Evidence index: relationships", "source": "Source snapshot", "selector": "Requested feature",
         "summary": "What this report establishes", "contents": "Report contents", "purpose": "Observed behavior",
+        "representative": "Representative source-backed observations", "evidence_index": "See the evidence index for the complete source list.",
         "permissions": "Access and authorization", "rules": "Rules and state", "no_claims": "No finalized claims were recovered for this category.",
         "no_flows": "No end-to-end flow was finalized from the available evidence.",
         "no_data": "No finalized persistence claim was recovered from the available evidence.",
@@ -61,7 +62,9 @@ _TEXT = {
         "operations": {
             "emits": "emits", "requires": "requires", "transitions": "transitions to", "writes": "writes", "reads": "reads",
             "validates": "validates", "assigns": "assigns", "compares": "compares", "invokes": "invokes",
-            "increments": "increments", "decrements": "decrements",
+            "increments": "increments", "decrements": "decrements", "allows": "allows", "denies": "denies",
+            "schedules": "schedules", "starts": "starts", "consumes": "consumes", "retries": "retries",
+            "notifies": "notifies", "configures": "configures", "guards": "guards",
         },
     },
     "zh-CN": {
@@ -71,6 +74,7 @@ _TEXT = {
         "coverage": "覆盖情况", "unknown": "未知项", "nodes": "证据索引：节点",
         "edges": "证据索引：关系", "source": "源码快照", "selector": "请求分析的功能",
         "summary": "本报告已确认的内容", "contents": "报告内容", "purpose": "观察到的行为",
+        "representative": "具有源码证据的代表性观察", "evidence_index": "完整源码列表请参见证据索引。",
         "permissions": "访问与授权", "rules": "规则与状态", "no_claims": "该类别没有已最终确认的声明。",
         "no_flows": "现有证据没有形成已最终确认的端到端流程。",
         "no_data": "现有证据没有形成已最终确认的持久化声明。", "repositories": "仓库与观察到的职责",
@@ -92,7 +96,9 @@ _TEXT = {
         "operations": {
             "emits": "发起/产生", "requires": "要求", "transitions": "转换为", "writes": "写入", "reads": "读取",
             "validates": "校验", "assigns": "赋值", "compares": "比较", "invokes": "调用",
-            "increments": "增加", "decrements": "减少",
+            "increments": "增加", "decrements": "减少", "allows": "可执行", "denies": "拒绝",
+            "schedules": "调度", "starts": "启动", "consumes": "消费", "retries": "重试",
+            "notifies": "通知", "configures": "配置", "guards": "控制/保护",
         },
     },
 }
@@ -152,10 +158,23 @@ def _refs(refs: Iterable[str]) -> str:
     return "; ".join(f"`{value}`" for value in values) if values else "—"
 
 
-def _claim_line(claim: FeatureClaim, text: dict[str, Any]) -> str:
+def _brief_refs(refs: Iterable[str], text: dict[str, Any], *, limit: int = 2) -> str:
+    """Keep reader-facing projections compact; the index retains every ref."""
+    values = tuple(sorted(set(refs)))
+    rendered = _refs(values[:limit])
+    if len(values) > limit:
+        return f"{rendered}; +{len(values) - limit}. {text['evidence_index']}"
+    return rendered
+
+
+def _claim_phrase(claim: FeatureClaim, text: dict[str, Any]) -> str:
     operation = text["operations"].get(claim.operation, claim.operation.replace("-", " "))
     value = "—" if claim.value is None else _code(claim.value)
-    return f"- {claim.subject} {operation} {value}. [`{claim.claim_id}`] {_refs(claim.evidence_refs)}\n"
+    return f"{claim.subject} {operation} {value}"
+
+
+def _claim_line(claim: FeatureClaim, text: dict[str, Any]) -> str:
+    return f"- {_claim_phrase(claim, text)}. [`{claim.claim_id}`] {_brief_refs(claim.evidence_refs, text)}\n"
 
 
 def _claim_section(title: str, claims: Iterable[FeatureClaim], text: dict[str, Any]) -> str:
@@ -180,8 +199,24 @@ def _claim_groups(model: ModuleModel) -> dict[str, tuple[FeatureClaim, ...]]:
     return {key: tuple(sorted(value, key=lambda item: item.claim_id)) for key, value in buckets.items()}
 
 
-def _node_label(node: FeatureNode) -> str:
+def _node_label(node: FeatureNode, claims_by_anchor: dict[str, tuple[FeatureClaim, ...]] | None = None) -> str:
+    """Prefer a finalized source-backed claim over an opaque graph identifier."""
+    if claims_by_anchor:
+        claims = claims_by_anchor.get(node.node_id, ())
+        if claims:
+            claim = claims[0]
+            value = "" if claim.value is None else f" {claim.value}"
+            return f"{claim.subject}{value}"[:120]
     return f"{node.repository_ref} · {node.kind}"
+
+
+def _claims_by_anchor(model: ModuleModel) -> dict[str, tuple[FeatureClaim, ...]]:
+    grouped: dict[str, list[FeatureClaim]] = defaultdict(list)
+    for claim in model.claims:
+        for anchor_id in claim.anchor_ids:
+            grouped[anchor_id].append(claim)
+    return {anchor_id: tuple(sorted(rows, key=lambda row: row.claim_id))
+            for anchor_id, rows in grouped.items()}
 
 
 def _flow_edges(model: ModuleModel) -> tuple[FeatureEdge, ...]:
@@ -202,11 +237,12 @@ def _mermaid(model: ModuleModel) -> str:
     if not edges:
         return ""
     nodes = {node.node_id: node for node in model.nodes}
+    claims_by_anchor = _claims_by_anchor(model)
     used_ids = sorted({edge.source_node_id for edge in edges} | {edge.target_node_id for edge in edges})
     lines = ["```mermaid", "flowchart LR"]
     for index, node_id in enumerate(used_ids, start=1):
         node = nodes[node_id]
-        label = _node_label(node).replace('"', "'")
+        label = _node_label(node, claims_by_anchor).replace("\\", "\\\\").replace('"', "'").replace("\n", " ")
         lines.append(f'  n{index}["{label}"]')
     aliases = {node_id: f"n{index}" for index, node_id in enumerate(used_ids, start=1)}
     for edge in edges:
@@ -217,16 +253,20 @@ def _mermaid(model: ModuleModel) -> str:
 def _flow_rows(model: ModuleModel, text: dict[str, Any]) -> list[list[str]]:
     edges = {edge.edge_id: edge for edge in model.edges}
     nodes = {node.node_id: node for node in model.nodes}
+    claims_by_id = {claim.claim_id: claim for claim in model.claims}
+    claims_by_anchor = _claims_by_anchor(model)
     rows: list[list[str]] = []
     for flow in model.flows:
         steps = []
         refs: list[str] = []
         for edge_id in flow.edge_ids:
             edge = edges[edge_id]
-            steps.append(f"{_node_label(nodes[edge.source_node_id])} → {_node_label(nodes[edge.target_node_id])} ({edge.kind})")
-            refs.extend(edge.evidence_refs)
-        claim_refs = [f"`{claim_id}`" for claim_id in flow.claim_ids]
-        rows.append([flow.flow_id, "<br>".join(steps), "; ".join(claim_refs) or "—", _refs(sorted(set(refs)))])
+            steps.append(f"{_node_label(nodes[edge.source_node_id], claims_by_anchor)} → {_node_label(nodes[edge.target_node_id], claims_by_anchor)} ({edge.kind})")
+        related_claims = [claims_by_id[claim_id] for claim_id in flow.claim_ids if claim_id in claims_by_id]
+        refs.extend(ref for claim in related_claims for ref in claim.evidence_refs)
+        claim_refs = [f"`{claim.claim_id}`" for claim in related_claims]
+        title = _claim_phrase(related_claims[0], text) if related_claims else flow.flow_id
+        rows.append([title, "<br>".join(steps), "; ".join(claim_refs) or "—", _brief_refs(refs, text)])
     return rows
 
 
@@ -242,10 +282,22 @@ def _coverage_rows(model: ModuleModel, text: dict[str, Any]) -> list[list[str]]:
 def _report_overview(model: ModuleModel, provenance: dict[str, Any], text: dict[str, Any]) -> str:
     selector = provenance.get("selector") if isinstance(provenance.get("selector"), str) else model.feature_id
     groups = _claim_groups(model)
-    highlights = tuple(model.claims[:4])
+    claims_by_id = {claim.claim_id: claim for claim in model.claims}
+    highlights: list[FeatureClaim] = []
+    for flow in sorted(model.flows, key=lambda item: item.flow_id)[:2]:
+        for claim_id in flow.claim_ids:
+            claim = claims_by_id.get(claim_id)
+            if claim is not None and claim not in highlights:
+                highlights.append(claim)
+                break
+    for key in ("permissions", "data", "rules", "behavior", "other"):
+        for claim in groups.get(key, ()):
+            if claim not in highlights:
+                highlights.append(claim)
+    highlights = highlights[:4]
     body = _heading(1, f"{text['overview']}: {selector}")
     body += f"**{text['status']}:** {text.get(model.closure_status, model.closure_status)}\n\n"
-    body += _heading(2, text["summary"])
+    body += _heading(2, text["representative"])
     if highlights:
         body += "".join(_claim_line(claim, text) for claim in highlights)
     else:
@@ -289,16 +341,20 @@ def _report_architecture(model: ModuleModel, text: dict[str, Any]) -> str:
         body += diagram + "\n"
     body += _heading(2, text["repositories"])
     body += _table(_headers(text, "repository", "kinds", "evidence"), [
-        [repository, ", ".join(sorted({node.kind for node in nodes})), _refs(sorted({ref for node in nodes for ref in node.evidence_refs}))]
+        [repository,
+         ", ".join(sorted({node.kind for node in nodes})) + f" ({len(nodes)})",
+         _brief_refs((ref for node in nodes for ref in node.evidence_refs), text)]
         for repository, nodes in sorted(nodes_by_repo.items())
     ])
     body += "\n" + _heading(2, text["relationships"])
     flow_edge_ids = {edge.edge_id for edge in _flow_edges(model)}
+    claims_by_anchor = _claims_by_anchor(model)
     visible_edges = [edge for edge in model.edges if edge.edge_id in flow_edge_ids]
     if visible_edges:
         node_by_id = {node.node_id: node for node in model.nodes}
         body += _table(_headers(text, "relationship", "from", "to", "evidence"), [
-            [edge.kind, _node_label(node_by_id[edge.source_node_id]), _node_label(node_by_id[edge.target_node_id]), _refs(edge.evidence_refs)]
+            [edge.kind, _node_label(node_by_id[edge.source_node_id], claims_by_anchor),
+             _node_label(node_by_id[edge.target_node_id], claims_by_anchor), _brief_refs(edge.evidence_refs, text)]
             for edge in visible_edges
         ])
     else:
@@ -314,7 +370,7 @@ def _report_data(model: ModuleModel, text: dict[str, Any]) -> str:
     body += _heading(2, text["nodes"])
     if data_nodes:
         body += _table(_headers(text, "repository", "boundary", "evidence"), [
-            [node.repository_ref, node.kind, _refs(node.evidence_refs)] for node in data_nodes
+            [node.repository_ref, node.kind, _brief_refs(node.evidence_refs, text)] for node in data_nodes
         ])
     else:
         body += text["no_data"] + "\n"
@@ -349,7 +405,7 @@ def _report_evidence(model: ModuleModel, provenance: dict[str, Any], text: dict[
     body += "\n" + _heading(2, text["claim_index"])
     body += _table(_headers(text, "claim", "observation", "evidence"), [[
         claim.claim_id,
-        f"{claim.subject} {text['operations'].get(claim.operation, claim.operation.replace('-', ' '))} {claim.value if claim.value is not None else '—'}",
+        _claim_phrase(claim, text),
         _refs(claim.evidence_refs),
     ] for claim in model.claims])
     body += "\n" + _heading(2, text["unresolved"])

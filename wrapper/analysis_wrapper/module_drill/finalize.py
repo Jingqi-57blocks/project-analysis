@@ -164,7 +164,16 @@ def _flows(*outputs: dict[str, Any]) -> tuple[FeatureFlow, ...]:
 
 
 def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc: dict[str, Any],
-              closure: str) -> dict[str, CoverageStatus]:
+              closure: str, *, nodes: tuple[FeatureNode, ...],
+              claims: tuple[FeatureClaim, ...]) -> dict[str, CoverageStatus]:
+    """Derive dimension coverage from finalized feature facts, not one lane.
+
+    Boundary recovery is intentionally asynchronous only for some dimensions.
+    Treating its requirement list as the whole feature universe made an
+    observed datastore look unavailable even after synchronous recovery had
+    produced a persistence claim.  Each dimension therefore has explicit
+    provider anchors and semantic-claim requirements below.
+    """
     def status(outputs: tuple[dict[str, Any], ...]) -> str:
         rows = [row for output in outputs for row in output.get("dispositions", [])]
         if not rows:
@@ -173,30 +182,70 @@ def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc
 
     sync_status = status(sync_outputs)
     async_status = status((async_doc["output"],))
-    kinds = {
+    async_kinds = {
         row.get("boundary_kind") for row in async_doc.get("requirements", {}).get("requirements", [])
         if isinstance(row, dict)
     }
+    node_refs_by_kind: dict[str, tuple[str, ...]] = {}
+    for node in nodes:
+        node_refs_by_kind.setdefault(node.kind, tuple())
+        node_refs_by_kind[node.kind] = tuple(sorted(set(node_refs_by_kind[node.kind]) | set(node.evidence_refs)))
+
+    def claim_refs(*, kinds: set[str] = set(), roles: set[str] = set(),
+                   operations: set[str] = set()) -> tuple[str, ...]:
+        return tuple(sorted({ref for claim in claims
+                             if claim.kind in kinds or bool(set(claim.support_roles) & roles)
+                             or claim.operation in operations
+                             for ref in claim.evidence_refs}))
+
+    def dimension(*, node_kinds: set[str], claim_kinds: set[str] = set(),
+                  claim_roles: set[str] = set(), claim_operations: set[str] = set(),
+                  lane_status: str) -> CoverageStatus:
+        provider_refs = tuple(sorted({ref for kind in node_kinds for ref in node_refs_by_kind.get(kind, ())}))
+        semantic_refs = claim_refs(kinds=claim_kinds, roles=claim_roles, operations=claim_operations)
+        if not provider_refs:
+            return CoverageStatus(Coverage(
+                "unknown", "unavailable", (),
+                ("no feature-local provider evidence was observed",)), closure, ())
+        return CoverageStatus(Coverage("applicable", lane_status,
+                                       tuple(sorted(set(provider_refs) | set(semantic_refs))), ()), closure, ())
+
     dimensions: dict[str, CoverageStatus] = {
         "synchronous-behavior": CoverageStatus(Coverage("applicable", sync_status, (), ()), closure, ()),
         "asynchronous-behavior": CoverageStatus(Coverage(
-            "applicable" if kinds else "unknown", async_status if kinds else "unavailable", (),
-            () if kinds else ("no feature-local asynchronous boundary was observed",)), closure, ()),
+            "applicable" if async_kinds else "unknown", async_status if async_kinds else "unavailable", (),
+            () if async_kinds else ("no feature-local asynchronous boundary was observed",)), closure, ()),
     }
-    for dimension, kinds_for_dimension in {
-        "configuration": {"configuration"}, "integration": {"integration-host", "integration-package"},
-        "data": {"datastore"}, "authorization": {"access-check"},
-    }.items():
-        present = bool(kinds & kinds_for_dimension)
-        dimensions[dimension] = CoverageStatus(Coverage(
-            "applicable" if present else "unknown", async_status if present else "unavailable", (),
-            () if present else ("no feature-local provider evidence was observed",)), closure, ())
+    dimensions["configuration"] = dimension(
+        node_kinds={"configuration"}, claim_kinds={"configuration"},
+        lane_status=async_status,
+    )
+    dimensions["integration"] = dimension(
+        node_kinds={"integration-host", "integration-package"}, claim_kinds={"integration"},
+        claim_roles={"integration"}, lane_status=async_status,
+    )
+    dimensions["data"] = dimension(
+        node_kinds={"datastore"}, claim_kinds={"persistence-effect"}, claim_roles={"persistence"},
+        claim_operations={"reads", "writes", "assigns", "increments", "decrements"}, lane_status=sync_status,
+    )
+    dimensions["authorization"] = dimension(
+        node_kinds={"access-check", "access-role"}, claim_kinds={"authorization", "access"},
+        claim_roles={"authorization"}, lane_status=sync_status,
+    )
     selected_seed_ids = {
         seed_id for candidate in scope.candidates if candidate.disposition == "selected"
         for seed_id in candidate.seed_ids
     }
-    if any(seed.kind == "ui-action" and seed.seed_id in selected_seed_ids for seed in scope.seeds):
-        dimensions["ui-entry"] = CoverageStatus(Coverage("applicable", "complete", (), ()), closure, ())
+    selected_ui = any(seed.kind == "ui-action" and seed.seed_id in selected_seed_ids for seed in scope.seeds)
+    ui_claim_refs = claim_refs(kinds={"ui-visibility"}, roles={"trigger", "effect"})
+    ui_node_refs = node_refs_by_kind.get("ui-action", ())
+    if selected_ui and ui_node_refs and ui_claim_refs:
+        dimensions["ui-entry"] = CoverageStatus(Coverage(
+            "applicable", sync_status, tuple(sorted(set(ui_node_refs) | set(ui_claim_refs))), ()), closure, ())
+    elif selected_ui and ui_node_refs:
+        dimensions["ui-entry"] = CoverageStatus(Coverage(
+            "applicable", "partial", ui_node_refs,
+            ("UI action evidence was observed but no source-verified UI behavior claim was recovered",)), closure, ())
     else:
         dimensions["ui-entry"] = CoverageStatus(Coverage(
             "unknown", "unavailable", (),
@@ -257,11 +306,12 @@ def build(context: SourceContext) -> ModuleModel:
     closure = "blocked" if "blocked" in states else "open" if "unresolved" in states else "closed"
     if closure != "closed":
         raise ContractError("mandatory feature frontiers remain unresolved or blocked")
-    dimensions = _coverage(scope, sync_outputs, async_doc, closure)
+    claims = _claims(*sync_outputs, async_doc["output"])
+    dimensions = _coverage(scope, sync_outputs, async_doc, closure, nodes=nodes, claims=claims)
     _require_authoritative_coverage(dimensions)
     return ModuleModel(
         feature_id=scope.feature_id, nodes=tuple(sorted(nodes, key=lambda node: node.node_id)),
-        edges=tuple(sorted(edges, key=lambda edge: edge.edge_id)), claims=_claims(*sync_outputs, async_doc["output"]),
+        edges=tuple(sorted(edges, key=lambda edge: edge.edge_id)), claims=claims,
         flows=_flows(*sync_outputs, async_doc["output"]), dispositions=tuple(sorted(dispositions, key=lambda item: item.frontier_id)),
         dimension_coverage=dimensions, closure_status=closure,
     )
