@@ -72,6 +72,23 @@ def test_not_applicable_provider_without_feature_evidence_becomes_unknown(tmp_pa
     assert "positive feature-level evidence" in outcome.coverage.limitations[0]
 
 
+def test_manifest_gives_each_repository_provider_execution_a_stable_unique_id(tmp_path):
+    run, _ = _overview_run(tmp_path)
+    execution = json.loads((run / "provider-execution.json").read_text(encoding="utf-8"))
+    second = dict(execution["executions"][0])
+    execution["executions"][0]["repository_ref"] = "service-a"
+    second["repository_ref"] = "service-b"
+    execution["executions"].append(second)
+    _write_json(run / "provider-execution.json", execution)
+
+    first = build_from_overview(run, snapshot_id="a" * 64)
+    second = build_from_overview(run, snapshot_id="a" * 64)
+
+    assert len(first.providers) == 2
+    assert len({item.provider_id for item in first.providers}) == 2
+    assert [item.provider_id for item in first.providers] == [item.provider_id for item in second.providers]
+
+
 def test_long_canonical_artifact_names_stay_inside_the_contract_id_limit(tmp_path):
     run, _ = _overview_run(tmp_path)
     _write_json(run / "routes" / ("x" * 100 + ".json"), {"schema_version": "routes/v1"})

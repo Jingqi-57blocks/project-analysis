@@ -106,6 +106,21 @@ def _tool_id(value: object) -> str:
     return normalized[:63] or "unknown"
 
 
+def _provider_execution_id(provider_id: str, capability_id: str,
+                           repository_ref: object) -> str:
+    """Return a stable ID for one provider execution, not its implementation.
+
+    Provider implementations normally run once per repository.  A source
+    manifest records those individual executions because their coverage and
+    evidence can differ, so the implementation's ``provider_id`` alone is not
+    a valid manifest identity in a multi-repository workspace.
+    """
+    base = _tool_id(provider_id)
+    identity = "\x1f".join((provider_id, capability_id, str(repository_ref or "")))
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+    return f"{base[:50].rstrip('-') or 'provider'}-{digest}"
+
+
 def _tool_identities(provenance: dict[str, Any]) -> tuple[ToolIdentity, ...]:
     observed: dict[str, str] = {}
     for row in provenance.get("tool_versions", []):
@@ -169,7 +184,9 @@ def _provider_outcomes(
             if isinstance(item, dict) and item.get("status") == "skipped"
         }))
         outcomes.append(ProviderOutcome(
-            provider_id=provider_id, capability_id=capability_id,
+            provider_id=_provider_execution_id(
+                provider_id, capability_id, row.get("repository_ref")),
+            capability_id=capability_id,
             coverage=coverage, artifact_ids=artifact_ids,
             truncation=(), unsupported=unsupported,
         ))
