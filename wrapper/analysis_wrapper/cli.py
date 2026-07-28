@@ -6,6 +6,7 @@ import argparse
 import functools
 import json
 import os
+import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -986,6 +987,47 @@ def _assert_fresh_run(run: Path, *, require_provenance: bool = True) -> "object"
     return state
 
 
+_INCOMPLETE_SIGNAL_STAGE_ARTIFACTS = (
+    "signals", "provider-execution.json", "evidence-catalog.json",
+    "datastore", "deploy", "access", "integrations",
+)
+
+
+def _discard_incomplete_signal_stage(run: Path, state: lifecycle.RunState) -> None:
+    """Discard only an uncommitted signals stage so it can be rerun safely.
+
+    ``run-summary.json`` is the stage commit marker: it is written only after
+    the local sweep and provider-owned signal lanes have both reached a
+    deterministic terminal state.  An interruption before that write used to
+    leave write-once signal fragments behind, making the next normal
+    ``prepare-overview`` invocation permanently refuse the run.  Those
+    fragments are not canonical evidence yet and must be regenerated as one
+    set; retaining some while retrying the sweep would instead hit collision
+    guards or produce a mixed pass.
+    """
+    if state.stages.get("signals") == "done":
+        raise ValueError("signals stage is marked done but signals/run-summary.json is missing")
+    later_done = [name for name in ("findings", "map", "overview")
+                  if state.stages.get(name) == "done"]
+    if later_done:
+        raise ValueError("cannot discard incomplete signals after later completed stage(s): "
+                         + ", ".join(later_done))
+    for relative in _INCOMPLETE_SIGNAL_STAGE_ARTIFACTS:
+        path = run / relative
+        if not path.exists() and not path.is_symlink():
+            continue
+        if path.is_symlink():
+            raise WrapperSafetyError(
+                f"incomplete signals artifact is a symlink (refusing cleanup): {path}")
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.is_file():
+            path.unlink()
+        else:
+            raise WrapperSafetyError(
+                f"incomplete signals artifact is neither a file nor directory: {path}")
+
+
 def _prepare_overview(args: argparse.Namespace) -> int:
     """Authoritative deterministic overview preparation (57B-47).
 
@@ -1043,7 +1085,8 @@ def _prepare_overview(args: argparse.Namespace) -> int:
         print("signals: reused canonical run-summary.json")
     else:
         if signals.exists():
-            raise ValueError("signals/ exists without run-summary.json; refuse partial reuse")
+            _discard_incomplete_signal_stage(run, state)
+            print("signals: discarded incomplete uncommitted stage; rerunning")
         out = prepare_output_directory(signals, spec.repos)
         from . import identity
         fresh_sweep_results = _sweep(args, spec, out, identity.load(run),
