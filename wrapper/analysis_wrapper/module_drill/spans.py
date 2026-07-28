@@ -13,13 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .. import identity, lifecycle, run_provenance
+from .. import identity
 from ..executor import write_new_text
 from ..sanitize import sanitize_text
 from ..targetspec import TargetSpec
 from ..orchestrator.schemas import source_ref_parts
-from .source import SourceManifest
-from .validation import ContractError, exact_object, ref_list, sha256_json, slug
+from .context import load as load_source_context
+from .validation import ContractError, exact_object, ref_list, slug
 
 SPAN_KINDS = frozenset({"function", "class", "handler", "declaration", "config-block"})
 MAX_SPAN_LINES = 600
@@ -42,30 +42,6 @@ class SpanRequest:
         if not isinstance(row["purpose"], str) or not row["purpose"].strip():
             raise ContractError(f"{label}.purpose must be non-empty")
         return cls(slug(row["span_id"], f"{label}.span_id"), row["kind"], refs[0], row["purpose"])
-
-
-def _source_context(module_run: Path) -> tuple[Path, TargetSpec, identity.IdentityMap]:
-    manifest_raw = json.loads((module_run / "source-manifest.json").read_text("utf-8"))
-    manifest = SourceManifest.from_dict(manifest_raw)
-    state_raw = json.loads((module_run / "run-state.json").read_text("utf-8"))
-    if state_raw.get("source_manifest_digest") != sha256_json(manifest.to_dict()):
-        raise ContractError("module run source manifest does not match its run-state")
-    if manifest.source_mode != "overview-backed":
-        raise ContractError("semantic spans require a prepared source mode")
-    provenance = json.loads((module_run / "provenance.json").read_text("utf-8"))
-    source_value = provenance.get("source_run")
-    if not isinstance(source_value, str):
-        raise ContractError("module provenance has no source run path")
-    source = Path(source_value).expanduser().resolve()
-    if source.name != manifest.source_overview_run:
-        raise ContractError("module provenance and source manifest disagree on overview run")
-    state = lifecycle.RunState.load(source)
-    spec = TargetSpec.load(source / "targets.json")
-    problems = state.staleness()
-    problems.extend(run_provenance.target_source_staleness(run_provenance.load(source), spec))
-    if problems:
-        raise ContractError("source snapshot is stale: " + "; ".join(problems))
-    return source, spec, identity.load(source)
 
 
 def _source_lines(ref: str, spec: TargetSpec,
@@ -258,10 +234,10 @@ def fetch(module_run: str | Path, requests: list[dict[str, Any]], *,
               for index, value in enumerate(requests)]
     if len({item.span_id for item in parsed}) != len(parsed):
         raise ContractError("semantic span requests must have unique span_id values")
-    _, spec, identities = _source_context(run)
+    context = load_source_context(run)
     destination = Path(out).expanduser().resolve() if out else run / "semantic-spans.json"
     if not destination.is_relative_to(run):
         raise ContractError("semantic span output must stay inside the module run")
-    rows = [_fetch(item, spec, identities) for item in parsed]
+    rows = [_fetch(item, context.source_spec, context.identities) for item in parsed]
     write_new_text(destination, json.dumps(rows, indent=2, sort_keys=True) + "\n")
     return destination
