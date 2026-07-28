@@ -45,6 +45,23 @@ def test_next_task_returns_empty_json_and_exit_zero_when_nothing_ready(tmp_path,
     assert json.loads(capsys.readouterr().out) == []
 
 
+def test_reclaim_tasks_makes_an_abandoned_claim_ready_without_ledger_editing(tmp_path, capsys):
+    engine = Engine(tmp_path)
+    engine.create_tasks([_packet("a")])
+    engine.claim(1, executor_kind="host", model="codex")
+
+    rc = main(["reclaim-tasks", "--run", str(tmp_path), "--all",
+               "--reason", "session exited"])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {"reclaimed": ["a"]}
+
+    rc = main(["next-task", "--run", str(tmp_path)])
+    assert rc == 0
+    claimed = json.loads(capsys.readouterr().out)
+    assert claimed[0]["task"]["task_id"] == "a"
+    assert claimed[0]["attempt"] == 2
+
+
 def test_claim_submit_valid_round_trip(tmp_path, capsys):
     Engine(tmp_path).create_tasks([_packet("a")])
 

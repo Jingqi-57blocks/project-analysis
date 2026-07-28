@@ -80,6 +80,24 @@ manifest excludes volatile fields and supports byte-for-byte deterministic compa
 `prepare-overview`, which owns the deterministic producer order and canonical artifact
 locations; invoking the individual producers manually is not an alternate overview path.
 
+## Host-agent executor and claim recovery
+
+`run-pipeline` defaults to `--executor host`. It runs deterministic work, then returns
+machine-readable `blocked_on` and `ready_tasks` when the current Codex CLI, Claude Code,
+or other agent session must process a task packet. That host session claims packets with
+`next-task`, produces the required structured result, submits it with `submit-task`, and
+runs `run-pipeline` again. Host execution neither reads nor requires `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY`; `external` remains a compatibility alias for `host`.
+
+The bundled network executor is opt-in only: use `run-pipeline --executor api` or
+`run-executor` with an explicit adapter, model, required base URL, and API-key environment
+variable. All of those API-wide settings are checked before any task claim is appended.
+
+If an executor stops after claiming packets, do not edit `tasks/ledger.jsonl`. Recover
+them deterministically with `reclaim-tasks --run <run-dir> --all` (or repeat `--task
+<task-id>`). The command appends a `released` audit event for each outstanding claim and
+returns the task to the ready queue without consuming a validation retry.
+
 PyDriller is primary for history analysis and bootstrap installs the pinned 2.10
 release into the virtual environment. If the wrapper is deliberately run outside
 that environment, set `PROJECT_ANALYSIS_PYDRILLER_PYTHON` to an isolated Python

@@ -15,11 +15,12 @@ verbs any third-party harness would use. Two executor modes:
     Drives the bundled headless executor (``executor_api``) — a real
     end-to-end run with no agent harness involved at all.
 
-``external``
+``host``
     Runs every deterministic step and stops at each judgment phase with the
-    tasks planned and claimable, so another harness (a Claude Code session, a
-    third-party runner) can execute them and re-invoke to continue. The phase
-    graph, not the harness, owns the ordering.
+    tasks planned and claimable, so the current Codex CLI, Claude Code, or
+    other host-agent session can execute them through ``next-task`` then
+    ``submit-task`` and re-invoke to continue. ``external`` remains a
+    compatibility alias. The phase graph, not the host agent, owns ordering.
 
 Phases are resumable by construction: each is a function of ledger state, so
 re-invoking after any interruption picks up where the ledger says the run
@@ -69,6 +70,7 @@ class RunState:
     executor_config: Any = None
     concurrency: int = 4
     blocked_on: str = ""
+    ready_tasks: list[str] = field(default_factory=list)
 
     def phase(self, name: str) -> PhaseOutcome:
         outcome = PhaseOutcome(name=name, started_at=time.monotonic())
@@ -82,15 +84,17 @@ class RunState:
 # --------------------------------------------------------------------------- #
 
 def _drain(state: RunState, outcome: PhaseOutcome) -> bool:
-    """Execute every currently-ready task, or report that an external
-    executor must. Returns True when the phase is fully drained."""
+    """Execute every currently-ready task, or tell the current host agent how
+    to claim and submit them. Returns True when the phase is fully drained."""
     engine = Engine(state.run)
     ready = engine.ready_task_ids()
     if not ready:
         return True
     if state.executor != "api":
         state.blocked_on = outcome.name
-        outcome.detail = (f"{len(ready)} task(s) awaiting an external executor: "
+        state.ready_tasks = ready
+        outcome.detail = (f"{len(ready)} task(s) awaiting host execution; run next-task "
+                          "then submit-task in the current agent session: "
                           f"{', '.join(ready[:6])}"
                           + (" …" if len(ready) > 6 else ""))
         state.log(f"  {outcome.detail}")
@@ -263,7 +267,7 @@ PHASES: tuple[tuple[str, Callable[[RunState], bool]], ...] = (
 # entry point
 # --------------------------------------------------------------------------- #
 
-def run_pipeline(run_dir: str | Path, *, executor: str = "api",
+def run_pipeline(run_dir: str | Path, *, executor: str = "host",
                  adapter: str = "anthropic", model: str = "",
                  base_url: str = "", api_key_env: str = "",
                  concurrency: int = 4, context_budget_tokens: int = 180_000,
@@ -281,15 +285,22 @@ def run_pipeline(run_dir: str | Path, *, executor: str = "api",
             f"{run} is not a prepared run directory (no targets.json) -- "
             "mint it with new-run and run prepare-overview first")
 
+    if executor == "external":
+        executor = "host"
+    if executor not in {"host", "api"}:
+        raise DriverError("--executor must be 'host' or 'api' ('external' is a compatibility alias)")
+
     state = RunState(run=run, executor=executor,
                      context_budget_tokens=context_budget_tokens,
                      log=log, concurrency=concurrency)
     if executor == "api":
-        from .executor_api import AdapterConfig
-        if not model:
-            raise DriverError("--model is required when driving the bundled executor")
+        from .executor_api import AdapterConfig, ExecutorError, preflight
         state.executor_config = AdapterConfig(
             name=adapter, model=model, base_url=base_url, api_key_env=api_key_env)
+        try:
+            preflight(state.executor_config)
+        except ExecutorError as exc:
+            raise DriverError(str(exc)) from exc
 
     started = time.monotonic()
     complete = True
@@ -305,7 +316,9 @@ def run_pipeline(run_dir: str | Path, *, executor: str = "api",
 
     summary = {
         "complete": complete,
+        "executor": executor,
         "blocked_on": state.blocked_on,
+        "ready_tasks": state.ready_tasks,
         "total_seconds": round(total, 1),
         "total_minutes": round(total / 60.0, 1),
         "phases": [{"phase": outcome.name,

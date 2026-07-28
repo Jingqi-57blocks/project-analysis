@@ -390,6 +390,18 @@ def parser() -> argparse.ArgumentParser:
     submit_task.add_argument("--task", required=True, help="task_id being submitted")
     submit_task.add_argument("--result", required=True,
                              help="path to a TaskResult JSON file, or - for stdin")
+    reclaim_tasks = sub.add_parser(
+        "reclaim-tasks",
+        help="release abandoned task claims back to the ready queue without editing the append-only ledger")
+    reclaim_tasks.add_argument("--run", required=True, help="run directory")
+    reclaim_group = reclaim_tasks.add_mutually_exclusive_group(required=True)
+    reclaim_group.add_argument("--all", action="store_true",
+                               help="reclaim every outstanding task claim")
+    reclaim_group.add_argument("--task", action="append",
+                               help="one outstanding task_id to reclaim (repeatable)")
+    reclaim_tasks.add_argument(
+        "--reason", default="abandoned executor claim reclaimed by operator",
+        help="append-only audit reason recorded with each released claim")
     run_executor_cmd = sub.add_parser(
         "run-executor",
         help="(orchestrator, 57B-115) bundled headless executor loop -- performs "
@@ -540,9 +552,9 @@ def parser() -> argparse.ArgumentParser:
              "no hand-driven orchestration")
     run_pipeline_cmd.add_argument("--run", required=True, help="prepared run directory")
     run_pipeline_cmd.add_argument(
-        "--executor", default="api", choices=("api", "external"),
-        help="'api' drives the bundled headless executor; 'external' stops at "
-             "each phase boundary so another harness can claim the tasks")
+        "--executor", default="host", choices=("host", "api", "external"),
+        help="'host' (default) stops at semantic task boundaries for this Codex/Claude "
+             "session; 'api' explicitly drives the bundled API executor; 'external' is a compatibility alias")
     run_pipeline_cmd.add_argument("--adapter", default="anthropic",
                                   choices=("anthropic", "openai-compatible"))
     run_pipeline_cmd.add_argument("--model", default="", help="executor model id")
@@ -610,12 +622,16 @@ def _report_floors_cmd(args: argparse.Namespace) -> int:
 def _run_pipeline_cmd(args: argparse.Namespace) -> int:
     from .orchestrator import driver
     run = Path(args.run).expanduser().resolve()
-    outcome = driver.run_pipeline(
-        run,
-        executor=args.executor, adapter=args.adapter, model=args.model,
-        base_url=args.base_url, api_key_env=args.api_key_env,
-        concurrency=args.concurrency, context_budget_tokens=args.context_budget,
-        stop_after=args.stop_after or None, log=print)
+    try:
+        outcome = driver.run_pipeline(
+            run,
+            executor=args.executor, adapter=args.adapter, model=args.model,
+            base_url=args.base_url, api_key_env=args.api_key_env,
+            concurrency=args.concurrency, context_budget_tokens=args.context_budget,
+            stop_after=args.stop_after or None, log=print)
+    except driver.DriverError as exc:
+        print(f"wrapper executor error: {exc}", file=sys.stderr)
+        return 4
     print(json.dumps(outcome["summary"], indent=2, sort_keys=True))
     return 0 if outcome["complete"] else 3
 
@@ -1380,6 +1396,22 @@ def _submit_task(args: argparse.Namespace) -> int:
     return 0 if outcome["status"] == "validated" else 3
 
 
+def _reclaim_tasks(args: argparse.Namespace) -> int:
+    from .orchestrator.engine import Engine, EngineError
+    run = Path(args.run).expanduser().resolve()
+    engine = Engine(run)
+    if not engine.ledger_exists():
+        print("wrapper input error: no orchestrator ledger exists for this run", file=sys.stderr)
+        return 6
+    try:
+        reclaimed = engine.reclaim(None if args.all else args.task, reason=args.reason)
+    except EngineError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps({"reclaimed": reclaimed}, indent=2, sort_keys=True))
+    return 0
+
+
 def _run_executor_cmd(args: argparse.Namespace) -> int:
     from .orchestrator.executor_api import AdapterConfig, ExecutorError, run_executor
     run = Path(args.run).expanduser().resolve()
@@ -1537,6 +1569,8 @@ def main(argv: list[str] | None = None) -> int:
             return _next_task(args)
         if args.command == "submit-task":
             return _submit_task(args)
+        if args.command == "reclaim-tasks":
+            return _reclaim_tasks(args)
         if args.command == "run-executor":
             return _run_executor_cmd(args)
         if args.command == "executor-conformance":

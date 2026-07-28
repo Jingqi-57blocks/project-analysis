@@ -8,6 +8,12 @@ separate state file that could drift out of sync with the ledger, so a crash
 between any two lines leaves nothing to repair — the next call just replays
 whatever made it to disk.
 
+An outstanding claim belongs to an executor session, not to the task forever.
+``Engine.reclaim`` appends a ``released`` event for an abandoned claim and makes
+the task ready again without rewriting history or consuming one of its ordinary
+validation retries. This is the only supported recovery path; callers must not
+edit the ledger by hand.
+
 Digest-keyed intra-run resume: a task_id's packet may be re-created with a
 different ``input_digest``/``template_version`` (its upstream inputs
 changed); the engine treats that as a NEW generation of the same task_id —
@@ -85,7 +91,7 @@ class ClaimedTask:
 @dataclass
 class _Attempt:
     number: int
-    outcome: str | None = None  # None (outstanding) | "validated" | "failed"
+    outcome: str | None = None  # None (outstanding) | "released" | "validated" | "failed"
 
 
 @dataclass
@@ -201,6 +207,15 @@ class Engine:
             elif record.event == "claimed":
                 task = tasks[record.task_id]
                 task.attempts.append(_Attempt(number=record.detail["attempt"]))
+            elif record.event == "released":
+                task = tasks[record.task_id]
+                attempt_no = record.detail["attempt"]
+                if (not task.attempts or task.attempts[-1].outcome is not None
+                        or task.attempts[-1].number != attempt_no):
+                    raise EngineError(
+                        f"released record for {record.task_id!r} does not match an "
+                        "outstanding claim")
+                task.attempts[-1].outcome = "released"
             elif record.event == "submitted":
                 # The result is already contract-valid (LedgerRecord verified
                 # it on the way in); nothing further to reconstruct from it —
@@ -226,7 +241,7 @@ class Engine:
                         # claim shouldn't happen via this engine's own API,
                         # but a hand-edited/foreign ledger shouldn't crash replay.
                         task.attempts.append(_Attempt(number=attempt_no, outcome="failed"))
-                    if len(task.attempts) >= self.max_attempts:
+                    if sum(attempt.outcome == "failed" for attempt in task.attempts) >= self.max_attempts:
                         task.exhausted = True
         return tasks
 
@@ -307,7 +322,7 @@ class Engine:
     def task_states(self) -> dict[str, str]:
         """The current TERMINAL-or-not state of every known task_id:
         ``"validated"``, ``"failed"`` (exhausted or cascaded — permanent),
-        or ``"pending"`` (still queued, claimed, or blocked on a dependency
+        or ``"pending"`` (still queued, claimed, released for recovery, or blocked on a dependency
         that has not yet resolved either way). Callers driving a loop to
         completion (claim until nothing is ready) can rely on every task_id
         ending up ``"validated"``/``"failed"`` — a DAG can only run out of
@@ -337,12 +352,45 @@ class Engine:
             claimed: list[ClaimedTask] = []
             for task_id in ready_ids[:count]:
                 task = tasks[task_id]
-                attempt_no = len(task.attempts) + 1
+                attempt_no = max((attempt.number for attempt in task.attempts), default=0) + 1
                 self._append_unlocked(LedgerRecord(
                     event="claimed", task_id=task_id, at=now_iso(),
                     detail={"executor": executor_info.to_dict(), "attempt": attempt_no}))
                 claimed.append(ClaimedTask(packet=task.packet, attempt=attempt_no))
             return claimed
+
+    def reclaim(self, task_ids: Sequence[str] | None = None, *,
+                reason: str = "abandoned executor claim reclaimed by operator") -> list[str]:
+        """Release outstanding claims back to the ready queue.
+
+        Every recovery is a new append-only ``released`` ledger record tied to
+        the exact claim attempt. A released claim is not a failed execution,
+        so it does not consume the task's validation-attempt budget. With no
+        ``task_ids`` every outstanding claim is reclaimed; otherwise unknown
+        task ids are rejected and only the selected outstanding claims change.
+        """
+        if not isinstance(reason, str) or not reason.strip():
+            raise EngineError("reclaim reason must be a non-empty string")
+        requested = None if task_ids is None else list(task_ids)
+        with self._locked():
+            tasks = self._rebuild(self._read_records())
+            if requested is not None:
+                unknown = sorted(set(requested) - set(tasks))
+                if unknown:
+                    raise EngineError(f"unknown task_id(s): {', '.join(unknown)}")
+                chosen = sorted(set(requested))
+            else:
+                chosen = sorted(tasks)
+            reclaimed: list[str] = []
+            for task_id in chosen:
+                task = tasks[task_id]
+                if not task.outstanding:
+                    continue
+                self._append_unlocked(LedgerRecord(
+                    event="released", task_id=task_id, at=now_iso(),
+                    detail={"reason": reason, "attempt": task.attempts[-1].number}))
+                reclaimed.append(task_id)
+            return reclaimed
 
     # -- submission ---------------------------------------------------------- #
 

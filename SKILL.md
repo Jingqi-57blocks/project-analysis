@@ -226,12 +226,13 @@ anchored):
    Repeatedly run:
 
    ```
-   project-analysis-wrapper run-pipeline --run <run-dir> --executor external
+   project-analysis-wrapper run-pipeline --run <run-dir>
    ```
 
-   It executes every deterministic step itself and stops the moment a phase has tasks
-   only an LLM can do, reporting `"complete": false` and `"blocked_on": "<phase>"` in its
-   JSON summary. When it stops, drain that phase:
+   Host execution is the default: it never needs a project-level model API key. It executes
+   every deterministic step itself and stops the moment a phase has tasks only the current
+   Codex/Claude/agent session can do, reporting `"complete": false`, machine-readable
+   `"blocked_on"`, and `"ready_tasks"` in its JSON summary. When it stops, drain that phase:
 
    ```
    project-analysis-wrapper next-task --run <run-dir> --claim <N> \
@@ -268,8 +269,10 @@ anchored):
    dedup-rank and section-generate — cross-checks it against the packet's own inputs
    (e.g. a section below its floor word count fails here, before it can ever be marked
    validated); a failed submission is retried through the engine's normal attempt path,
-   never patched by hand. Once `next-task` returns no more ready tasks for the phase,
-   re-run `run-pipeline --executor external` to advance. Repeat the whole
+   never patched by hand. If a host session is interrupted after claiming work, run
+   `project-analysis-wrapper reclaim-tasks --run <run-dir> --all` to append recovery
+   records and safely make those tasks claimable again. Once `next-task` returns no more
+   ready tasks for the phase, re-run `run-pipeline` to advance. Repeat the whole
    claim/execute/submit cycle until it reports `"complete": true`.
 4. **What the phases are producing.** `judgment` claims lens-findings (plus, for
    `source_reads` lenses, a paired selection-fetch/finalize step) and one independent

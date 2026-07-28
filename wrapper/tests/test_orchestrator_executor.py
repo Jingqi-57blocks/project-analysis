@@ -111,6 +111,11 @@ def test_missing_api_key_raises_immediately_and_naming_the_env_var(tmp_path, mon
         run_executor(tmp_path, AdapterConfig(name="anthropic", model="claude-x"),
                     transport=transport, sleep=lambda s: None)
 
+    # Configuration is checked before Engine.claim, so recovery is not needed.
+    events = [json.loads(line) for line in
+              (tmp_path / "tasks" / "ledger.jsonl").read_text().splitlines()]
+    assert [event["event"] for event in events] == ["created"]
+
 
 def test_unknown_adapter_raises_executor_error(tmp_path):
     packet = _packet("solo")

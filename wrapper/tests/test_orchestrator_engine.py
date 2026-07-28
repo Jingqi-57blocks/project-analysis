@@ -107,6 +107,28 @@ def test_claim_never_reclaims_an_outstanding_task(tmp_path):
     assert second == []
 
 
+def test_reclaim_releases_an_abandoned_claim_without_spending_a_retry(tmp_path):
+    engine = Engine(tmp_path, max_attempts=1)
+    engine.create_tasks([_packet("a")])
+    first = engine.claim(1, executor_kind="host", model="codex")
+
+    assert engine.reclaim(reason="host session interrupted") == ["a"]
+    assert engine.ready_task_ids() == ["a"]
+    second = engine.claim(1, executor_kind="host", model="codex")
+    assert second[0].attempt == first[0].attempt + 1
+
+    # The release was not a failed execution: the first actual failed result
+    # still consumes the sole validation retry and reaches a terminal state.
+    engine.submit("a", _invalid_result("a", second[0].attempt))
+    assert engine.task_states()["a"] == "failed"
+    events = [json.loads(line) for line in
+              (tmp_path / "tasks" / "ledger.jsonl").read_text().splitlines()]
+    assert [(row["event"], row["detail"].get("attempt")) for row in events] == [
+        ("created", None), ("claimed", 1), ("released", 1),
+        ("claimed", 2), ("submitted", None), ("failed", 2),
+    ]
+
+
 def test_claim_respects_the_requested_count(tmp_path):
     engine = Engine(tmp_path)
     engine.create_tasks([_packet(f"t{i}") for i in range(5)])
