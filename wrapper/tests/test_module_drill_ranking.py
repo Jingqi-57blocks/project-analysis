@@ -7,11 +7,14 @@ import json
 import pytest
 
 from analysis_wrapper.cli import main
+from analysis_wrapper.module_drill import ranking
 from analysis_wrapper.module_drill.candidate_universe import write as write_candidates
 from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.driver import ModuleDriver
 from analysis_wrapper.module_drill.feature_evidence import write as write_feature_evidence
-from analysis_wrapper.module_drill.ranking import TASK_ID, build_packet, register as register_ranking
+from analysis_wrapper.module_drill.ranking import (
+    TASK_ID, MAX_PACKET_BYTES, build_packet, build_packets, register as register_ranking,
+)
 from analysis_wrapper.module_drill.scope import ModuleScope
 from analysis_wrapper.module_drill.selection import finalize
 from analysis_wrapper.module_drill.validation import ContractError
@@ -50,25 +53,24 @@ def _result(task_id, attempt, output):
 
 def _validated_ranking(module_run, output):
     driver = ModuleDriver(module_run)
-    assert driver.register((build_packet(driver.context),)) == [TASK_ID]
+    assert register_ranking(module_run) == [TASK_ID]
     claim = driver.claim(1, executor_kind="test", model="test-model")[0]
     outcome = driver.submit(claim.packet.task_id, _result(claim.packet.task_id, claim.attempt, output))
     assert outcome["status"] == "validated"
     return driver
 
 
-def test_ranking_packet_binds_selector_to_complete_candidate_evidence(tmp_path):
+def test_ranking_packet_binds_selector_to_a_compact_complete_candidate_partition(tmp_path):
     module_run = _prepared_run(tmp_path)
     packet = build_packet(load(module_run))
 
     assert packet.task_id == TASK_ID
     assert json.loads(packet.inputs["selector.json"].content) == {"selector": "record"}
-    universe = json.loads(packet.inputs["candidate-universe.json"].content)
-    evidence = json.loads(packet.inputs["candidate-evidence.json"].content)
-    assert {row["candidate_id"] for row in evidence} == {
-        row["candidate_id"] for row in universe["candidates"]
-    }
-    assert all(row["evidence"] for row in evidence)
+    partition = json.loads(packet.inputs["candidate-partition.json"].content)
+    assert partition["schema_version"] == "candidate-ranking-plan/v1"
+    assert partition["candidates"]
+    assert all(row["evidence"] for row in partition["candidates"])
+    assert len(packet.inputs["candidate-partition.json"].content.encode()) <= MAX_PACKET_BYTES
 
 
 def test_exact_route_selector_bypasses_model_ranking_and_materializes_scope(tmp_path):
@@ -142,11 +144,44 @@ def test_ranking_packet_keeps_every_candidate_when_route_inventory_exceeds_overv
     _, module_run = _run(tmp_path, route_count=205)
     write_feature_evidence(load(module_run))
     write_candidates(load(module_run))
-    packet = build_packet(load(module_run))
-    universe = json.loads(packet.inputs["candidate-universe.json"].content)
-    evidence = json.loads(packet.inputs["candidate-evidence.json"].content)
+    packets = build_packets(load(module_run))
+    universe = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())
+    partition_ids = {
+        row["candidate_id"] for packet in packets
+        for row in json.loads(packet.inputs["candidate-partition.json"].content)["candidates"]
+    }
     assert len(universe["candidates"]) > 200
-    assert len(evidence) == len(universe["candidates"])
+    assert partition_ids == {row["candidate_id"] for row in universe["candidates"]}
+    assert all(len(packet.inputs["candidate-partition.json"].content.encode()) <= MAX_PACKET_BYTES
+               for packet in packets)
+
+
+def test_partitioned_ranking_covers_each_candidate_once_and_rejects_cross_partition_ids(tmp_path, monkeypatch):
+    _, module_run = _run(tmp_path, route_count=12)
+    write_feature_evidence(load(module_run))
+    write_candidates(load(module_run))
+    monkeypatch.setattr(ranking, "MAX_PACKET_BYTES", 1_200)
+    packets = ranking.build_packets(load(module_run))
+    assert len(packets) > 1
+    ids = [row["candidate_id"] for packet in packets
+           for row in json.loads(packet.inputs["candidate-partition.json"].content)["candidates"]]
+    assert len(ids) == len(set(ids))
+    assert set(ids) == {
+        row["candidate_id"] for row in json.loads(
+            (module_run / "evidence" / "candidate-universe.json").read_text())["candidates"]
+    }
+
+    driver = ModuleDriver(module_run)
+    assert ranking.register(module_run) == [packet.task_id for packet in packets]
+    first = driver.claim(1, executor_kind="test", model="test-model")[0]
+    other_packet = next(packet for packet in packets if packet.task_id != first.packet.task_id)
+    foreign_id = json.loads(other_packet.inputs["candidate-partition.json"].content)["candidates"][0]["candidate_id"]
+    outcome = driver.submit(first.packet.task_id, _result(
+        first.packet.task_id, first.attempt,
+        {"decision": "selected", "candidate_ids": [foreign_id], "reason_code": "clear-dominant"},
+    ))
+    assert outcome["status"] == "failed"
+    assert outcome["failures"][0]["check"] == "ranking-candidate-universe"
 
 
 def test_ranking_rejects_a_tampered_deterministic_candidate_universe(tmp_path):

@@ -78,7 +78,11 @@ def _validate_candidate_ranking(output: Any) -> list[Failure]:
 
 def _crosscheck_candidate_ranking(output: Any, packet_inputs: Mapping[str, str]) -> list[Failure]:
     """Ensure ranking can only choose IDs actually supplied in the packet."""
-    raw = packet_inputs.get("candidate-universe.json")
+    raw = packet_inputs.get("candidate-partition.json")
+    if raw is None:
+        # Kept only for direct schema callers that validate an older small
+        # packet.  Production ranking packets use bounded partitions.
+        raw = packet_inputs.get("candidate-universe.json")
     if raw is None or not isinstance(output, dict):
         return []
     try:
@@ -97,7 +101,7 @@ def _crosscheck_candidate_ranking(output: Any, packet_inputs: Mapping[str, str])
     if unknown:
         return _failure(
             "ranking-candidate-universe",
-            "candidate_ids must be chosen from candidate-universe.json: " + ", ".join(unknown),
+            "candidate_ids must be chosen from the supplied candidate partition: " + ", ".join(unknown),
             "candidate_ids",
         )
     return []

@@ -14,7 +14,7 @@ from .context import SourceContext, load as load_context
 from .driver import ModuleDriver
 from .exact_selector import ExactSelectorResolution, load as load_exact_resolution
 from .frontiers import initial as initial_frontiers
-from .ranking import TASK_ID, TASK_TYPE, build_packet
+from .ranking import TASK_TYPE, build_packets, load_plan
 from .scope import FeatureSeed, ModuleScope, ScopeCandidate
 from .validation import ContractError, sha256_json
 
@@ -44,19 +44,55 @@ def _feature_seeds(context: SourceContext) -> tuple[FeatureSeed, ...]:
 
 
 def _validated_ranking(driver: ModuleDriver) -> tuple[dict[str, Any], dict[str, Any], str, str]:
-    """Load a current ranking only when its packet equals this run's plan."""
-    expected = build_packet(driver.context)
-    packet, output = driver.validated_task(TASK_ID)
-    if packet.to_dict() != expected.to_dict():
-        raise ContractError("validated ranking task does not match this run's candidate packet")
-    failures = validate_output(
-        TASK_TYPE, output,
-        packet_inputs={name: item.content for name, item in expected.inputs.items()},
-    )
-    if failures:
-        raise ContractError("validated ranking output no longer satisfies its packet: " + failures[0]["detail"])
-    return (output, json.loads(expected.inputs["candidate-universe.json"].content),
-            "validated-ranking-task", expected.input_digest)
+    """Merge every validated ranking partition without silently dropping one.
+
+    Each model call only receives its compact candidate partition.  The
+    persisted deterministic plan records the complete universe, and any local
+    ambiguity is propagated rather than guessed away at merge time.
+    """
+    plan = load_plan(driver.context)
+    expected_packets = build_packets(driver.context)
+    expected_by_id = {packet.task_id: packet for packet in expected_packets}
+    planned_ids = [row.get("task_id") for row in plan.get("partitions", [])]
+    if planned_ids != [packet.task_id for packet in expected_packets] or len(set(planned_ids)) != len(planned_ids):
+        raise ContractError("candidate ranking plan does not match the expected partition tasks")
+
+    selected: set[str] = set()
+    ambiguous: set[str] = set()
+    outputs: list[dict[str, Any]] = []
+    for task_id in planned_ids:
+        if not isinstance(task_id, str) or task_id not in expected_by_id:
+            raise ContractError("candidate ranking plan names an unknown task")
+        expected = expected_by_id[task_id]
+        packet, output = driver.validated_task(task_id)
+        if packet.to_dict() != expected.to_dict():
+            raise ContractError("validated ranking task does not match its candidate partition")
+        failures = validate_output(
+            TASK_TYPE, output,
+            packet_inputs={name: item.content for name, item in expected.inputs.items()},
+        )
+        if failures:
+            raise ContractError("validated ranking output no longer satisfies its candidate partition: "
+                                + failures[0]["detail"])
+        outputs.append({"task_id": task_id, "output": output})
+        if output["decision"] == "selected":
+            selected.update(output["candidate_ids"])
+        elif output["decision"] == "ambiguous":
+            ambiguous.update(output["candidate_ids"])
+
+    if ambiguous:
+        merged = {"decision": "ambiguous", "candidate_ids": sorted(ambiguous),
+                  "reason_code": "equally-supported"}
+    elif selected:
+        merged = {"decision": "selected", "candidate_ids": sorted(selected),
+                  "reason_code": "clear-dominant"}
+    else:
+        merged = {"decision": "no-match", "candidate_ids": [],
+                  "reason_code": "insufficient-evidence"}
+    universe = load_universe(driver.context)
+    return (merged, universe, "validated-ranking-partitions", sha256_json({
+        "plan": plan, "outputs": outputs,
+    }))
 
 
 def _exact_output(resolution: ExactSelectorResolution) -> dict[str, Any]:

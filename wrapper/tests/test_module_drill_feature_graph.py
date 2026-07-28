@@ -8,7 +8,7 @@ from analysis_wrapper.module_drill.candidate_universe import write as write_cand
 from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.feature_evidence import write as write_feature_evidence
 from analysis_wrapper.module_drill.feature_graph import build, write
-from analysis_wrapper.module_drill.ranking import TASK_ID, build_packet
+from analysis_wrapper.module_drill.ranking import TASK_ID, build_packet, register as register_ranking
 from analysis_wrapper.module_drill.selection import finalize
 from analysis_wrapper.module_drill.driver import ModuleDriver
 from analysis_wrapper.module_drill.validation import ContractError
@@ -23,7 +23,7 @@ def _prepared_scope(tmp_path, **kwargs):
     write_feature_evidence(load(module_run))
     write_candidates(load(module_run))
     driver = ModuleDriver(module_run)
-    driver.register((build_packet(driver.context),))
+    assert register_ranking(module_run) == [TASK_ID]
     claim = driver.claim(1, executor_kind="test", model="test-model")[0]
     candidates = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())["candidates"]
     candidate_id = next(row["candidate_id"] for row in candidates if len(row["evidence_ids"]) == 2)

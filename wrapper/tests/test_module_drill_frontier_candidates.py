@@ -11,7 +11,7 @@ from analysis_wrapper.module_drill.feature_evidence import write as write_featur
 from analysis_wrapper.module_drill.feature_graph import write as write_graph
 from analysis_wrapper.module_drill.frontier_candidates import build, write
 from analysis_wrapper.module_drill.frontier_receipts import write as write_receipts
-from analysis_wrapper.module_drill.ranking import TASK_ID, build_packet
+from analysis_wrapper.module_drill.ranking import TASK_ID, build_packet, register as register_ranking
 from analysis_wrapper.module_drill.selection import finalize
 from analysis_wrapper.module_drill.driver import ModuleDriver
 from analysis_wrapper.module_drill.validation import ContractError
@@ -39,7 +39,7 @@ def _prepared(tmp_path, *, integration_path="src/service.ts", route_handler_anch
     write_feature_evidence(load(module_run))
     write_candidates(load(module_run))
     driver = ModuleDriver(module_run)
-    driver.register((build_packet(driver.context),))
+    assert register_ranking(module_run) == [TASK_ID]
     claim = driver.claim(1, executor_kind="test", model="test-model")[0]
     rows = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())["candidates"]
     candidate_id = next(row["candidate_id"] for row in rows if len(row["evidence_ids"]) == 2)
@@ -76,7 +76,7 @@ def test_candidates_do_not_treat_same_file_adjacency_as_a_handler_link(tmp_path)
     write_feature_evidence(load(module_run))
     write_candidates(load(module_run))
     driver = ModuleDriver(module_run)
-    driver.register((build_packet(driver.context),))
+    assert register_ranking(module_run) == [TASK_ID]
     claim = driver.claim(1, executor_kind="test", model="test-model")[0]
     rows = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())["candidates"]
     candidate_id = next(row["candidate_id"] for row in rows if len(row["evidence_ids"]) == 2)
