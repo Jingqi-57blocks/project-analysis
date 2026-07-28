@@ -74,7 +74,7 @@ def test_staticcheck_compile_failure_is_partial(target):
 def test_staticcheck_no_matched_packages_is_not_complete(target):
     td = staticcheck(target)
     reason = td.check_degraded(target, 'warning: "./..." matched no packages', 1)
-    assert "no-analysis-object" in reason
+    assert "no-package-universe" in reason
 
 
 def test_depcruise_unresolved_over_15_percent_is_partial(target):

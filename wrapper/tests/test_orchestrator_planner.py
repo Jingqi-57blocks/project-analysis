@@ -93,6 +93,11 @@ def _build_run(tmp_path, *, repo_ids=("api-11111111", "web-22222222"),
     _view("lizard", "api", lizard_text)
     _view("scc", "api", "Go 10 100\n")
     _view("git-history", "api", "churn: service.go 5\n")
+    # A reduced staticcheck scan is still lens evidence: the limitation must
+    # reach both Go quality consumers instead of disappearing as no findings.
+    _view("staticcheck", "api", "coverage_limitation: staticcheck-no-package-universe: package pattern matched no packages\n")
+    view_rows[-1]["status"] = "partial"
+    view_rows[-1]["reason"] = "staticcheck-no-package-universe: package pattern matched no packages"
     _view("scc", "web", "JavaScript 5 50\n")
     _view("git-history", "web", "churn: index.js 2\n")
     # a cross-repo view, attributed to a single "primary" member (api) --
@@ -541,6 +546,34 @@ def test_dead_code_route_evidence_is_trimmed_to_its_own_repo(tmp_path):
     assert len(api_route_nodes) == 1
     assert web_route_nodes == []
     assert json.loads(web_inputs["dead-code-route-inventory-rows.json"]) == []
+
+
+def test_staticcheck_coverage_limitation_reaches_dead_code_and_safety_net(tmp_path):
+    """57B-151: a provider coverage limit must survive into both Go quality
+    lenses, without leaking one repository's result to a sibling packet."""
+    run, _ = _build_run(tmp_path)
+    lens_templates = tpl.load_lens_templates()
+    from analysis_wrapper.orchestrator.planner import _load_json, _lens_inputs
+    synthesis_doc = _load_json(run / "synthesis-input.json")
+    module_candidates_doc = _load_json(run / "module-candidates.json")
+    run_summary = _load_json(run / "signals" / "run-summary.json")
+
+    for lens_id in ("dead-code", "safety-net"):
+        inputs = _lens_inputs(run, lens_templates[lens_id], synthesis_doc,
+                              module_candidates_doc, run_summary, "api")
+        staticcheck_inputs = {
+            name: content for name, content in inputs.items()
+            if name.startswith("signals/staticcheck-")
+        }
+        assert len(staticcheck_inputs) == 1
+        assert "coverage_limitation: staticcheck-no-package-universe" in next(
+            iter(staticcheck_inputs.values()))
+        requirements = json.loads(inputs["requirements.json"])
+        assert {row["coverage_id"] for row in requirements["coverage_requirements"]} >= set(staticcheck_inputs)
+
+    web_inputs = _lens_inputs(run, lens_templates["safety-net"], synthesis_doc,
+                              module_candidates_doc, run_summary, "web")
+    assert not any(name.startswith("signals/staticcheck-") for name in web_inputs)
 
 
 # --------------------------------------------------------------------------- #

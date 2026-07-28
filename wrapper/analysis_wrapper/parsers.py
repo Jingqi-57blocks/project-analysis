@@ -251,16 +251,35 @@ _COMPILE_FAILURE = re.compile(
     r"(?:source )?files|matched no packages|no packages to analyze",
     re.I,
 )
+_NO_PACKAGE_UNIVERSE = re.compile(
+    r"(?:\./\.\.\.|package pattern).*matched no packages|no packages to analyze",
+    re.I,
+)
+_NO_BUILDABLE_PACKAGE = re.compile(
+    r"no (?:Go|buildable Go) (?:source )?files",
+    re.I,
+)
 
 
 def staticcheck_degraded(_target: RepoTarget, combined: str, _exit: int) -> str:
-    return "compile/load/no-analysis-object result detected; staticcheck coverage is incomplete" \
-        if _COMPILE_FAILURE.search(combined) else ""
+    if _NO_PACKAGE_UNIVERSE.search(combined):
+        return ("staticcheck-no-package-universe: package pattern matched no packages; "
+                "coverage is reduced, not a clean scan")
+    if _NO_BUILDABLE_PACKAGE.search(combined):
+        return ("staticcheck-no-buildable-package: module has no buildable Go package "
+                "for the configured analysis roots; coverage is reduced")
+    if _COMPILE_FAILURE.search(combined):
+        return ("staticcheck-compile-or-load-failure: coverage is incomplete")
+    return ""
 
 
 def staticcheck_view(_target: RepoTarget, stdout: str, stderr: str) -> str:
     findings = [x for x in stdout.splitlines() if not re.search(r"(^|/)docs/", x)]
+    combined = stdout + "\n" + stderr
+    limitation = staticcheck_degraded(_target, combined, 0)
     return "\n".join([
+        ("coverage_limitation: " + limitation) if limitation
+        else "coverage_limitation: none (scan completed; zero diagnostics is valid)",
         f"findings_total: {len(stdout.splitlines())}",
         f"findings_after_generated_filter: {len(findings)}",
         *findings[:180],

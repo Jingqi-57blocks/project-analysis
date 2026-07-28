@@ -9,10 +9,12 @@ shard: repo
 #   findings), corrected from an initial workspace guess inherited from the
 #   old README grouping (shared history-lane invocation with
 #   hotspots-change-friction, not a shared need for cross-repo comparison).
-signals: [git-history, scc]
-# signals: lenses/coverage-map.json requires only {scc}; this file's own
+signals: [git-history, scc, staticcheck]
+# signals: coverage-map.json requires {scc, staticcheck}; this file's own
 #   "Signals:" line additionally names git-history ("do tests change
-#   alongside the code they cover?"), so it is added.
+#   alongside the code they cover?"). staticcheck is included so a reduced Go
+#   quality scan is visible to this lens instead of being mistaken for absent
+#   type/build safety evidence.
 source_reads: true
 # source_reads: this lens's own body requires reading actual file content no
 #   signal view carries -- "Assertion quality sampling -- read a SAMPLE of
@@ -27,7 +29,8 @@ observed, not assumed?
 
 **Signals:** the source tree (test files, CI config — read as data), scc view
 (test-code volume per language), git-history view (do tests change alongside
-the code they cover?), discovery-report (CI resource signals).
+the code they cover?), staticcheck view (Go quality diagnostics or its exact
+coverage limitation), discovery-report (CI resource signals).
 
 This lens reports **observed test evidence, never a file census**. A folder
 full of `*_test.go` files is not a safety net until something shows they run
@@ -51,6 +54,10 @@ Look for, with evidence:
   file that actually SETS the flag, and request that file via selection if
   it isn't already in front of you — a strictness claim about a config that
   merely inherits, without reading what it inherits FROM, is unverified.
+- **Go quality-check coverage** — staticcheck findings are supporting Go
+  safety evidence only when its package universe was actually scanned. If its
+  view reports a coverage limitation, carry that exact limitation forward;
+  do not infer a clean Go quality check or an absence of diagnostics.
 - **Installed-vs-used test tooling** — a test dependency or config block
   present in the manifest with zero tests in the sampled set importing or
   invoking it is itself a finding: tooling that is declared but dormant is
