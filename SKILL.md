@@ -328,27 +328,11 @@ reported `partial`/`unknown`, never backfilled with broad reads.
 
 ## Module drill-down
 
-Mint the drill-down run with the wrapper (it enforces resolution, staleness, and
-linkage — never create the directory by hand):
-
-```
-"${CLAUDE_SKILL_DIR}/wrapper/.venv/bin/project-analysis-wrapper" new-drilldown \
-    --skill-root "${CLAUDE_SKILL_DIR}" --module <module-id> [--from-run <run-id>]
-```
-
-Resolution is `--from-run` → `current` pointer → refusal listing completed runs;
-a stale source (any repo moved/dirtied since the overview) exits 5 naming the
-drift — run a new overview instead. The minted run lives in
-`output/<project-key>/drilldown/<run-id>/` with a `source_overview_run` link and
-stages `resolve → prd → health` (same `mark-stage`/`rollback`/audit-before-mark
-discipline as overviews). Then produce two documents from the templates:
-- `prd.md` (`templates/module-prd.md`) — PM-facing; sections included **where
-  applicable**: UI entry points (verbatim labels), roles, flows, rules/states,
-  notifications/integrations, open questions. Readable standalone.
-- `health.md` (`templates/module-health.md`) — dev-facing; findings with evidence,
-  dependency picture, and up to **3 applicable** traced change scenarios chosen from:
-  UI change, business-rule change, data/API change, scheduler/event change,
-  external-integration change.
+Module Drill v2 is a separate cross-repository feature-recovery pipeline. Its
+contract is documented in `references/module-drill-v2.md`. The former
+`new-drilldown` command only copied overview provenance and did not recover
+feature behavior, so it is intentionally unavailable while the v2 lifecycle is
+implemented. Do not create legacy drill-down directories by hand.
 
 ## Confirmed facts
 
@@ -362,10 +346,10 @@ observed code, surface the conflict in the report — never silently prefer eith
 ```
 SKILL.md            this file
 lenses/             lens prompt definitions (analysis dimensions)
-templates/          overview (PM primary), technical-overview, project-map, module-prd, module-health
+templates/          overview (PM primary), technical-overview, project-map
 wrapper/            Python tool-execution wrapper (see wrapper/README.md)
 state/<project-key>/     pointers.json, confirmed_facts.md   (runtime, per target)
-output/<project-key>/    overview/<run-id>/, drilldown/<run-id>/   (runtime, per target)
+output/<project-key>/    overview/<run-id>/, modules/<run-id>/   (runtime, per target)
 ```
 
 `<project-key>` is the portable filename form of the real workspace name. Ordinary

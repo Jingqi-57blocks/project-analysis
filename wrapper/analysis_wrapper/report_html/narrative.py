@@ -17,9 +17,8 @@ from dataclasses import dataclass, field
 
 from .. import locale
 from .content_map import Destination
-from .htmlutil import attr, esc, slugify
+from .htmlutil import attr, esc
 from .markdown_render import MarkdownDoc
-from .run_inputs import DrilldownModule, RunInputs
 
 
 @dataclass
@@ -45,6 +44,27 @@ def document_outline(rendered: MarkdownDoc, full_page: str, *, max_level: int = 
     if not items:
         return '<p class="muted">No sections.</p>'
     return f'<ul class="outline">{"".join(items)}</ul>'
+
+
+def module_map_entrance(
+    language: str,
+    project_map: MarkdownDoc | None,
+    project_map_page: str | None,
+) -> NarrativeBlock:
+    """Overview-only module-map entrance; it has no Module Drill lifecycle."""
+    title = locale.labels(language)["narrative.map"]
+    if project_map is None or project_map_page is None:
+        body = '<p class="muted">No project map document is present in this run.</p>'
+    else:
+        body = (
+            '<p class="muted">The evidence-backed project module map is available '
+            f'<a href="{attr(project_map_page)}">as a full document</a>.</p>'
+            + document_outline(project_map, project_map_page)
+        )
+    return NarrativeBlock(
+        f'<section class="section" id="module-map"><h2 class="doc-h">{esc(title)}</h2>{body}</section>',
+        [], [("module-map", title)],
+    )
 
 
 def narrative_cards(
@@ -95,75 +115,3 @@ def narrative_cards(
         + f'<div class="cards" id="narrative-cards">{"".join(cards)}</div>'
     )
     return NarrativeBlock(html, destinations, toc)
-
-
-def module_entrance(
-    inputs: RunInputs,
-    project_map: MarkdownDoc | None,
-    project_map_page: str | None,
-    module_page_for: "callable | None" = None,
-) -> NarrativeBlock:
-    """The Modules entrance: an honest stub today, auto-lit when drill-down exists.
-
-    Never fabricates module content. It detects whether per-module drill-down
-    artifacts (``prd.md`` / ``health.md``) are present and renders the matching
-    state. The system-level module map (authored narrative in the Project Map) is
-    always linked so the entrance is useful even in the stub state.
-    """
-    cat = locale.labels(inputs.language)
-    labels = {"drilldown": cat["narrative.drilldown"], "map": cat["narrative.map"]}
-    modules = inputs.drilldown_modules
-
-    if not modules:
-        drill = (
-            '<div class="note note-stub"><p><strong>Module drill-down is not yet '
-            "available for this run.</strong> Per-module PM PRDs and developer "
-            "health reports are Phase 2 artifacts. This entrance lights up "
-            "automatically once <code>drilldown/&lt;module&gt;/prd.md</code> or "
-            "<code>health.md</code> are present in the run.</p></div>"
-        )
-    else:
-        rows = []
-        for m in sorted(modules, key=lambda x: x.module_id):
-            links = []
-            if m.has_prd and module_page_for:
-                links.append(f'<a href="{attr(module_page_for(m, "prd"))}">PM PRD</a>')
-            if m.has_health and module_page_for:
-                links.append(f'<a href="{attr(module_page_for(m, "health"))}">Dev health</a>')
-            rows.append(
-                f"<tr><td>{esc(m.module_id)}</td>"
-                f'<td>{" · ".join(links) or "—"}</td></tr>'
-            )
-        drill = (
-            '<div class="note note-live"><p><strong>Module drill-down available.'
-            "</strong> PM-facing PRDs and developer-facing health reports render "
-            "as lossless documents below.</p></div>"
-            '<div class="table-scroll"><table class="data"><thead><tr>'
-            "<th>module</th><th>views</th></tr></thead><tbody>"
-            + "".join(rows) + "</tbody></table></div>"
-        )
-
-    if project_map and project_map_page:
-        map_html = (
-            '<p class="muted">The system-level module map (authored narrative) '
-            f'lives in the <a href="{attr(project_map_page)}">Project Map</a>.</p>'
-        )
-    else:
-        map_html = '<p class="muted">No project map document present in this run.</p>'
-
-    html = (
-        f'<section class="section" id="module-drilldown">'
-        f'<h2 class="doc-h">{esc(labels["drilldown"])}</h2>{drill}</section>'
-        f'<section class="section" id="module-map">'
-        f'<h2 class="doc-h">{esc(labels["map"])}</h2>{map_html}</section>'
-    )
-    toc = [
-        ("module-drilldown", labels["drilldown"]),
-        ("module-map", labels["map"]),
-    ]
-    return NarrativeBlock(html, [], toc)
-
-
-def drilldown_page_id(module: DrilldownModule, kind: str) -> str:
-    """Deterministic page id for a rendered drill-down document."""
-    return f"module-{slugify(module.module_id)}-{kind}"

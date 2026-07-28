@@ -94,7 +94,7 @@ def export(
             raise ValueError("export needs either out_dir or skill_root")
         run_path = Path(run_dir).expanduser().resolve()
         project_key = (run_path.parent.parent.name
-                       if run_path.parent.name in {"overview", "drilldown"}
+                       if run_path.parent.name == "overview"
                        else inputs.identity_map.project.artifact_key)
         out_dir = export_output_dir(skill_root, project_key, inputs.run_id, fmt)
     return exporter.export(inputs, Path(out_dir))

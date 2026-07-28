@@ -11,8 +11,7 @@ means a NEW run (immutability), and the refusal names exactly which repos
 moved and which are dirty.
 
 Pointers per project (`state/<project-id>/pointers.json`):
-- ``latest_completed`` — set automatically when the overview stage finishes;
-  inspection-only, never an implicit drill-down source.
+- ``latest_completed`` — set automatically when the overview stage finishes.
 - ``current`` — set ONLY by explicit user acceptance; refused for
   inspection-only (dirty/non-git) runs.
 """
@@ -30,7 +29,6 @@ from . import gitinfo
 from .targetspec import TargetSpec
 
 STAGES = ["discovery", "signals", "findings", "map", "overview"]
-DRILLDOWN_STAGES = ["resolve", "prd", "health"]
 
 # A run label becomes part of a directory name. Keep it portable across macOS,
 # Linux and common archive/file-server boundaries, and leave room for the input
@@ -111,31 +109,6 @@ class RunState:
         )
 
     @classmethod
-    def create_drilldown(cls, run_id: str, source: "RunState", module: str, *,
-                         language: str | None = None,
-                         when: datetime | None = None) -> "RunState":
-        """A drill-down run inherits the SOURCE overview run's provenance and
-        inspection-only status; its stages are resolve -> prd -> health."""
-        when = when or datetime.now(timezone.utc)
-        return cls(
-            run_id=run_id, project_id=source.project_id,
-            language=language or source.language,
-            analyzed_at=when.isoformat(timespec="seconds"),
-            inspection_only=source.inspection_only,
-            stages={s: "pending" for s in DRILLDOWN_STAGES},
-            stage_order=list(DRILLDOWN_STAGES),
-            provenance=list(source.provenance),
-            analysis_identity={
-                **{
-                    key: value for key, value in source.analysis_identity.items()
-                    if key in {"wrapper", "analyzer", "model", "effort"}
-                },
-                "module": module,
-                "source_overview_run": source.run_id,
-            },
-        )
-
-    @classmethod
     def load(cls, run_dir: str | Path) -> "RunState":
         data = json.loads((Path(run_dir) / cls.FILENAME).read_text("utf-8"))
         state = cls(run_id=data["run_id"], project_id=data["project_id"])
@@ -161,14 +134,11 @@ class RunState:
         self.stages[stage] = "done"
 
     def ordered_stages(self) -> list[str]:
-        """The run's own stage sequence (overview and drill-down runs differ).
-        Older run-state files lack the persisted order — recover it from the
-        known stage sets."""
+        """The overview run's persisted stage sequence."""
         if self.stage_order:
             return list(self.stage_order)
-        for known in (STAGES, DRILLDOWN_STAGES):
-            if set(self.stages) == set(known):
-                return list(known)
+        if set(self.stages) == set(STAGES):
+            return list(STAGES)
         return list(self.stages)
 
     def next_stage(self) -> str:

@@ -1,0 +1,102 @@
+{
+  "schema_version": "module-drill-fixture/v1",
+  "source_manifest": {
+    "schema_version": "source-manifest/v1",
+    "source_mode": "standalone",
+    "snapshot_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "repositories": [
+      {"repository_ref": "web-app", "revision": "1111111", "dirty_state": "clean"},
+      {"repository_ref": "api-service", "revision": "2222222", "dirty_state": "clean"},
+      {"repository_ref": "worker-service", "revision": "3333333", "dirty_state": "clean"}
+    ],
+    "preparation_options": {"include_network": false},
+    "tools": [
+      {"tool_id": "ast-grep", "version": "1.0"},
+      {"tool_id": "route-inventory", "version": "1.0"}
+    ],
+    "artifacts": [
+      {"artifact_id": "feature-seeds", "relative_path": "evidence/feature-seeds.json", "schema_version": "feature-seeds/v1", "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "kind": "canonical", "integrity": "verified"},
+      {"artifact_id": "route-fragment", "relative_path": "evidence/routes/api.json", "schema_version": "route-fragment/v1", "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "kind": "fragment", "integrity": "verified"},
+      {"artifact_id": "compact-index", "relative_path": "views/summary.json", "schema_version": "view/v1", "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "kind": "index", "integrity": "verified"}
+    ],
+    "providers": [
+      {"provider_id": "ui-actions", "capability_id": "ui-action", "coverage": {"applicability": "applicable", "status": "complete", "positive_evidence_refs": [], "limitations": []}, "artifact_ids": ["feature-seeds"], "truncation": [], "unsupported": []},
+      {"provider_id": "routes", "capability_id": "route-linkage", "coverage": {"applicability": "applicable", "status": "complete", "positive_evidence_refs": [], "limitations": []}, "artifact_ids": ["route-fragment"], "truncation": [], "unsupported": []}
+    ]
+  },
+  "module_scope": {
+    "schema_version": "module-scope/v2",
+    "feature_id": "sample-capability",
+    "selector": "create a record",
+    "source_manifest_digest": "4df65d3f98d2be852131361120eb970f30b85498a9b1985dc0418b1571d2f4c0",
+    "selected_candidate_id": "candidate-create-record",
+    "candidates": [
+      {
+        "candidate_id": "candidate-create-record",
+        "seed_ids": ["seed-ui-create"],
+        "repository_refs": ["web-app", "api-service"],
+        "disposition": "selected",
+        "reason": "deterministic UI and interface evidence connect the candidate"
+      },
+      {
+        "candidate_id": "candidate-list-records",
+        "seed_ids": ["seed-ui-create"],
+        "repository_refs": ["web-app"],
+        "disposition": "alternative",
+        "reason": "shares the UI area but lacks the selected interface evidence"
+      }
+    ],
+    "seeds": [
+      {"seed_id": "seed-ui-create", "kind": "ui-action", "repository_ref": "web-app", "evidence_refs": ["web-app@1111111:src/create.tsx:10"], "coverage": {"applicability": "applicable", "status": "complete", "positive_evidence_refs": [], "limitations": []}}
+    ],
+    "frontiers": [
+      {"frontier_id": "frontier-api", "anchor_id": "node-ui-create", "edge_kind": "invokes", "direction": "outbound", "reason": "trace UI action to its interface"},
+      {"frontier_id": "frontier-worker", "anchor_id": "node-event", "edge_kind": "emits", "direction": "outbound", "reason": "trace asynchronous side effect"}
+    ],
+    "closure_status": "closed"
+  },
+  "module_model": {
+    "schema_version": "module-model/v2",
+    "feature_id": "sample-capability",
+    "nodes": [
+      {"node_id": "node-ui-create", "kind": "ui-action", "repository_ref": "web-app", "observation": "observed", "evidence_refs": ["web-app@1111111:src/create.tsx:10"]},
+      {"node_id": "node-client", "kind": "api-client", "repository_ref": "web-app", "observation": "observed", "evidence_refs": ["web-app@1111111:src/client.ts:20"]},
+      {"node_id": "node-route", "kind": "route", "repository_ref": "api-service", "observation": "observed", "evidence_refs": ["api-service@2222222:routes/create.ts:8"]},
+      {"node_id": "node-rule", "kind": "rule", "repository_ref": "api-service", "observation": "observed", "evidence_refs": ["api-service@2222222:service/create.ts:30"]},
+      {"node_id": "node-store", "kind": "datastore", "repository_ref": "api-service", "observation": "observed", "evidence_refs": ["api-service@2222222:service/create.ts:44"]},
+      {"node_id": "node-event", "kind": "event", "repository_ref": "api-service", "observation": "observed", "evidence_refs": ["api-service@2222222:service/create.ts:50"]},
+      {"node_id": "node-worker", "kind": "job", "repository_ref": "worker-service", "observation": "observed", "evidence_refs": ["worker-service@3333333:consumer.ts:11"]},
+      {"node_id": "node-external", "kind": "external-boundary", "repository_ref": "worker-service", "observation": "observed", "evidence_refs": ["worker-service@3333333:delivery.ts:18"]}
+    ],
+    "edges": [
+      {"edge_id": "edge-ui-client", "kind": "invokes", "source_node_id": "node-ui-create", "target_node_id": "node-client", "observation": "observed", "evidence_refs": ["web-app@1111111:src/create.tsx:12"]},
+      {"edge_id": "edge-client-route", "kind": "routes-to", "source_node_id": "node-client", "target_node_id": "node-route", "observation": "observed", "evidence_refs": ["web-app@1111111:src/client.ts:22"]},
+      {"edge_id": "edge-route-rule", "kind": "calls", "source_node_id": "node-route", "target_node_id": "node-rule", "observation": "observed", "evidence_refs": ["api-service@2222222:routes/create.ts:11"]},
+      {"edge_id": "edge-rule-store", "kind": "writes", "source_node_id": "node-rule", "target_node_id": "node-store", "observation": "observed", "evidence_refs": ["api-service@2222222:service/create.ts:44"]},
+      {"edge_id": "edge-rule-event", "kind": "emits", "source_node_id": "node-rule", "target_node_id": "node-event", "observation": "observed", "evidence_refs": ["api-service@2222222:service/create.ts:50"]},
+      {"edge_id": "edge-event-worker", "kind": "consumed-by", "source_node_id": "node-event", "target_node_id": "node-worker", "observation": "observed", "evidence_refs": ["worker-service@3333333:consumer.ts:11"]},
+      {"edge_id": "edge-worker-external", "kind": "integrates-with", "source_node_id": "node-worker", "target_node_id": "node-external", "observation": "observed", "evidence_refs": ["worker-service@3333333:delivery.ts:18"]}
+    ],
+    "claims": [
+      {"claim_id": "claim-create-rule", "kind": "rule", "anchor_ids": ["node-rule", "edge-rule-store"], "evidence_refs": ["api-service@2222222:service/create.ts:30"], "support_roles": ["condition", "effect", "persistence"]}
+    ],
+    "flows": [
+      {"flow_id": "flow-create", "edge_ids": ["edge-ui-client", "edge-client-route", "edge-route-rule", "edge-rule-store", "edge-rule-event", "edge-event-worker", "edge-worker-external"], "claim_ids": ["claim-create-rule"]}
+    ],
+    "dispositions": [
+      {"frontier_id": "frontier-api", "state": "expanded", "reason": "exact client-route linkage observed", "resulting_ids": ["node-route"]},
+      {"frontier_id": "frontier-worker", "state": "expanded", "reason": "exact event consumer observed", "resulting_ids": ["node-worker"]}
+    ],
+    "dimension_coverage": {
+      "ui-action": {"coverage": {"applicability": "applicable", "status": "complete", "positive_evidence_refs": [], "limitations": []}, "closure_status": "closed", "unresolved_reasons": []},
+      "interface-route": {"coverage": {"applicability": "applicable", "status": "complete", "positive_evidence_refs": [], "limitations": []}, "closure_status": "closed", "unresolved_reasons": []},
+      "async-event": {"coverage": {"applicability": "applicable", "status": "complete", "positive_evidence_refs": [], "limitations": []}, "closure_status": "closed", "unresolved_reasons": []}
+    },
+    "closure_status": "closed"
+  },
+  "expected_path_edge_ids": ["edge-ui-client", "edge-client-route", "edge-route-rule", "edge-rule-store", "edge-rule-event", "edge-event-worker", "edge-worker-external"],
+  "mutations": [
+    {"mutation_id": "remove-client-route", "remove_edge_id": "edge-client-route", "expected_closure_status": "open", "expected_execution_status": "partial"},
+    {"mutation_id": "remove-event-worker", "remove_edge_id": "edge-event-worker", "expected_closure_status": "blocked", "expected_execution_status": "partial"}
+  ]
+}

@@ -174,8 +174,7 @@ def _system_model() -> dict:
     }
 
 
-def make_run(tmp_path: Path, *, full: bool = True, drilldown: bool = False,
-             language: str = "en") -> Path:
+def make_run(tmp_path: Path, *, full: bool = True, language: str = "en") -> Path:
     run = tmp_path / "run"
     run.mkdir(parents=True, exist_ok=True)
     workspace = tmp_path / "DEMO-1"
@@ -225,13 +224,6 @@ def make_run(tmp_path: Path, *, full: bool = True, drilldown: bool = False,
         (run / "imports" / "depmap-coverage.json").write_text(json.dumps(
             {"schema_version": "3.0.0", "repos": [{"repository_ref": "svc-a", "status": "complete", "tool": "go list",
                         "units": 3}]}), encoding="utf-8")
-    if drilldown:
-        mod = run / "drilldown" / "module-one"
-        mod.mkdir(parents=True, exist_ok=True)
-        (mod / "prd.md").write_text("# Module One PRD\n\n## Purpose\n\nPRDBODYMARKER.\n",
-                                    encoding="utf-8")
-        (mod / "health.md").write_text("# Module One Health\n\n## Risks\n\nHEALTHBODYMARKER.\n",
-                                       encoding="utf-8")
     return run
 
 
@@ -266,6 +258,13 @@ def test_report_css_preserves_visible_heading_hierarchy(tmp_path):
     assert ".section > h2.doc-h" in css and "font-size: 22px" in css
     assert ".section h3.doc-h" in css and "font-size: 17px" in css
     assert ".section h4.doc-h" in css and "font-size: 15px" in css
+
+
+def test_modules_page_is_only_a_project_map_entrance(tmp_path):
+    result = generate(make_run(tmp_path))
+    modules = (result.report_dir / "modules.html").read_text(encoding="utf-8")
+    assert "doc-project-map.html" in modules
+    assert "drill-down" not in modules.lower()
 
 
 def test_content_map_covers_every_source_section(tmp_path):
@@ -380,34 +379,6 @@ def test_canonical_markdown_links_target_exported_document_pages(tmp_path):
     assert expected in index
     assert expected in full_doc
     assert 'href="technical-overview.md' not in index
-
-
-def test_modules_entrance_stub_without_drilldown(tmp_path):
-    run = make_run(tmp_path)
-    result = generate(run)
-    assert result.drilldown_available is False
-    modules = (result.report_dir / "modules.html").read_text(encoding="utf-8")
-    assert "note-stub" in modules
-    assert "not yet available" in modules.lower()
-
-
-def test_modules_entrance_lights_up_with_drilldown(tmp_path):
-    run = make_run(tmp_path, drilldown=True)
-    result = generate(run)
-    assert result.drilldown_available is True
-    modules = (result.report_dir / "modules.html").read_text(encoding="utf-8")
-    assert "note-live" in modules
-    assert "module-one" in modules
-    # per-module PRD/health render as lossless full documents.
-    prd = result.report_dir / "doc-module-module-one-prd.html"
-    health = result.report_dir / "doc-module-module-one-health.html"
-    assert prd.is_file() and health.is_file()
-    assert "PRDBODYMARKER" in prd.read_text(encoding="utf-8")
-    assert "HEALTHBODYMARKER" in health.read_text(encoding="utf-8")
-    # and are folded into the content map (lossless parity).
-    cmap = json.loads((result.report_dir / "content-map.json").read_text(encoding="utf-8"))
-    assert content_map.verify_completeness(cmap) == []
-    assert any(d["doc_id"] == "module-module-one-prd" for d in cmap["documents"])
 
 
 def test_mermaid_verbatim_and_structured_topology_in_manifest(tmp_path):
