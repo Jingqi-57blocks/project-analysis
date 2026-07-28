@@ -268,6 +268,24 @@ def test_boundary_resolution_packet_requires_contextual_exact_evidence_accountin
         schemas.validate_output("boundary-resolution", output, packet_inputs=packet_inputs))
 
 
+def test_rekey_resolution_requires_finite_exact_terminal_dispositions():
+    packet_inputs = {"rekey-tail.json": json.dumps([{
+        "finding_id": "finding-tail", "evidence": [{
+            "refs": ["signals/imports.view.txt:1"], "fact": "tail evidence",
+        }],
+    }])}
+    output = {"dispositions": [{
+        "finding_id": "finding-tail", "disposition": "evidence-backed-no-finding",
+        "module_ids": [], "reason_code": "unsupported",
+        "evidence_refs": ["signals/imports.view.txt:1"],
+    }]}
+    assert schemas.validate_output("rekey-resolution", output, packet_inputs=packet_inputs) == []
+    output["dispositions"][0]["disposition"] = "partial"
+    failures = _checks(schemas.validate_output(
+        "rekey-resolution", output, packet_inputs=packet_inputs))
+    assert "rekey-coverage-impact" in failures
+
+
 def test_partitioned_formation_rejects_a_blanket_remaining_unresolved_rule():
     packet_inputs = {
         "module-candidates.json": json.dumps([{"candidate_id": "mc-a"}]),

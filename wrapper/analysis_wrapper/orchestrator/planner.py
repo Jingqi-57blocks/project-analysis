@@ -897,6 +897,45 @@ def plan_boundary_resolution(run_dir: str | Path, *,
         created=any(packet.task_id in created_ids for packet in built))
 
 
+_REKEY_RESOLUTION_INSTRUCTIONS = """\
+Disposition every finding in rekey-tail.json exactly once. Return only JSON
+matching rekey-resolution.v1 with {"dispositions": [...]}.
+
+Each disposition is one of consumed, evidence-backed-no-finding, partial, or
+failed. consumed must assign an existing finalized module_id. Every outcome
+needs a concise reason_code and exact evidence_refs carried from the tail
+finding. partial and failed additionally need a non-empty coverage_impact.
+Do not rewrite a finding's id, claim, or evidence; resolve only this packet.\n"""
+
+
+def plan_rekey_resolution(run_dir: str | Path, tail: list[dict], *,
+                          context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS) \
+        -> PlannedTask | None:
+    """Plan the finite terminal disposition pass for an unresolved rekey tail."""
+    run = Path(run_dir).expanduser().resolve()
+    if not tail or validated_outputs(run, task_type="rekey-resolution"):
+        return None
+    module_doc = _load_json(run / "module-map.json")
+    inputs = {
+        "rekey-tail.json": json.dumps(tail, sort_keys=True),
+        "finalized-modules.json": json.dumps({
+            "modules": module_doc.get("modules", []),
+        }, sort_keys=True),
+    }
+    built = compose(
+        task_id="rekey-resolution", template_id="rekey-resolution",
+        template_version=tpl.content_digest(_REKEY_RESOLUTION_INSTRUCTIONS),
+        task_type="rekey-resolution", instructions=_REKEY_RESOLUTION_INSTRUCTIONS,
+        inputs=inputs, output_schema_id="rekey-resolution.v1",
+        context_budget_tokens=context_budget_tokens, depends_on=("dedup-rank",))
+    created_ids = set(Engine(run).create_tasks(built))
+    return PlannedTask(
+        task_id="rekey-resolution", task_type="rekey-resolution", lens_id="",
+        shard="", repository_ref="", packet_ids=tuple(packet.task_id for packet in built),
+        estimated_tokens=sum(_packet_tokens(packet) for packet in built),
+        created=any(packet.task_id in created_ids for packet in built))
+
+
 # --------------------------------------------------------------------------- #
 # plan_dedup
 # --------------------------------------------------------------------------- #

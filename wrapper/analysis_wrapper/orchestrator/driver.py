@@ -235,18 +235,35 @@ def _phase_findings(state: RunState) -> bool:
     assembled.write_text(json.dumps(document, ensure_ascii=False, indent=1), "utf-8")
     rekeyed = rekey.rekey(state.run, document)
     tail = rekeyed.get("tail", [])
+    final_findings = rekeyed.get("rekeyed", [])
     if tail:
-        # The tail is a genuine judgment remainder (a finding whose candidate
-        # was dispositioned excluded/unresolved). It is DISCLOSED, never
-        # dropped and never mechanically guessed onto a neighbouring module.
-        outcome.detail = (f"{len(tail)} finding(s) need the nearest-enclosing-module "
-                          "judgment pass before finalize")
+        # A tail is a mandatory finite-disposition repair, not a disclosure
+        # that lets reports proceed without the finding.
+        outcome.detail = f"{len(tail)} finding(s) require a finite rekey disposition"
         state.log(f"  {outcome.detail}")
         (state.run / "tasks" / "rekey-tail.json").write_text(
             json.dumps(tail, ensure_ascii=False, indent=1), "utf-8")
+        planned = planner.plan_rekey_resolution(
+            state.run, tail, context_budget_tokens=state.context_budget_tokens)
+        if planned is not None and not _drain(state, outcome):
+            outcome.finished_at = time.monotonic()
+            return False
+        resolved = rekey.apply_resolution(state.run, rekeyed=rekeyed.get("rekeyed", []), tail=tail)
+        if resolved is None:
+            raise DriverError("rekey-resolution did not produce a validated terminal disposition")
+        (state.run / "finding-terminal-dispositions.json").write_text(
+            json.dumps({"schema_version": document["schema_version"],
+                        "dispositions": resolved["terminal_dispositions"]},
+                       ensure_ascii=False, indent=1), "utf-8")
+        if resolved["blocking"]:
+            outcome.detail = (f"{len(resolved['blocking'])} mandatory rekey disposition(s) "
+                              "are partial/failed; authoritative completion blocked")
+            outcome.finished_at = time.monotonic()
+            return False
+        final_findings = resolved["findings"]
     (state.run / "findings.json").write_text(json.dumps(
         {"schema_version": document["schema_version"],
-         "findings": rekeyed.get("rekeyed", [])}, ensure_ascii=False, indent=1), "utf-8")
+         "findings": final_findings}, ensure_ascii=False, indent=1), "utf-8")
     findings_module.write(state.run)
     outcome.finished_at = time.monotonic()
     return True
@@ -284,14 +301,17 @@ def _phase_reports(state: RunState) -> bool:
 
 def _phase_audit(state: RunState) -> bool:
     from .. import overview_audit
+    from . import consumption
     outcome = state.phase("audit")
-    path = overview_audit.write(state.run, require_module_map=True, require_reports=True)
+    consumption.write(state.run)
+    path = overview_audit.write(state.run, require_module_map=True, require_reports=True,
+                                require_final=True)
     audit = json.loads(Path(path).read_text("utf-8"))
     failed = [check for check in audit.get("checks", []) if check.get("status") == "fail"]
     outcome.detail = (f"{len(failed)} failing check(s)" if failed else "all checks passed")
     state.log(f"  {outcome.detail}")
     outcome.finished_at = time.monotonic()
-    return True
+    return not failed
 
 
 PHASES: tuple[tuple[str, Callable[[RunState], bool]], ...] = (

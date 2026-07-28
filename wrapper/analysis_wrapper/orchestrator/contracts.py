@@ -29,7 +29,7 @@ ORCHESTRATOR_CONTRACT_VERSION = "1.0.0"
 # One task packet per unit of LLM/tool work the orchestrator hands out. Every
 # task type maps to exactly one output schema in ``schemas.py``.
 TASK_TYPES = frozenset({
-    "lens-findings", "formation-proposal", "boundary-resolution", "dedup-rank",
+    "lens-findings", "formation-proposal", "boundary-resolution", "rekey-resolution", "dedup-rank",
     "section-generate", "repair-edit-ops", "coherence-check", "selection-fetch",
 })
 

@@ -119,6 +119,21 @@ FIXTURES: tuple[Fixture, ...] = (
         },
     ),
     _fixture(
+        "rekey-resolution",
+        "Disposition the supplied rekey tail with one finite terminal outcome.",
+        {"tail": "finding-conformance-tail has one static evidence item."},
+        "rekey-resolution.v1",
+        {
+            "dispositions": [{
+                "finding_id": "finding-conformance-tail",
+                "disposition": "evidence-backed-no-finding",
+                "module_ids": [],
+                "reason_code": "unsupported",
+                "evidence_refs": ["signals/imports.view.txt:1"],
+            }],
+        },
+    ),
+    _fixture(
         "dedup-rank",
         "Deduplicate and rank the given findings as a JSON object matching the "
         "dedup-rank output schema. input_finding_ids = "

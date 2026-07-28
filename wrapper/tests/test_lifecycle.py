@@ -184,17 +184,11 @@ def test_cli_full_lifecycle_flow(tmp_path, target, synthetic_repo, capsys):
     assert "next stage: signals" in out
 
     assert main(["status", "--run", run_dir]) == 0  # fresh
-    for stage in ("signals", "findings", "map", "overview"):
+    for stage in ("signals", "findings", "map"):
         assert main(["mark-stage", "--run", run_dir, "--stage", stage]) == 0
-    out = capsys.readouterr().out
-    assert "latest_completed" in out
-
-    assert main(["accept", "--run", run_dir]) == 0
-    from pathlib import Path
-    import json
-    state_dirs = list((skill_root / "state").iterdir())
-    pointers = json.loads((state_dirs[0] / "pointers.json").read_text())
-    assert pointers["current"] and pointers["current"] == pointers["latest_completed"]
+    assert main(["mark-stage", "--run", run_dir, "--stage", "overview"]) == 2
+    assert "current successful final audit" in capsys.readouterr().err
+    assert RunState.load(run_dir).next_stage() == "overview"
 
     # Move the repo -> status flags staleness with exit 5.
     (synthetic_repo / "later.js").write_text("2;\n")
