@@ -16,6 +16,7 @@ from ..orchestrator.contracts import TaskPacket
 from .candidate_universe import load as load_universe
 from .context import SourceContext
 from .driver import ModuleDriver
+from .exact_selector import write as write_exact_resolution
 from .validation import ContractError, sha256_json
 
 TASK_ID = "module-candidate-ranking"
@@ -101,6 +102,13 @@ def build_packet(context: SourceContext) -> TaskPacket:
 
 
 def register(module_run: str | Path) -> list[str]:
-    """Register the immutable ranking task through the shared module driver."""
+    """Register ranking only when exact evidence cannot resolve the selector.
+
+    ``write_exact_resolution`` records the deterministic alternative before
+    this function returns, so callers can continue directly to finalization
+    without minting a pretend model task.
+    """
     driver = ModuleDriver(module_run)
+    if write_exact_resolution(driver.context) is not None:
+        return []
     return driver.register((build_packet(driver.context),))

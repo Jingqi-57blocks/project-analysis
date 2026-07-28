@@ -126,12 +126,13 @@ def _candidates(args) -> int:
 
 def _rank_candidates(args) -> int:
     created = register_ranking(args.run)
-    _print({"created": created, "next": "claim module-candidate-ranking"})
+    _print({"created": created,
+            "next": "claim module-candidate-ranking" if created else "module-finalize-ranking"})
     return 0
 
 
 def _finalize_ranking(args) -> int:
-    result = finalize_selection(args.run)
+    result = finalize_selection(args.run, selected_candidate_id=args.candidate or None)
     _print({"decision": result.decision, "resolution": str(result.resolution_path),
             "scope": str(result.scope_path) if result.scope_path else ""})
     return 0 if result.scope_path is not None else 3

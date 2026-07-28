@@ -331,6 +331,9 @@ def parser() -> argparse.ArgumentParser:
     module_finalize_ranking = sub.add_parser(
         "module-finalize-ranking", help="persist a validated Module Drill ranking decision")
     module_finalize_ranking.add_argument("--run", required=True)
+    module_finalize_ranking.add_argument(
+        "--candidate", default="",
+        help="explicitly select one reviewed stable candidate ID")
     module_graph = sub.add_parser(
         "module-build-graph", help="build the observed Module Drill feature graph")
     module_graph.add_argument("--run", required=True)
