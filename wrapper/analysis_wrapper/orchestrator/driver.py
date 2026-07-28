@@ -30,6 +30,7 @@ actually is — no separate progress file to drift.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -154,9 +155,15 @@ def _phase_judgment(state: RunState) -> bool:
             selection.fetch(state.run, select_task_id)
         except Exception as exc:  # noqa: BLE001 - disclosed, never silent
             state.log(f"  fetch-selections {select_task_id}: {exc}")
+    select_groups: dict[str, list[str]] = {}
+    for select_task_id in created_select_ids:
+        logical_select_id = re.sub(r"-shard-[0-9]+$", "", select_task_id)
+        if logical_select_id.endswith("-select"):
+            select_groups.setdefault(logical_select_id, []).append(select_task_id)
     lens_task_ids = {
-        select_task_id.split("-select")[0] for select_task_id in created_select_ids
-        if "-select" in select_task_id and states.get(select_task_id) in {"validated", "failed"}
+        logical_select_id[:-len("-select")]
+        for logical_select_id, packet_ids in select_groups.items()
+        if all(states.get(packet_id) in {"validated", "failed"} for packet_id in packet_ids)
     }
     for lens_task_id in sorted(lens_task_ids):
         try:

@@ -60,14 +60,19 @@ def selection_role_requirements(lens_id: str, inputs: Mapping[str, str], *,
         return []
 
     available = set(inputs)
-    roles: list[dict[str, Any]] = [{
+    critical_inputs = sorted(
+        input_id for input_id in available
+        if input_id.startswith("signals/") or input_id == "module-candidates.json")
+    # A semantic cross-boundary metadata packet can have no source-locatable
+    # evidence at all. Do not manufacture an impossible role with an empty
+    # evidence list: the final lens still receives/records that metadata, but
+    # there is no source selection to request from it.
+    roles: list[dict[str, Any]] = ([{
         "role_id": "lens-critical-source",
         "description": "Verify the material lens claim against a concrete source location.",
-        "evidence_input_ids": sorted(
-            input_id for input_id in available
-            if input_id.startswith("signals/") or input_id == "module-candidates.json"),
+        "evidence_input_ids": critical_inputs,
         "inventory_paths": [],
-    }]
+    }] if critical_inputs else [])
     if lens_id == "safety-net" and "test-ci-evidence.json" in available:
         roles.extend([
             {

@@ -8,7 +8,11 @@ Four verbs, four CLI subcommands (``plan-judgment``, ``plan-dedup``,
   (``targets.json`` + ``signals/run-summary.json`` + ``synthesis-input.json``
   + ``module-candidates.json`` already written by ``prepare-overview``): one
   ``lens-findings`` task per (repo-sharded lens x repo) + one per
-  workspace-sharded lens, PLUS one independent ``formation-proposal`` task
+  workspace-sharded lens, unless a normal-budget packet is oversized. In that
+  case ``semantic_partitions.py`` creates deterministic repository and
+  cross-boundary work items *before* the generic largest-input composer
+  fallback, recorded at ``tasks/lens-semantic-partitions.json``. PLUS one
+  independent ``formation-proposal`` task
   (task_id ``"formation"``; no ``depends_on`` -- it runs in parallel with
   every lens task). Its packet consumes the full candidate universe plus an
   OPTIONAL deterministic ``cohesion-bundle.json`` when a sibling workstream
@@ -72,8 +76,9 @@ Four verbs, four CLI subcommands (``plan-judgment``, ``plan-dedup``,
   lens's findings from the merge pool.
 
 - ``plan_lens_finalize`` is the second phase of the select/finalize pair
-  above: given the ORIGINAL lens task_id plan_judgment would have used (not
-  the select task_id), it looks up that lens's own shard/repo via
+  above: given the lens work-item task_id plan_judgment used (not the select
+  task_id; an active semantic partition has its own deterministic work-item
+  id), it looks up that lens's own shard/repo via
   ``_lens_task_specs`` (never by parsing the task_id string -- a
   repository_ref's task_id fragment is an unreversible hash suffix, see
   ``_repo_fragment``), requires its select task to have validated and
@@ -103,7 +108,7 @@ from typing import Any, Callable, Mapping
 from .. import identity
 from ..exclusions import is_excluded_relative
 from ..targetspec import RepoTarget, TargetSpec
-from . import formation, requirements, templates as tpl
+from . import formation, requirements, semantic_partitions, templates as tpl
 from .composer import compose, estimate_tokens
 from .contracts import TaskPacket
 from .engine import Engine
@@ -191,6 +196,17 @@ class _LensTaskSpec:
     template: tpl.LensTemplate
     repository_ref: str | None
     task_id: str
+
+
+@dataclass(frozen=True)
+class _PartitionedLensSpec:
+    """A logical lens spec narrowed to one semantic evidence partition."""
+
+    spec: _LensTaskSpec
+    task_id: str
+    inputs: Mapping[str, str]
+    plan: semantic_partitions.Plan
+    partition: semantic_partitions.Partition
 
 
 def _lens_task_specs(lens_templates: Mapping[str, tpl.LensTemplate],
@@ -628,6 +644,78 @@ def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[s
     return inputs
 
 
+def _with_lens_requirements(inputs: Mapping[str, str], template: tpl.LensTemplate, *,
+                            task_id: str, repository_ref: str | None,
+                            context_budget_tokens: int) -> dict[str, str]:
+    """Rebuild a lens completeness contract after its evidence is narrowed.
+
+    Semantic packets deliberately have different local evidence inventories;
+    carrying the parent packet's requirements.json into a child would make a
+    negative result look complete while silently naming evidence it never saw.
+    """
+    result = {name: content for name, content in inputs.items()
+              if name not in {"requirements.json", "selection-requirements.json", "sharding"}}
+    result["requirements.json"] = json.dumps(requirements.lens_requirements(
+        template.lens_id, result, source_reads=template.source_reads,
+        task_id=task_id, shard=template.shard, repository_ref=repository_ref,
+        context_budget_tokens=context_budget_tokens,
+        max_selections=template.max_selections), sort_keys=True)
+    return result
+
+
+def _signal_owners(run_summary: Mapping[str, Any]) -> dict[str, str]:
+    """Map a citable view input to its typed repository attribution."""
+    result: dict[str, str] = {}
+    for row in run_summary.get("signals", []):
+        if not isinstance(row, dict):
+            continue
+        view = row.get("view")
+        repository_ref = row.get("repository_ref")
+        if isinstance(view, str) and view and isinstance(repository_ref, str) and repository_ref:
+            result[f"signals/{view}"] = repository_ref
+    return result
+
+
+def _partitioned_lens_specs(
+        run: Path, *, lens_templates: Mapping[str, tpl.LensTemplate],
+        identities: identity.IdentityMap, synthesis_doc: Mapping[str, Any],
+        module_candidates_doc: Mapping[str, Any], run_summary: Mapping[str, Any],
+        test_ci_rows: Mapping[str, dict], context_budget_tokens: int,
+        shared_body: str) -> tuple[list[_PartitionedLensSpec], list[semantic_partitions.Plan]]:
+    """Prepare final-evidence local packets before generic composer sharding.
+
+    A small task remains one backward-compatible packet.  For an oversized
+    task, every returned row is an actual evidence-local work item; generic
+    composer sharding can still act as a safety net inside that local scope.
+    """
+    repository_refs = [repo.reference for repo in identities.repositories]
+    owners = _signal_owners(run_summary)
+    resolved: list[_PartitionedLensSpec] = []
+    plans: list[semantic_partitions.Plan] = []
+    for spec in _lens_task_specs(lens_templates, identities):
+        base_inputs = _lens_inputs(
+            run, spec.template, synthesis_doc, module_candidates_doc, run_summary,
+            spec.repository_ref, test_ci_rows=test_ci_rows, task_id=spec.task_id,
+            context_budget_tokens=context_budget_tokens)
+        final_instructions = tpl.render_instructions(spec.template, shared_body)
+        plan = semantic_partitions.build_plan(
+            task_id=spec.task_id, inputs=base_inputs, repository_refs=repository_refs,
+            signal_owners=owners, instructions=final_instructions,
+            context_budget_tokens=context_budget_tokens)
+        plans.append(plan)
+        for partition in plan.partitions:
+            child_task_id = semantic_partitions.task_id_for_partition(
+                spec.task_id, partition, active=plan.active)
+            local_inputs = _with_lens_requirements(
+                partition.inputs, spec.template, task_id=child_task_id,
+                repository_ref=spec.repository_ref,
+                context_budget_tokens=context_budget_tokens)
+            resolved.append(_PartitionedLensSpec(
+                spec=spec, task_id=child_task_id, inputs=local_inputs,
+                plan=plan, partition=partition))
+    return resolved, plans
+
+
 # --------------------------------------------------------------------------- #
 # formation-proposal -- module-formation rules ported verbatim from
 # synthesis.md step 4's numbered item 1 (extracted fresh from the live file
@@ -747,20 +835,33 @@ def plan_judgment(run_dir: str | Path, *,
     packets: list[TaskPacket] = []
     planned: list[PlannedTask] = []
 
-    for spec in _lens_task_specs(lens_templates, identities):
+    partitioned_specs, semantic_plans = _partitioned_lens_specs(
+        run, lens_templates=lens_templates, identities=identities,
+        synthesis_doc=synthesis_doc, module_candidates_doc=module_candidates_doc,
+        run_summary=run_summary, test_ci_rows=test_ci_rows,
+        context_budget_tokens=context_budget_tokens, shared_body=shared_body)
+    try:
+        semantic_partitions.write_manifest(run, semantic_plans)
+    except ValueError as exc:
+        raise PlannerError(str(exc)) from exc
+
+    for partitioned in partitioned_specs:
+        spec = partitioned.spec
         template = spec.template
-        inputs = _lens_inputs(
-            run, template, synthesis_doc, module_candidates_doc, run_summary,
-            spec.repository_ref, test_ci_rows=test_ci_rows, task_id=spec.task_id,
-            context_budget_tokens=context_budget_tokens)
+        inputs = dict(partitioned.inputs)
 
         if template.source_reads:
             # ONLY the select task is composed here -- the real lens-findings
             # task (same task_id a non-source_reads lens would get directly)
             # is created later by plan_lens_finalize, once fetch-selections
             # has produced real evidence for it. See the module docstring.
-            select_task_id = _select_task_id(spec.task_id)
+            select_task_id = _select_task_id(partitioned.task_id)
             lens_contract = json.loads(inputs["requirements.json"])
+            if partitioned.plan.active:
+                # Selecting a source needs stable evidence locators, not a
+                # second copy of every final-evidence payload. Keep original
+                # typed input ids so selection-role schema checks stay exact.
+                inputs = semantic_partitions.compact_selection_inputs(inputs)
             inputs["selection-requirements.json"] = json.dumps(
                 requirements.selection_requirements(lens_contract), sort_keys=True)
             select_instructions = tpl.render_selection_instructions(template, shared_body)
@@ -784,14 +885,14 @@ def plan_judgment(run_dir: str | Path, *,
 
         instructions = tpl.render_instructions(template, shared_body)
         built = compose(
-            task_id=spec.task_id, template_id=f"lens-{spec.lens_id}",
+            task_id=partitioned.task_id, template_id=f"lens-{spec.lens_id}",
             template_version=template.version,
             task_type="lens-findings", instructions=instructions, inputs=inputs,
             output_schema_id=tpl.LENS_OUTPUT_SCHEMA_ID,
             context_budget_tokens=context_budget_tokens)
         packets.extend(built)
         planned.append(PlannedTask(
-            task_id=spec.task_id, task_type="lens-findings", lens_id=spec.lens_id,
+            task_id=partitioned.task_id, task_type="lens-findings", lens_id=spec.lens_id,
             shard=template.shard, repository_ref=spec.repository_ref or "",
             packet_ids=tuple(packet.task_id for packet in built),
             estimated_tokens=sum(_packet_tokens(packet) for packet in built),
@@ -974,20 +1075,28 @@ def _pending_lens_task_ids(run: Path) -> set[str]:
     created_select_ids = {record.task_id for record in records
                          if record.event == "created"
                          and record.detail["task"].get("task_type") == "selection-fetch"}
+    select_groups: dict[str, list[str]] = {}
     for select_task_id in created_select_ids:
-        if not select_task_id.endswith("-select"):
-            continue
-        lens_task_id = select_task_id[:-len("-select")]
-        if lens_task_id in lens_task_ids:
-            continue  # already finalized -- its own lens-findings state is checked above
-        if states.get(select_task_id) == "failed":
-            # A failed source-selection task is not an excuse to omit the
-            # paired lens. plan_lens_finalize can compose that lens without a
-            # failed dependency and carries a deterministic coverage gap; do
-            # not let dedup proceed until it exists.
-            pending.add(select_task_id)
-            continue
-        pending.add(select_task_id)
+        logical_select_id = re.sub(r"-shard-[0-9]+$", "", select_task_id)
+        if logical_select_id.endswith("-select"):
+            select_groups.setdefault(logical_select_id, []).append(select_task_id)
+    for logical_select_id, packet_ids in select_groups.items():
+        lens_task_id = logical_select_id[:-len("-select")]
+        finalized = (lens_task_id in lens_task_ids
+                     or any(task_id.startswith(f"{lens_task_id}-shard-")
+                            for task_id in lens_task_ids))
+        if finalized:
+            continue  # its lens-findings state is checked above
+        # A failed source-selection packet is not an excuse to omit its
+        # paired lens. The finalizer turns terminal failures into explicit
+        # source-coverage gaps, but must run only after *every* generic shard
+        # is terminal.
+        if all(states.get(packet_id) in {"validated", "failed"}
+               for packet_id in packet_ids):
+            pending.add(logical_select_id)
+        else:
+            pending.update(packet_id for packet_id in packet_ids
+                           if states.get(packet_id) not in {"validated", "failed"})
     return pending
 
 
@@ -1195,11 +1304,11 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
                        skill_root: str | Path | None = None) -> PlannedTask:
     """Composes the REAL lens-findings task for a source_reads lens --
     ``plan_judgment`` created only its paired select task (see the module
-    docstring). ``lens_task_id`` is the ORIGINAL lens task_id
-    ``plan_judgment`` would have used directly for a non-source_reads lens
-    (never the ``-select`` id) -- looked up via ``_lens_task_specs``, not
-    parsed, since a repository_ref's task_id fragment is an unreversible
-    hash suffix.
+    docstring). ``lens_task_id`` is the planned lens work-item id (never the
+    ``-select`` id). For an active semantic plan it is the deterministic
+    child id reported by ``plan-judgment``; it is looked up from the current
+    stable plan rather than parsed, since repository/task fragments are
+    irreversible hashes.
 
     A select task's own packet may itself have been composer-sharded (its
     inputs are the SAME size as the lens task's own, so it is just as
@@ -1230,10 +1339,21 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
     identities = identity.load(run)
     lens_templates = tpl.load_lens_templates(skill_root)
     shared_body = tpl.load_shared_body(skill_root)
-    specs_by_id = {spec.task_id: spec for spec in _lens_task_specs(lens_templates, identities)}
-    spec = specs_by_id.get(lens_task_id)
-    if spec is None:
+    run_summary = _load_json(run / "signals" / "run-summary.json")
+    synthesis_doc = _load_json(run / "synthesis-input.json")
+    module_candidates_doc = _load_json(run / "module-candidates.json")
+    target_spec = TargetSpec.load(run / "targets.json")
+    test_ci_rows = _test_ci_evidence_rows(target_spec, identities)
+    partitioned_specs, _ = _partitioned_lens_specs(
+        run, lens_templates=lens_templates, identities=identities,
+        synthesis_doc=synthesis_doc, module_candidates_doc=module_candidates_doc,
+        run_summary=run_summary, test_ci_rows=test_ci_rows,
+        context_budget_tokens=context_budget_tokens, shared_body=shared_body)
+    specs_by_id = {item.task_id: item for item in partitioned_specs}
+    partitioned = specs_by_id.get(lens_task_id)
+    if partitioned is None:
         raise PlannerError(f"unknown lens task_id: {lens_task_id!r}")
+    spec = partitioned.spec
     if not spec.template.source_reads:
         raise PlannerError(
             f"{lens_task_id!r} is not a source_reads lens task -- plan_judgment already "
@@ -1283,26 +1403,15 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
         run, shard_task_ids, states=states, select_outputs=select_outputs,
         fetched_by_task=fetched_by_task)
 
-    run_summary = _load_json(run / "signals" / "run-summary.json")
-    synthesis_doc = _load_json(run / "synthesis-input.json")
-    module_candidates_doc = _load_json(run / "module-candidates.json")
-    target_spec = TargetSpec.load(run / "targets.json")
-    test_ci_rows = _test_ci_evidence_rows(target_spec, identities)
-
-    inputs = _lens_inputs(
-        run, spec.template, synthesis_doc, module_candidates_doc, run_summary,
-        spec.repository_ref, test_ci_rows=test_ci_rows, task_id=lens_task_id,
-        context_budget_tokens=context_budget_tokens)
+    inputs = dict(partitioned.inputs)
     inputs["fetched-evidence.json"] = json.dumps(fetched_evidence, sort_keys=True)
     inputs["selection-role-results.json"] = json.dumps({"roles": role_results}, sort_keys=True)
     # The final lens packet has one extra evidence family.  Rebuild the
     # contract only after adding it so its input ids remain exact.
-    inputs["requirements.json"] = json.dumps(requirements.lens_requirements(
-        spec.template.lens_id, inputs, source_reads=spec.template.source_reads,
-        task_id=lens_task_id, shard=spec.template.shard,
+    inputs = _with_lens_requirements(
+        inputs, spec.template, task_id=lens_task_id,
         repository_ref=spec.repository_ref,
-        context_budget_tokens=context_budget_tokens,
-        max_selections=spec.template.max_selections), sort_keys=True)
+        context_budget_tokens=context_budget_tokens)
     instructions = tpl.render_instructions(spec.template, shared_body, source_verified=True)
 
     built = compose(
