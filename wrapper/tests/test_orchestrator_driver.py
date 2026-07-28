@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # wrapper/ on path
 
+from analysis_wrapper import acceptance
 from analysis_wrapper.orchestrator import driver
 from analysis_wrapper.orchestrator.contracts import TaskPacket
 from analysis_wrapper.orchestrator.engine import Engine
@@ -65,3 +66,28 @@ def test_cli_defaults_to_host_and_keeps_external_as_a_compatibility_alias():
     alias = parser().parse_args(
         ["run-pipeline", "--run", "/tmp/example", "--executor", "external"])
     assert alias.executor == "external"
+
+
+def test_judgment_freezes_only_the_initial_packet_wave(tmp_path, monkeypatch):
+    """A resumed source-read run must not re-freeze derived lens packets."""
+    (tmp_path / "run-provenance.json").write_text("{}\n", "utf-8")
+    calls: list[Path] = []
+
+    from analysis_wrapper.orchestrator import planner
+
+    monkeypatch.setattr(planner, "plan_judgment", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(driver, "_drain", lambda _state, _outcome: False)
+
+    def freeze(run: Path) -> Path:
+        calls.append(run)
+        manifest = run / acceptance.FILENAME
+        manifest.write_text('{"manifest_digest":"fixture"}\n', "utf-8")
+        return manifest
+
+    monkeypatch.setattr(acceptance, "freeze", freeze)
+    state = driver.RunState(run=tmp_path, executor="host", context_budget_tokens=1000,
+                            log=lambda _line: None)
+
+    assert driver._phase_judgment(state) is False
+    assert driver._phase_judgment(state) is False
+    assert calls == [tmp_path]

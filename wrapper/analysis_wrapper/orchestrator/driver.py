@@ -127,14 +127,18 @@ def _phase_judgment(state: RunState) -> bool:
     planner.plan_judgment(state.run, context_budget_tokens=state.context_budget_tokens)
     # A prepared production run has deterministic inputs and a complete first
     # packet wave at this exact point, before _drain can hand any packet to a
-    # model. Synthetic protocol tests intentionally omit run provenance and
-    # therefore remain outside the acceptance-artifact contract.
+    # model. Freeze that pre-model wave exactly once: source-read lenses add
+    # derived lens packets only after a selection task has model output, so a
+    # resumed invocation must not mistake that normal expansion for changed
+    # prepared inputs. Synthetic protocol tests intentionally omit run
+    # provenance and therefore remain outside the acceptance-artifact contract.
     if (state.run / "run-provenance.json").is_file():
         from .. import acceptance
-        try:
-            acceptance.freeze(state.run)
-        except ValueError as exc:
-            raise DriverError(f"cannot freeze acceptance inputs: {exc}") from exc
+        if not (state.run / acceptance.FILENAME).is_file():
+            try:
+                acceptance.freeze(state.run)
+            except ValueError as exc:
+                raise DriverError(f"cannot freeze acceptance inputs: {exc}") from exc
     outcome.finished_at = time.monotonic()
 
     outcome = state.phase("judgment: execute selects and lenses")
