@@ -62,6 +62,12 @@ def _run(tmp_path: Path, *, route_count: int = 1) -> tuple[Path, Path]:
         "host_fragments": [{"value": "api.example.com", "evidence": ["src/integration.ts:9"]}],
         "integration_packages": [{"package": "remote-client", "evidence": ["src/integration.ts:9"]}],
     })
+    _json(overview / "feature-boundaries" / "service.json", {
+        "async_boundaries": [{"category": "timer", "operation": "setInterval",
+                                "evidence": "src/service.ts:15"}],
+        "configuration_references": [{"name": "RECORDS_ENABLED", "evidence": "src/service.ts:15"}],
+        "test_files": [{"path": "src/service.spec.ts", "evidence": "src/service.ts:15"}],
+    })
     initialized = initialize_from_overview(
         overview, output_root=tmp_path / "output", project_key="workspace",
         selector="record", language="en", run_label="feature-evidence")
@@ -73,13 +79,13 @@ def test_index_uses_complete_canonical_artifacts_and_emits_typed_seeds(tmp_path)
     document = build(load(module_run))
 
     assert document["schema_version"] == "feature-evidence/v1"
-    assert len(document["items"]) == 7
+    assert len(document["items"]) == 10
     assert {item["kind"] for item in document["items"]} == {
         "route", "ui-action", "datastore", "access-role", "access-check",
-        "integration-host", "integration-package",
+        "integration-host", "integration-package", "async-boundary", "configuration", "test-file",
     }
     assert {seed["kind"] for seed in document["seeds"]} == {
-        "route", "ui-action", "datastore", "symbol", "package",
+        "route", "ui-action", "datastore", "job-event", "symbol", "package",
     }
     assert all(item["source_refs"] for item in document["items"])
     assert all(ref.startswith("service@NON-GIT:") for item in document["items"]

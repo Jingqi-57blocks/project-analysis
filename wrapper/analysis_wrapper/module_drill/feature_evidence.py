@@ -217,6 +217,28 @@ def _integration_items(artifact_id: str, document: dict[str, Any], repository_re
     return items
 
 
+def _boundary_items(artifact_id: str, document: dict[str, Any], repository_ref: str,
+                    revisions: dict[str, str]) -> list[EvidenceItem]:
+    groups = (
+        ("async-boundary", "async_boundaries"),
+        ("configuration", "configuration_references"),
+        ("test-file", "test_files"),
+    )
+    items: list[EvidenceItem] = []
+    for kind, key in groups:
+        rows = document.get(key, [])
+        if not isinstance(rows, list):
+            raise ContractError(f"feature boundaries {key} must be a list")
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise ContractError(f"feature boundaries {key} row is invalid")
+            refs = _source_refs((row.get("evidence"),), repository_ref, revisions)
+            items.append(EvidenceItem(
+                _id(artifact_id, kind, repository_ref, str(index), *refs), kind,
+                (repository_ref,), refs, artifact_id, dict(row)))
+    return items
+
+
 def _repo_for_artifact(path: str, context: SourceContext) -> str | None:
     name = Path(path).stem
     for repository_ref in context.manifest.repository_refs:
@@ -231,6 +253,7 @@ def _seed_kind(item: EvidenceItem) -> str | None:
         "ui-action": "ui-action", "route": "route", "datastore": "datastore",
         "access-role": "symbol", "access-check": "symbol",
         "integration-host": "package", "integration-package": "package",
+        "async-boundary": "job-event", "configuration": "symbol",
     }.get(item.kind)
 
 
@@ -257,6 +280,10 @@ def build(context: SourceContext) -> dict[str, Any]:
             repository_ref = _repo_for_artifact(relative, context)
             if repository_ref is not None:
                 items.extend(_integration_items(artifact_id, document, repository_ref, revisions))
+        elif relative.startswith("feature-boundaries/"):
+            repository_ref = _repo_for_artifact(relative, context)
+            if repository_ref is not None:
+                items.extend(_boundary_items(artifact_id, document, repository_ref, revisions))
         else:
             continue
         consumed.append(artifact_id)

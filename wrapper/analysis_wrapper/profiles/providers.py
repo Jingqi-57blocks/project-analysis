@@ -638,6 +638,63 @@ class IntegrationEvidenceProvider:
         )
 
 
+@dataclass(frozen=True)
+class FeatureBoundariesProvider:
+    """Expose mechanical async/config/test anchors for Module Drill.
+
+    The producer does not decide that an event is a notification, a
+    configuration read is a feature flag, or a test covers a particular
+    feature.  It only records the syntax-level anchors that later bounded
+    closure and source-span stages may connect with evidence.
+    """
+
+    provider_id: str = "feature-boundaries"
+    capability_id: str = "feature-boundaries"
+    profile_ids: tuple[str, ...] = ()
+    universal: bool = True
+
+    def run(self, context: RunContext, target: RepoTarget) -> CapabilityResult:
+        from ..discovery import feature_boundaries
+
+        identities = _identities(context, self.provider_id)
+        repository_ref = identities.reference_for(target.repo_id)
+        artifact_key = identities.artifact_key_for(target.repo_id)
+        payload = feature_boundaries.generate(target).to_dict()
+        run_dir = Path(context.output_dir)
+        directory = create_stage_dir(run_dir / "feature-boundaries")
+        artifact_path = directory / f"{artifact_key}.json"
+        _write_json(artifact_path, payload)
+        revision = _revision_for(target)
+        facts: list[Fact] = []
+        for row in payload["async_boundaries"]:
+            facts.append(self._fact("async-boundary", row, repository_ref, revision))
+        for row in payload["configuration_references"]:
+            facts.append(self._fact("configuration-reference", row, repository_ref, revision))
+        for row in payload["test_files"]:
+            facts.append(self._fact("test-file", row, repository_ref, revision))
+        capped = any(note.startswith("COVERAGE CAP:") for note in payload["notes"])
+        return CapabilityResult(
+            capability_id=self.capability_id, provider_id=self.provider_id,
+            repo_id=target.repo_id,
+            coverage=Coverage(
+                applicability="unknown", status="partial" if capped else "complete",
+                reason_code="feature-boundaries-cap" if capped else "feature-boundaries-complete",
+                detail="; ".join(payload["notes"])[:_DETAIL_LIMIT]),
+            facts=tuple(sorted(facts, key=lambda fact: fact.fact_id)),
+            artifact_refs=(_artifact_ref(artifact_path, run_dir, "feature-boundaries-evidence"),),
+            facet_provenance=(),
+        )
+
+    def _fact(self, kind: str, row: dict, repository_ref: str, revision: str) -> Fact:
+        evidence = row.get("evidence")
+        path, line = _parse_evidence_site(evidence)
+        source = SourceRef(repository_ref=repository_ref, revision=revision, path=path, line=line)
+        natural_key = (kind, str(evidence), str(row.get("operation") or row.get("name") or row.get("path") or ""))
+        return Fact(
+            fact_id=make_fact_id(self.capability_id, repository_ref, kind, natural_key),
+            kind=kind, data=dict(row), source_refs=(source,))
+
+
 # ---------------------------------------------------------------------------
 # Signal-tool-executing providers (57B-82 A2).
 # ---------------------------------------------------------------------------
