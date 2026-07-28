@@ -36,7 +36,7 @@ def test_cli_drives_overview_backed_module_task_lifecycle(tmp_path, capsys):
     packet = TaskPacket.create(
         task_id="candidate-ranking", task_type="module-candidate-ranking",
         template_id="test", template_version="v1", instructions="Select candidate.",
-        inputs={"candidates": "candidate-a"}, output_schema_id="module-candidate-ranking/v1",
+        inputs={"candidates": "candidate-a"}, output_schema_id="module-candidate-ranking/v2",
         context_budget_tokens=300)
     packet_path = tmp_path / "packets.json"
     packet_path.write_text(json.dumps([packet.to_dict()]), encoding="utf-8")
@@ -50,7 +50,7 @@ def test_cli_drives_overview_backed_module_task_lifecycle(tmp_path, capsys):
         task_id="candidate-ranking", status="ok",
         output={
             "decision": "selected", "candidate_ids": ["candidate-a"],
-            "selected_candidate_id": "candidate-a", "reason_code": "clear-dominant",
+            "reason_code": "clear-dominant",
         },
         executor=ExecutorInfo(kind="test", model="test-model", params={}),
         timing=TaskTiming(started_at=at, finished_at=at, wall_clock_s=0.0),

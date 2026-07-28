@@ -26,11 +26,11 @@
     ]
   },
   "module_scope": {
-    "schema_version": "module-scope/v3",
+    "schema_version": "module-scope/v4",
     "feature_id": "sample-capability",
     "selector": "create a record",
     "source_manifest_digest": "de6a89df6a122ca930be817a203478e6ecfebd118292754d53f24e3a227c1603",
-    "selected_candidate_id": "candidate-create-record",
+    "selected_candidate_ids": ["candidate-create-record"],
     "candidates": [
       {
         "candidate_id": "candidate-create-record",

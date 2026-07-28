@@ -31,7 +31,7 @@ def test_three_repository_fixture_is_a_complete_contract_baseline():
     assert fixture.scope.feature_id == "sample-capability"
     assert fixture.model.closure_status == "closed"
     assert fixture.expected_path_edge_ids[0] == "edge-ui-client"
-    assert fixture.scope.candidates[0].candidate_id == fixture.scope.selected_candidate_id
+    assert fixture.scope.candidates[0].candidate_id in fixture.scope.selected_candidate_ids
     assert {item.expected_closure_status for item in fixture.mutations} == {"open", "blocked"}
 
 
@@ -95,8 +95,8 @@ def test_scope_candidate_requires_deterministic_seed_and_repository_evidence():
 
 def test_scope_rejects_selected_candidate_outside_deterministic_candidates():
     payload = load_fixture()
-    payload["module_scope"]["selected_candidate_id"] = "candidate-not-observed"
-    with pytest.raises(ContractError, match="must name a scope candidate"):
+    payload["module_scope"]["selected_candidate_ids"] = ["candidate-not-observed"]
+    with pytest.raises(ContractError, match="selected candidates must match"):
         AcceptanceFixture.from_dict(payload)
 
 
@@ -104,7 +104,7 @@ def test_module_task_types_use_the_shared_packet_and_schema_dispatch():
     outputs = {
         "module-candidate-ranking": {
             "decision": "selected", "candidate_ids": ["candidate-a"],
-            "selected_candidate_id": "candidate-a", "reason_code": "clear-dominant",
+            "reason_code": "clear-dominant",
         },
         "module-frontier-expansion": {"dispositions": []},
         "module-sync-recovery": {"dispositions": [], "claims": [], "flows": []},

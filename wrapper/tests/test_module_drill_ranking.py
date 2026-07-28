@@ -93,7 +93,7 @@ def test_module_driver_rejects_candidate_ids_outside_supplied_universe(tmp_path)
     outcome = driver.submit(claim.packet.task_id, _result(
         claim.packet.task_id, claim.attempt,
         {"decision": "selected", "candidate_ids": ["candidate-invented"],
-         "selected_candidate_id": "candidate-invented", "reason_code": "clear-dominant"},
+         "reason_code": "clear-dominant"},
     ))
     assert outcome["status"] == "failed"
     assert outcome["failures"][0]["check"] == "ranking-candidate-universe"
@@ -104,14 +104,14 @@ def test_selected_ranking_materializes_one_open_scope_from_canonical_evidence(tm
     candidate_id = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())["candidates"][0]["candidate_id"]
     _validated_ranking(module_run, {
         "decision": "selected", "candidate_ids": [candidate_id],
-        "selected_candidate_id": candidate_id, "reason_code": "clear-dominant",
+        "reason_code": "clear-dominant",
     })
 
     result = finalize(module_run)
     assert result.decision == "selected"
     assert result.scope_path is not None
     scope = ModuleScope.from_dict(json.loads(result.scope_path.read_text(encoding="utf-8")))
-    assert scope.selected_candidate_id == candidate_id
+    assert scope.selected_candidate_ids == (candidate_id,)
     assert scope.closure_status == "open"
     assert {candidate.disposition for candidate in scope.candidates} >= {"selected", "alternative"}
     assert scope.frontiers
@@ -122,12 +122,32 @@ def test_selected_ranking_materializes_one_open_scope_from_canonical_evidence(tm
     }
 
 
+def test_selected_ranking_materializes_every_selected_candidate_seed(tmp_path):
+    module_run = _prepared_run(tmp_path)
+    candidates = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())["candidates"]
+    selected_ids = [candidates[0]["candidate_id"], candidates[1]["candidate_id"]]
+    _validated_ranking(module_run, {
+        "decision": "selected", "candidate_ids": selected_ids,
+        "reason_code": "clear-dominant",
+    })
+
+    scope = ModuleScope.from_dict(json.loads(finalize(module_run).scope_path.read_text(encoding="utf-8")))
+
+    assert scope.selected_candidate_ids == tuple(selected_ids)
+    assert {candidate.candidate_id for candidate in scope.candidates
+            if candidate.disposition == "selected"} == set(selected_ids)
+    assert {frontier.anchor_id for frontier in scope.frontiers} == {
+        seed_id for candidate in scope.candidates if candidate.candidate_id in selected_ids
+        for seed_id in candidate.seed_ids
+    }
+
+
 def test_ambiguous_ranking_never_materializes_a_scope(tmp_path):
     module_run = _prepared_run(tmp_path)
     candidates = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())["candidates"]
     _validated_ranking(module_run, {
         "decision": "ambiguous", "candidate_ids": [candidates[0]["candidate_id"], candidates[1]["candidate_id"]],
-        "selected_candidate_id": None, "reason_code": "equally-supported",
+        "reason_code": "equally-supported",
     })
 
     result = finalize(module_run)
@@ -142,7 +162,7 @@ def test_cli_finalizes_a_validated_selected_ranking(tmp_path, capsys):
     candidate_id = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())["candidates"][0]["candidate_id"]
     _validated_ranking(module_run, {
         "decision": "selected", "candidate_ids": [candidate_id],
-        "selected_candidate_id": candidate_id, "reason_code": "clear-dominant",
+        "reason_code": "clear-dominant",
     })
     assert main(["module-finalize-ranking", "--run", str(module_run)]) == 0
     printed = json.loads(capsys.readouterr().out)
@@ -153,15 +173,15 @@ def test_cli_finalizes_a_validated_selected_ranking(tmp_path, capsys):
 def test_ranking_schema_requires_explicit_unresolved_decisions():
     assert validate_output("module-candidate-ranking", {
         "decision": "ambiguous", "candidate_ids": ["candidate-a", "candidate-b"],
-        "selected_candidate_id": None, "reason_code": "equally-supported",
+        "reason_code": "equally-supported",
     }) == []
     assert validate_output("module-candidate-ranking", {
         "decision": "no-match", "candidate_ids": [],
-        "selected_candidate_id": None, "reason_code": "insufficient-evidence",
+        "reason_code": "insufficient-evidence",
     }) == []
     failures = validate_output("module-candidate-ranking", {
         "decision": "ambiguous", "candidate_ids": ["candidate-a"],
-        "selected_candidate_id": None, "reason_code": "equally-supported",
+        "reason_code": "equally-supported",
     })
     assert failures[0]["check"] == "ranking-ambiguous-shape"
 
