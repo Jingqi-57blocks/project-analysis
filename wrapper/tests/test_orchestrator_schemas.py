@@ -369,6 +369,30 @@ def test_selection_fetch_accepts_both_quoted_text_states():
     assert "selection-quoted-text" in _checks(failures)
 
 
+def test_selection_fetch_requires_exact_explicit_role_accounting_when_packet_requests_it():
+    packet_inputs = {"selection-requirements.json": json.dumps({
+        "roles": [
+            {"role_id": "lens-critical-source"},
+            {"role_id": "ci-config"},
+        ],
+    })}
+    doc = {"selections": [{
+        "selection_id": "journey-entry-1", "purpose": "user-journey UI label",
+        "ref": "web@" + "b" * 40 + ":src/pages/Login.tsx:10", "quoted_text": "",
+    }], "role_dispositions": [{
+        "role_id": "lens-critical-source", "status": "selected",
+        "selection_ids": ["journey-entry-1"], "note": "needed for the primary claim",
+    }, {
+        "role_id": "ci-config", "status": "unavailable", "selection_ids": [],
+        "note": "no CI configuration is present in this repository",
+    }]}
+    assert schemas.validate_output("selection-fetch", doc, packet_inputs=packet_inputs) == []
+
+    doc["role_dispositions"] = doc["role_dispositions"][:1]
+    assert "role-disposition-exact-accounting" in _checks(
+        schemas.validate_output("selection-fetch", doc, packet_inputs=packet_inputs))
+
+
 def test_dedup_rank_crosscheck_rejects_a_narrowed_id_universe():
     """A dedup output that drops ids from BOTH its echo and its merge_map is
     internally consistent and passes the schema — it just silently decides

@@ -7,6 +7,11 @@ import pytest
 from analysis_wrapper import module_map
 from analysis_wrapper.cli import main
 from analysis_wrapper.orchestrator import rekey
+from analysis_wrapper.orchestrator.composer import compose
+from analysis_wrapper.orchestrator.contracts import (
+    ExecutorInfo, TaskResult, TaskTiming, ValidationOutcome,
+)
+from analysis_wrapper.orchestrator.engine import Engine, now_iso
 from analysis_wrapper.system_model import assemble as sm
 from system_model_fixtures import write_run
 
@@ -41,6 +46,26 @@ def _module_map_with_one_excluded(run):
     }
     (run / "module-map.json").write_text(json.dumps(payload), "utf-8")
     return merged_ids, excluded_id
+
+
+def _register_finding_resolution(run, output):
+    engine = Engine(run)
+    packets = compose(
+        task_id="finding-resolution", template_id="finding-resolution", template_version="1",
+        task_type="finding-resolution", instructions="resolve", inputs={"tail": "[]"},
+        output_schema_id="finding-resolution.v1", context_budget_tokens=8000,
+    )
+    engine.create_tasks(packets)
+    item = engine.claim(1, executor_kind="manual", model="test")[0]
+    at = now_iso()
+    result = TaskResult(
+        task_id=item.packet.task_id, status="ok", output=output,
+        executor=ExecutorInfo(kind="manual", model="test", params={}),
+        timing=TaskTiming(started_at=at, finished_at=at, wall_clock_s=0.1), tokens=None,
+        validation=ValidationOutcome(passed=True, failures=()), attempt=item.attempt,
+    )
+    outcome = engine.submit(item.packet.task_id, result.to_dict())
+    assert outcome["status"] == "validated", outcome
 
 
 def test_rekey_maps_resolvable_candidates_and_routes_dead_ends_to_tail(tmp_path):
@@ -104,6 +129,35 @@ def test_rekey_fails_closed_when_module_map_is_incomplete(tmp_path):
     (run / "module-map.json").write_text(json.dumps(mapping), "utf-8")
     with pytest.raises(ValueError, match="omits"):
         rekey.rekey(run, {"findings": []})
+
+
+def test_rekey_resolution_preserves_assigned_findings_and_records_every_nonassigned_tail(tmp_path):
+    run = _built_run(tmp_path)
+    merged_ids, excluded_id = _module_map_with_one_excluded(run)
+    result = rekey.rekey(run, {"findings": [
+        {"finding_id": "finding-assign", "affected_modules": [excluded_id], "claim": "assign"},
+        {"finding_id": "finding-unsupported", "affected_modules": ["mc-missing"], "claim": "keep"},
+    ]})
+    assert not result["rekeyed"] and len(result["tail"]) == 2
+    _register_finding_resolution(run, {"dispositions": [
+        {"finding_id": "finding-assign", "disposition": "assigned",
+         "affected_modules": ["sample-capability"], "reason": "nearest supported boundary",
+         "evidence_refs": ["metric:code.analyzed-scope.total"]},
+        {"finding_id": "finding-unsupported", "disposition": "unsupported",
+         "affected_modules": [], "reason": "no supported module mapping",
+         "evidence_refs": ["metric:code.analyzed-scope.total"]},
+    ]})
+
+    resolved = rekey.apply_resolution(run, result["tail"])
+    assert resolved["assigned"] == [{
+        "finding_id": "finding-assign", "affected_modules": ["sample-capability"], "claim": "assign",
+    }]
+    assert resolved["remainder"] == [{
+        "finding_id": "finding-unsupported", "disposition": "unsupported",
+        "reason": "no supported module mapping",
+        "evidence_refs": ["metric:code.analyzed-scope.total"],
+        "candidate_dispositions": {"mc-missing": "unknown-candidate"},
+    }]
 
 
 def test_rekey_findings_cli_writes_result_file(tmp_path):

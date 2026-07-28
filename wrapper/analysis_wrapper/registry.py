@@ -114,6 +114,29 @@ def _roots(target: RepoTarget) -> list[str]:
     return [str(p.resolve()) for p in target.root_paths()]
 
 
+def _go_module_root(target: RepoTarget, _out: Path) -> Path:
+    """Resolve the single detected Go module root without executing source.
+
+    A nested module cannot be scanned from its repository parent with
+    ``./...``.  Prefer the repository root, then an unambiguous declared
+    analysis-root module.  Multiple nested modules deliberately fall back to
+    the repository root: the resulting reduced coverage is safer than
+    silently treating one module as the entire repository.
+    """
+    root = Path(target.path).expanduser().resolve()
+    if (root / "go.mod").is_file():
+        return root
+    modules: list[Path] = []
+    for analysis_root in target.root_paths():
+        for manifest in analysis_root.rglob("go.mod"):
+            relative = manifest.relative_to(root)
+            if any(part in {"vendor", "node_modules", ".git"} for part in relative.parts):
+                continue
+            modules.append(manifest.parent.resolve())
+    modules = sorted(set(modules))
+    return modules[0] if len(modules) == 1 else root
+
+
 def _dns_preflight(host: str):
     def check() -> str:
         try:
@@ -323,8 +346,8 @@ def staticcheck(target: RepoTarget) -> ToolDef:
         remove_env=GO_ENV_REMOVALS,
         degraders=[parsers.staticcheck_degraded], view_builder=parsers.staticcheck_view,
         view_lines=260, applied_exclusions=["generated docs/ findings (view only)"],
-        network=False, cwd_mode="target", timeout_s=600,
-        extra_notes=_go_notes(go_binary),
+        network=False, cwd_mode="target", cwd_resolver=_go_module_root, timeout_s=600,
+        extra_notes=_go_notes(go_binary) + "; package cwd resolves to the detected Go module root",
         # No DNS preflight: the Go lane only conditionally needs network (cold
         # module cache). Attempt-and-classify — offline downloads fail loudly.
     )
@@ -341,8 +364,8 @@ def go_list(target: RepoTarget) -> ToolDef:
         degraders=[parsers.go_list_degraded],
         view_builder=parsers.go_list_view, view_lines=300, reads_declared=["go.mod", "go.sum"],
         applied_exclusions=["stdlib and third-party packages excluded from internal edge set"],
-        network=False, cwd_mode="target", timeout_s=600,
-        extra_notes=_go_notes(binary),
+        network=False, cwd_mode="target", cwd_resolver=_go_module_root, timeout_s=600,
+        extra_notes=_go_notes(binary) + "; package cwd resolves to the detected Go module root",
         # No DNS preflight — see staticcheck; warm-cache offline runs must succeed.
     )
 

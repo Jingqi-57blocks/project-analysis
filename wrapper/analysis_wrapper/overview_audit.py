@@ -152,7 +152,7 @@ def _mermaid_integrity_problems(name: str, markdown: str) -> list[str]:
 
 
 def audit(run_dir: str | Path, *, require_module_map: bool = False,
-          require_reports: bool = False) -> dict:
+          require_reports: bool = False, strict_orchestration: bool = False) -> dict:
     run = Path(run_dir).expanduser().resolve()
     checks: list[dict] = []
 
@@ -390,13 +390,22 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
                   f"identities_match={expected_modules == observed_modules}")
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
             check("module-disposition-accounting", False, str(exc))
+        quality_path = run / "tasks" / "module-formation-quality.json"
+        if quality_path.is_file():
+            quality = _load(quality_path)
+            check("module-formation-quality", quality.get("status") == "passed",
+                  f"unresolved_ratio={quality.get('unresolved_ratio')}; refined={quality.get('refined')}"
+                  if quality.get("status") == "passed" else
+                  f"non-authoritative formation: {quality}")
+        elif strict_orchestration:
+            check("module-formation-quality", False, "module formation quality artifact is missing")
 
     heads = {identities.reference_for(repo.repo_id): repo.git.head.lower()
              for repo in spec.repos if repo.git.head}
     citation_problems: list[str] = []
     artifact_names = ["system-model.json", "module-candidates.json", "module-map.json",
                       "module-summary.md"]
-    if require_reports:
+    if require_reports and strict_orchestration:
         artifact_names += ["findings.json", "findings-summary.md",
                            "findings-pm-summary.md", "project-map.md",
                            "technical-overview.md", "overview.md"]
@@ -425,6 +434,24 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
     check("revision-and-path-citations", not citation_problems,
           "citations use full recorded revisions and no target absolute paths"
           if not citation_problems else "; ".join(citation_problems[:20]))
+
+    if require_reports and strict_orchestration:
+        from .orchestrator import consumption, provenance
+        consumption_problems = consumption.problems(run)
+        check("validated-result-consumption", not consumption_problems,
+              "every validated task has a canonical consumer or explicit disposition"
+              if not consumption_problems else "; ".join(consumption_problems[:20]))
+        expected_reports = {"overview.md", "technical-overview.md", "project-map.md",
+                            "findings-summary.md", "findings-pm-summary.md",
+                            "coverage-summary.md", "module-summary.md"}
+        missing_reports = sorted(name for name in expected_reports if not (run / name).is_file())
+        check("report-projection-presence", not missing_reports,
+              "all canonical Markdown projections are present"
+              if not missing_reports else "missing report projections: " + ", ".join(missing_reports))
+        provenance_problems = provenance.problems(run)
+        check("execution-provenance", not provenance_problems,
+              "every submitted task records executor and timing provenance"
+              if not provenance_problems else "; ".join(provenance_problems[:20]))
 
     leakage = []
     external_identities = [identities.project, *identities.repositories]
@@ -559,11 +586,11 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
 
 
 def write(run_dir: str | Path, *, require_module_map: bool = False,
-          require_reports: bool = False) -> Path:
+          require_reports: bool = False, strict_orchestration: bool = False) -> Path:
     run = Path(run_dir).expanduser().resolve()
     out = run / "consistency-audit.json"
     replace_artifact_text(out, sanitize_text(json.dumps(
         audit(run, require_module_map=require_module_map,
-              require_reports=require_reports),
+              require_reports=require_reports, strict_orchestration=strict_orchestration),
         indent=2, sort_keys=True) + "\n"))
     return out

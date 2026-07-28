@@ -207,3 +207,33 @@ def test_write_module_map_ignores_a_validated_boundary_resolution_task(tmp_path)
         task_type="boundary-resolution")
     with pytest.raises(formation.FormationWriterError, match="no validated formation-proposal"):
         formation.write(run)
+
+
+def test_boundary_resolution_materializes_each_unresolved_candidate_and_quality_gate(tmp_path):
+    run = _build_run(tmp_path)
+    first_pass = [
+        _DISPOSITIONS[0],
+        {"candidate_id": "mc-web-folder", "disposition": "unresolved", "module_ids": [],
+         "reason": "first-pass evidence has no stable boundary"},
+    ]
+    _register_and_validate(run, "formation", {
+        "modules": _MODULES, "candidate_dispositions": first_pass,
+    })
+    formation.write(run)
+    assert [row["candidate_id"] for row in formation.unresolved_rows(run)] == ["mc-web-folder"]
+
+    before = json.loads(formation.write_quality(run, refined=False).read_text("utf-8"))
+    assert before["status"] == "partial" and before["authoritative"] is False
+
+    _register_and_validate(run, "boundary-resolution", {
+        "dispositions": [{
+            "candidate_id": "mc-web-folder", "disposition": "merged", "module_ids": ["core"],
+            "reason": "targeted neighborhood evidence shows the shared boundary",
+        }],
+    }, task_type="boundary-resolution")
+    assert formation.apply_boundary_resolution(run) is True
+    _, document = module_map.validate(run)
+    by_id = {row["candidate_id"]: row for row in document["candidate_dispositions"]}
+    assert by_id["mc-web-folder"]["disposition"] == "merged"
+    after = json.loads(formation.write_quality(run, refined=True).read_text("utf-8"))
+    assert after["status"] == "passed" and after["authoritative"] is True

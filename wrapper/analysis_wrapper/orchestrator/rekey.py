@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import module_map
+from .results import validated_outputs
 
 
 def _lookup(run_dir: str | Path) -> tuple[dict[str, list[str]], dict[str, str]]:
@@ -109,3 +110,49 @@ def rekey(run_dir: str | Path, findings_doc: Any) -> dict:
     if {row["finding_id"] for row in rekeyed} & {row["finding_id"] for row in tail}:
         raise ValueError("a finding cannot appear in both rekeyed and tail")
     return {"rekeyed": rekeyed, "tail": tail}
+
+
+def apply_resolution(run_dir: str | Path, tail: list[dict]) -> dict:
+    """Apply a validated finding-resolution output without losing lineage.
+
+    ``assigned`` items join canonical findings with their original finding id
+    and evidence untouched. Other dispositions remain in a separate canonical
+    manifest; an ``unresolved`` disposition is intentionally returned to the
+    driver so authoritative completion can be blocked.
+    """
+    run = Path(run_dir).expanduser().resolve()
+    outputs = validated_outputs(run, task_type="finding-resolution")
+    if len(outputs) != 1:
+        raise ValueError("expected exactly one validated finding-resolution task")
+    output = next(iter(outputs.values()))
+    rows = output.get("dispositions") if isinstance(output, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("finding-resolution output has no dispositions list")
+    tail_by_id = {row.get("finding_id"): row for row in tail if isinstance(row, dict)}
+    dispositions = {row.get("finding_id"): row for row in rows if isinstance(row, dict)}
+    if set(tail_by_id) != set(dispositions) or len(dispositions) != len(rows):
+        raise ValueError("finding-resolution must disposition every rekey-tail finding exactly once")
+    _candidates, document = module_map.validate(run)
+    modules = {row.get("module_id") for row in document.get("modules", []) if isinstance(row, dict)}
+    assigned: list[dict] = []
+    remainder: list[dict] = []
+    for finding_id in sorted(tail_by_id):
+        original = tail_by_id[finding_id]
+        decision = dispositions[finding_id]
+        status = decision.get("disposition")
+        module_ids = decision.get("affected_modules", [])
+        if status == "assigned":
+            if not module_ids or not set(module_ids) <= modules:
+                raise ValueError(f"finding-resolution assigned {finding_id!r} to an unknown module")
+            row = {key: value for key, value in original.items() if key != "candidate_dispositions"}
+            row["affected_modules"] = sorted(set(module_ids))
+            assigned.append(row)
+        else:
+            remainder.append({
+                "finding_id": finding_id,
+                "disposition": status,
+                "reason": decision.get("reason", ""),
+                "evidence_refs": decision.get("evidence_refs", []),
+                "candidate_dispositions": original.get("candidate_dispositions", {}),
+            })
+    return {"assigned": assigned, "remainder": remainder}

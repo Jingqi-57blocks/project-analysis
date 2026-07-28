@@ -221,6 +221,16 @@ def test_normalized_outputs_are_deterministic(target, tmp_path):
     assert '"cwd": "<output>"' in (tmp_path / "one" / name).read_text()
 
 
+def test_cwd_resolver_is_used_by_execution_and_recorded_in_the_manifest(target, tmp_path):
+    nested = Path(target.path) / "nested-module"
+    nested.mkdir()
+    td = bash_tool("nested-cwd", "pwd")
+    td.cwd_resolver = lambda _target, _out: nested
+    result = run(td, target, tmp_path)
+    assert result.status is Status.COMPLETE
+    assert result.manifest.cwd == str(nested.resolve())
+
+
 def test_relative_output_directory_is_normalized(monkeypatch, target, tmp_path):
     monkeypatch.chdir(tmp_path)
     td = bash_tool("relative", "echo stable")

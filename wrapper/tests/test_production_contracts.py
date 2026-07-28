@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from analysis_wrapper import parsers
-from analysis_wrapper.registry import dependency_cruiser, outdated, staticcheck
+from analysis_wrapper.registry import dependency_cruiser, go_list, outdated, staticcheck
 from analysis_wrapper.status import Status
 from analysis_wrapper.targetspec import (
     PackageManager, RepoTarget, TechnologyFacet, stable_repo_id,
@@ -75,6 +75,20 @@ def test_staticcheck_no_matched_packages_is_not_complete(target):
     td = staticcheck(target)
     reason = td.check_degraded(target, 'warning: "./..." matched no packages', 1)
     assert "no-analysis-object" in reason
+
+
+def test_go_tools_resolve_an_unambiguous_nested_module_as_the_execution_cwd(tmp_path):
+    repo = tmp_path / "repo"
+    module = repo / "services" / "api"
+    module.mkdir(parents=True)
+    (module / "go.mod").write_text("module example.test/api\n\ngo 1.24\n", "utf-8")
+    nested = RepoTarget(
+        repo_id=stable_repo_id(str(repo)), path=str(repo), analysis_roots=["services/api"],
+        facets=[TechnologyFacet("language.go", "language", ["services/api"], ["go.mod"])],
+    )
+    out = tmp_path / "signals"
+    assert staticcheck(nested).working_directory(nested, out) == module.resolve()
+    assert go_list(nested).working_directory(nested, out) == module.resolve()
 
 
 def test_depcruise_unresolved_over_15_percent_is_partial(target):

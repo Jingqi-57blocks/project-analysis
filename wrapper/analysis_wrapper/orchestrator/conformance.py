@@ -3,7 +3,7 @@
 One realistic, minimal :class:`~.contracts.TaskPacket` PLUS one golden,
 schema-valid output per task type in :data:`~.contracts.TASK_TYPES` (eight
 fixtures total). ``run_conformance`` materializes a temp run dir, loads the
-fixture DAG (the eight fixtures are mutually independent — no
+fixture DAG (the fixtures are mutually independent — no
 ``depends_on`` between them), and submits either:
 
   - the golden outputs (the default, no network, no model call — a
@@ -115,6 +115,23 @@ FIXTURES: tuple[Fixture, ...] = (
                 "disposition": "standalone",
                 "module_ids": ["conformance-module"],
                 "reason": "Clear, isolated boundary with no shared dependents.",
+            }],
+        },
+    ),
+    _fixture(
+        "finding-resolution",
+        "Resolve every rekey tail finding as assigned, duplicate, unsupported, or unresolved "
+        "in a JSON object matching the finding-resolution output schema.",
+        {"rekey-tail": "finding-conformance-tail: candidate was excluded; source evidence remains valid.",
+         "module-map": "module conformance-module is an existing finalized module."},
+        "finding-resolution.v1",
+        {
+            "dispositions": [{
+                "finding_id": "finding-conformance-tail",
+                "disposition": "assigned",
+                "affected_modules": ["conformance-module"],
+                "reason": "The supplied evidence names the nearest finalized module boundary.",
+                "evidence_refs": ["metric:code.analyzed-scope.total"],
             }],
         },
     ),

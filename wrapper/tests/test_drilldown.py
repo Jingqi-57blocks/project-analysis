@@ -16,8 +16,12 @@ def _overview(tmp_path, target, capsys, *, complete=True):
                  "--skill-root", str(skill_root)]) == 0
     run_dir = Path(capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1])
     if complete:
-        for stage in ("signals", "findings", "map", "overview"):
+        for stage in ("signals", "findings", "map"):
             assert main(["mark-stage", "--run", str(run_dir), "--stage", stage]) == 0
+        (run_dir / "tasks").mkdir(exist_ok=True)
+        (run_dir / "consistency-audit.json").write_text('{"status": "passed"}', "utf-8")
+        (run_dir / "tasks" / "pipeline-timing.json").write_text('{"complete": true}', "utf-8")
+        assert main(["mark-stage", "--run", str(run_dir), "--stage", "overview"]) == 0
         capsys.readouterr()
     return skill_root, run_dir
 

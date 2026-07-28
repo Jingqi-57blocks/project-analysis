@@ -420,7 +420,7 @@ def parser() -> argparse.ArgumentParser:
     run_executor_cmd.add_argument("--max-attempts", type=int, default=3)
     conformance = sub.add_parser(
         "executor-conformance",
-        help="(orchestrator, 57B-115) validate the 8 fixture task types (golden "
+        help="(orchestrator, 57B-115) validate every fixture task type (golden "
              "outputs by default, or a live --adapter/--model) against the "
              "orchestrator schemas")
     conformance.add_argument(
@@ -1215,6 +1215,15 @@ def _lifecycle_cmd(args: argparse.Namespace) -> int:
         if stale:
             raise ValueError("run is stale; mint a new run: " + "; ".join(stale))
     if args.command == "mark-stage":
+        if args.stage == "overview":
+            audit_path = run_dir / "consistency-audit.json"
+            timing_path = run_dir / "tasks" / "pipeline-timing.json"
+            if not audit_path.is_file() or not timing_path.is_file():
+                raise ValueError("cannot mark overview: final audit or pipeline timing is missing")
+            audit = _load_object(audit_path)
+            timing = _load_object(timing_path)
+            if audit.get("status") != "passed" or timing.get("complete") is not True:
+                raise ValueError("cannot mark overview: latest final audit or pipeline is failed/stale")
         state.mark(args.stage)
         state.save(run_dir)
         if args.stage == "overview":

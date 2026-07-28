@@ -30,7 +30,7 @@ ORCHESTRATOR_CONTRACT_VERSION = "1.0.0"
 # task type maps to exactly one output schema in ``schemas.py``.
 TASK_TYPES = frozenset({
     "lens-findings", "formation-proposal", "boundary-resolution", "dedup-rank",
-    "section-generate", "repair-edit-ops", "coherence-check", "selection-fetch",
+    "finding-resolution", "section-generate", "repair-edit-ops", "coherence-check", "selection-fetch",
 })
 
 LEDGER_EVENTS = frozenset({"created", "claimed", "released", "submitted", "validated", "failed"})

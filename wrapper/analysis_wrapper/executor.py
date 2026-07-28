@@ -321,7 +321,7 @@ def run_tool(
     _assert_signal_paths_available(out, raw_dir, name)
 
     argv: list[str] | None = None
-    cwd = Path(target.path) if tooldef.cwd_mode == "target" else out.resolve()
+    cwd = tooldef.working_directory(target, out.resolve())
     version: str | None = None
     drift = ""
     prep = PrepareResult()

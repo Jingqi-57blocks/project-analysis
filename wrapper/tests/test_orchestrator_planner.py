@@ -172,9 +172,9 @@ def test_plan_judgment_creates_the_expected_task_count_and_shard_fanout(tmp_path
         assert by_lens[lens_id][0].shard == "workspace"
         assert by_lens[lens_id][0].repository_ref == ""
 
-    # select tasks: safety-net (repo x 2 repos) + open-lens/dependencies-
-    # cycles/structure-inventory (workspace) = 2 + 3 = 5.
-    assert len(select_tasks) == 5
+    # select tasks: safety-net (repo x 2 repos), dependencies/structure
+    # (workspace), and three semantic open-lens partitions = 2 + 2 + 3.
+    assert len(select_tasks) == 7
     by_select_lens = {}
     for task in select_tasks:
         assert task.task_id.endswith("-select")
@@ -182,9 +182,11 @@ def test_plan_judgment_creates_the_expected_task_count_and_shard_fanout(tmp_path
     assert set(by_select_lens) == SOURCE_READS_LENSES
     assert len(by_select_lens["safety-net"]) == 2
     assert {t.repository_ref for t in by_select_lens["safety-net"]} == {"api", "web"}
-    for lens_id in SOURCE_READS_LENSES - {"safety-net"}:
+    for lens_id in SOURCE_READS_LENSES - {"safety-net", "open-lens"}:
         assert len(by_select_lens[lens_id]) == 1
         assert by_select_lens[lens_id][0].repository_ref == ""
+    assert len(by_select_lens["open-lens"]) == 3
+    assert {t.repository_ref for t in by_select_lens["open-lens"]} == {"", "api", "web"}
 
     assert all(task.created for task in planned)
     assert all(task.estimated_tokens > 0 for task in planned)
@@ -198,6 +200,36 @@ def test_plan_judgment_registers_every_task_in_the_engine_ledger(tmp_path):
     all_packet_ids = {pid for task in planned for pid in task.packet_ids}
     assert set(states) == all_packet_ids
     assert all(state == "pending" for state in states.values())
+
+
+def test_open_lens_uses_repository_and_cross_repository_semantic_partitions(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planner.plan_judgment(run)
+    engine = Engine(run)
+    created = {record.task_id: record.detail["task"] for record in engine._read_records()
+               if record.event == "created"}
+
+    api = created["lens-open-lens-select"]["inputs"]
+    web_task_id = next(task_id for task_id in created
+                       if task_id.startswith("lens-open-lens-partition-")
+                       and task_id.endswith("-select"))
+    web = created[web_task_id]["inputs"]
+    cross = created["lens-open-lens-cross-repository-select"]["inputs"]
+
+    for repository_ref, inputs in (("api", api), ("web", web)):
+        partition = json.loads(inputs["semantic-partition.json"]["content"])
+        assert partition["partition_id"] == f"repository:{repository_ref}"
+        candidates = json.loads(inputs["module-candidates.json"]["content"])
+        assert {row["repository_ref"] for row in candidates} == {repository_ref}
+        evidence = json.loads(inputs["test-ci-evidence.json"]["content"])
+        assert {row["repository_ref"] for row in evidence} == {repository_ref}
+
+    cross_partition = json.loads(cross["semantic-partition.json"]["content"])
+    assert cross_partition["partition_id"] == "cross-repository"
+    assert not {name for name in cross if name.startswith("signals/")}
+    assert json.loads(cross["module-candidates.json"]["content"]) == []
+    assert "cross-partition-boundaries.json" in cross
+    assert "graph-nodes.json" not in cross
 
 
 def test_formation_task_has_no_depends_on_and_runs_independently(tmp_path):
@@ -251,7 +283,12 @@ def test_select_task_gets_the_exact_same_inputs_the_lens_task_itself_would(tmp_p
     run_summary = _load_json(run / "signals" / "run-summary.json")
     expected_inputs = _lens_inputs(run, lens_templates["dependencies-cycles"], synthesis_doc,
                                    module_candidates_doc, run_summary, None)
-    assert set(select_packet["inputs"]) == set(expected_inputs)
+    assert set(select_packet["inputs"]) == set(expected_inputs) | {"selection-requirements.json"}
+    selection_requirements = json.loads(
+        select_packet["inputs"]["selection-requirements.json"]["content"])
+    assert [row["role_id"] for row in selection_requirements["roles"]] == [
+        "lens-critical-source",
+    ]
 
 
 def test_select_task_instructions_request_up_to_its_own_lens_cap_with_empty_quoted_text(tmp_path):
@@ -722,6 +759,38 @@ def _collision_lens_output(task_id):
 
 
 def _submit(engine, item, output, *, status="ok"):
+    if item.packet.task_type == "lens-findings" and isinstance(output, dict) \
+            and isinstance(output.get("findings"), list):
+        requirements_input = item.packet.inputs.get("requirements.json")
+        if requirements_input is not None:
+            requirements = json.loads(requirements_input.content)
+            signal_ids = [row["input_id"] for row in requirements["input_requirements"]
+                          if row["input_id"].startswith("signals/")]
+            output = dict(output)
+            output["coverage"] = [{"signal": signal, "status": "complete", "note": "fixture"}
+                                  for signal in signal_ids]
+            output["input_dispositions"] = [{
+                "input_id": row["input_id"], "status": "examined",
+                "evidence_refs": ["metric:code.analyzed-scope.total"], "note": "fixture",
+            } for row in requirements["input_requirements"]]
+            finding_ids = [row["finding_id"] for row in output["findings"]]
+            output["checklist_dispositions"] = [{
+                "dimension_id": row["dimension_id"],
+                "outcome": "finding" if index == 0 else "unknown",
+                "finding_ids": finding_ids if index == 0 else [],
+                "evidence_refs": ["metric:code.analyzed-scope.total"] if index == 0 else [],
+                "limitation": "fixture",
+            } for index, row in enumerate(requirements["checklist_requirements"])]
+    if item.packet.task_type == "selection-fetch" and isinstance(output, dict):
+        requirements_input = item.packet.inputs.get("selection-requirements.json")
+        if requirements_input is not None:
+            requirements = json.loads(requirements_input.content)
+            output = dict(output)
+            output["role_dispositions"] = [{
+                "role_id": row["role_id"], "status": "selected",
+                "selection_ids": [output["selections"][0]["selection_id"]],
+                "note": "fixture",
+            } for row in requirements["roles"]]
     at = now_iso()
     result = TaskResult(
         task_id=item.packet.task_id, status=status, output=output,
@@ -840,7 +909,7 @@ def test_plan_dedup_composes_from_every_validated_lens_output(tmp_path):
     run, _ = _build_run(tmp_path)
     planner.plan_judgment(run)
     validated_lens_ids = _drive_dag_to_completion(run)
-    assert len(validated_lens_ids) == 13  # 8 direct + 5 select-finalized
+    assert len(validated_lens_ids) == 15  # 8 direct + 7 select-finalized
 
     task = planner.plan_dedup(run)
     assert task.task_id == "dedup-rank"
@@ -862,7 +931,7 @@ def test_plan_dedup_survives_a_permanently_failed_lens_shard(tmp_path):
     doomed = sorted(_lens_task_ids(planned))[0]  # a DIRECT lens task
     validated_lens_ids = _drive_dag_to_completion(run, fail_lens_task_ids={doomed})
     assert doomed not in validated_lens_ids
-    assert len(validated_lens_ids) == 12  # 13 - the one permanently failed
+    assert len(validated_lens_ids) == 14  # 15 - the one permanently failed
 
     task = planner.plan_dedup(run)
     assert task.created is True

@@ -184,13 +184,20 @@ def test_cli_full_lifecycle_flow(tmp_path, target, synthetic_repo, capsys):
     assert "next stage: signals" in out
 
     assert main(["status", "--run", run_dir]) == 0  # fresh
-    for stage in ("signals", "findings", "map", "overview"):
+    for stage in ("signals", "findings", "map"):
         assert main(["mark-stage", "--run", run_dir, "--stage", stage]) == 0
+    # Overview is authoritative only after the final audit and pipeline
+    # result agree; a hand-marked checkpoint must not bypass that gate.
+    assert main(["mark-stage", "--run", run_dir, "--stage", "overview"]) == 2
+    run_path = Path(run_dir)
+    (run_path / "tasks").mkdir(exist_ok=True)
+    (run_path / "consistency-audit.json").write_text('{"status": "passed"}', "utf-8")
+    (run_path / "tasks" / "pipeline-timing.json").write_text('{"complete": true}', "utf-8")
+    assert main(["mark-stage", "--run", run_dir, "--stage", "overview"]) == 0
     out = capsys.readouterr().out
     assert "latest_completed" in out
 
     assert main(["accept", "--run", run_dir]) == 0
-    from pathlib import Path
     import json
     state_dirs = list((skill_root / "state").iterdir())
     pointers = json.loads((state_dirs[0] / "pointers.json").read_text())

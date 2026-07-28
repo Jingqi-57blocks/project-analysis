@@ -35,7 +35,7 @@ _ADDED_CANDIDATE_ID = re.compile(
     r"^mc-added-[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _RULE_SELECTOR_FIELDS = {
     "candidate_ids", "repository_refs", "signal_kinds", "values",
-    "value_prefixes", "evidence_path_prefixes", "node_ids",
+    "value_prefixes", "route_path_prefixes", "evidence_path_prefixes", "node_ids",
 }
 _RULE_FIELDS = {
     "rule_id", "selectors", "remaining", "disposition", "module_ids", "reason",
@@ -249,6 +249,14 @@ def _selector_matches(selector: dict, candidate: dict) -> bool:
     if "value_prefixes" in selector and not any(
             value.startswith(prefix) for prefix in string_list("value_prefixes")):
         return False
+    if "route_path_prefixes" in selector:
+        # Route values are stored as ``METHOD /path`` (and mounts may use
+        # USE/GROUP). Path selectors must not be compared to the raw display
+        # value, otherwise a valid `/path` prefix silently matches nothing.
+        _method, _space, route_path = value.partition(" ")
+        if candidate.get("signal_kind") not in {"route", "route-mount"} or not any(
+                route_path.startswith(prefix) for prefix in string_list("route_path_prefixes")):
+            return False
     if "evidence_path_prefixes" in selector and not any(
             path.startswith(prefix)
             for path in _evidence_paths(candidate)

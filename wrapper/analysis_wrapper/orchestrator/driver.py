@@ -164,11 +164,28 @@ def _phase_judgment(state: RunState) -> bool:
 
 def _phase_module_map(state: RunState) -> bool:
     from .. import module_map
+    from . import planner
     outcome = state.phase("module map: write + finalize")
     formation.write(state.run)
     module_map.expand_candidate_rules(state.run)
+    if not formation.apply_boundary_resolution(state.run):
+        planned = planner.plan_boundary_resolution(
+            state.run, context_budget_tokens=state.context_budget_tokens)
+        if planned is not None:
+            outcome.detail = "targeted unresolved-candidate refinement required"
+            if not _drain(state, outcome):
+                outcome.finished_at = time.monotonic()
+                return False
+            if not formation.apply_boundary_resolution(state.run):
+                raise DriverError("boundary-resolution did not validate; cannot finalize module map")
     module_map.validate(state.run)
-    outcome.detail = "zero-omission/zero-overlap gate passed"
+    quality = json.loads(formation.write_quality(
+        state.run, refined=bool(validated_outputs(state.run, task_type="boundary-resolution"))).read_text("utf-8"))
+    if quality.get("status") != "passed":
+        raise DriverError(
+            "module formation remains non-authoritative after targeted refinement: "
+            f"unresolved_ratio={quality.get('unresolved_ratio')}")
+    outcome.detail = "zero-omission/zero-overlap and bounded-unresolved gates passed"
     outcome.finished_at = time.monotonic()
     return True
 
@@ -195,18 +212,34 @@ def _phase_findings(state: RunState) -> bool:
     assembled.write_text(json.dumps(document, ensure_ascii=False, indent=1), "utf-8")
     rekeyed = rekey.rekey(state.run, document)
     tail = rekeyed.get("tail", [])
+    canonical_rows = list(rekeyed.get("rekeyed", []))
     if tail:
-        # The tail is a genuine judgment remainder (a finding whose candidate
-        # was dispositioned excluded/unresolved). It is DISCLOSED, never
-        # dropped and never mechanically guessed onto a neighbouring module.
+        # A tail is a real judgment remainder, not an informational log. It
+        # receives an explicit bounded resolution before any report is allowed
+        # to consume findings.
         outcome.detail = (f"{len(tail)} finding(s) need the nearest-enclosing-module "
                           "judgment pass before finalize")
         state.log(f"  {outcome.detail}")
         (state.run / "tasks" / "rekey-tail.json").write_text(
             json.dumps(tail, ensure_ascii=False, indent=1), "utf-8")
+        resolution = planner.plan_finding_resolution(
+            state.run, tail, context_budget_tokens=state.context_budget_tokens)
+        if resolution is not None:
+            if not _drain(state, outcome):
+                outcome.finished_at = time.monotonic()
+                return False
+        resolved = rekey.apply_resolution(state.run, tail)
+        canonical_rows.extend(resolved["assigned"])
+        remainder_path = state.run / "tasks" / "finding-dispositions.json"
+        remainder_path.write_text(json.dumps(resolved["remainder"], ensure_ascii=False, indent=1), "utf-8")
+        unresolved = [row for row in resolved["remainder"] if row.get("disposition") == "unresolved"]
+        if unresolved:
+            raise DriverError(
+                f"{len(unresolved)} finding-resolution item(s) remain unresolved; "
+                "authoritative completion is blocked")
     (state.run / "findings.json").write_text(json.dumps(
         {"schema_version": document["schema_version"],
-         "findings": rekeyed.get("rekeyed", [])}, ensure_ascii=False, indent=1), "utf-8")
+         "findings": canonical_rows}, ensure_ascii=False, indent=1), "utf-8")
     findings_module.write(state.run)
     outcome.finished_at = time.monotonic()
     return True
@@ -244,14 +277,20 @@ def _phase_reports(state: RunState) -> bool:
 
 def _phase_audit(state: RunState) -> bool:
     from .. import overview_audit
+    from . import consumption, provenance
     outcome = state.phase("audit")
-    path = overview_audit.write(state.run, require_module_map=True, require_reports=True)
+    consumption.write(state.run)
+    provenance.write(state.run)
+    path = overview_audit.write(state.run, require_module_map=True, require_reports=True,
+                                strict_orchestration=True)
     audit = json.loads(Path(path).read_text("utf-8"))
     failed = [check for check in audit.get("checks", []) if check.get("status") == "fail"]
     outcome.detail = (f"{len(failed)} failing check(s)" if failed else "all checks passed")
     state.log(f"  {outcome.detail}")
     outcome.finished_at = time.monotonic()
-    return True
+    # A written audit artifact is not success by itself.  This is the final
+    # fail-closed edge: a failed audit cannot leave a pipeline authoritative.
+    return not failed
 
 
 PHASES: tuple[tuple[str, Callable[[RunState], bool]], ...] = (

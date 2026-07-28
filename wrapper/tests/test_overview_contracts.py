@@ -493,6 +493,17 @@ def test_candidate_rule_selectors_are_structural_and_fail_closed():
         module_map._selector_matches({}, candidate)
 
 
+def test_candidate_route_path_selector_matches_route_path_not_http_method_prefix():
+    candidate = {
+        "candidate_id": "mc-route", "repository_ref": "api", "signal_kind": "route",
+        "value": "GET /items/:id", "evidence": [], "node_ids": ["route:items"],
+    }
+    assert module_map._selector_matches({"route_path_prefixes": ["/items"]}, candidate)
+    assert not module_map._selector_matches({"route_path_prefixes": ["/admin"]}, candidate)
+    non_route = dict(candidate, signal_kind="folder", value="/items")
+    assert not module_map._selector_matches({"route_path_prefixes": ["/items"]}, non_route)
+
+
 def test_valid_module_map_materializes_inferred_nodes_and_lineage(tmp_path):
     run = _prepared(write_run(tmp_path / "run", with_imports=True))
     count = _complete_map(run)
@@ -513,6 +524,16 @@ def test_audit_rejects_misplaced_artifact_and_accepts_canonical_consumption(tmp_
     result = overview_audit.audit(run)
     failed = {row["check"] for row in result["checks"] if row["status"] == "fail"}
     assert "canonical-placement" in failed
+
+
+def test_strict_audit_requires_formation_consumption_and_execution_provenance(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    _complete_map(run)
+    result = overview_audit.audit(run, require_module_map=True, require_reports=True,
+                                  strict_orchestration=True)
+    failed = {row["check"] for row in result["checks"] if row["status"] == "fail"}
+    assert {"module-formation-quality", "validated-result-consumption",
+            "execution-provenance", "report-projection-presence"} <= failed
 
 
 def test_audit_rejects_old_contracts_and_internal_ids_in_readable_evidence(tmp_path):

@@ -103,7 +103,7 @@ from typing import Any, Callable, Mapping
 from .. import identity
 from ..exclusions import is_excluded_relative
 from ..targetspec import RepoTarget, TargetSpec
-from . import templates as tpl
+from . import requirements, templates as tpl
 from .composer import compose, estimate_tokens
 from .contracts import TaskPacket
 from .engine import Engine
@@ -191,6 +191,7 @@ class _LensTaskSpec:
     template: tpl.LensTemplate
     repository_ref: str | None
     task_id: str
+    semantic_partition: str = ""
 
 
 def _lens_task_specs(lens_templates: Mapping[str, tpl.LensTemplate],
@@ -198,6 +199,28 @@ def _lens_task_specs(lens_templates: Mapping[str, tpl.LensTemplate],
     specs: list[_LensTaskSpec] = []
     for lens_id in sorted(lens_templates):
         template = lens_templates[lens_id]
+        # Open-lens used to receive every global universe in one packet and
+        # let the generic composer split only its largest input.  Plan stable
+        # repository-local partitions plus one compact cross-repository
+        # boundary partition instead.  These are semantic responsibilities,
+        # not arbitrary token shards, and global dedup still owns overlap.
+        if lens_id == "open-lens" and template.shard == "workspace":
+            for index, repository_ref in enumerate(
+                    sorted(repo.reference for repo in identities.repositories)):
+                fragment = _repo_fragment(repository_ref)
+                specs.append(_LensTaskSpec(
+                    lens_id=lens_id, template=template, repository_ref=repository_ref,
+                    # Keep the first stable partition's historical task id so
+                    # in-progress runs/tests have a migration path; its packet
+                    # is still repository-local, never the old global universe.
+                    task_id="lens-open-lens" if index == 0
+                    else f"lens-open-lens-partition-{fragment}",
+                    semantic_partition=f"repository:{repository_ref}"))
+            specs.append(_LensTaskSpec(
+                lens_id=lens_id, template=template, repository_ref=None,
+                task_id="lens-open-lens-cross-repository",
+                semantic_partition="cross-repository"))
+            continue
         repo_refs: list[str | None]
         if template.shard == "repo":
             repo_refs = sorted(repo.reference for repo in identities.repositories)
@@ -561,9 +584,15 @@ def _test_ci_evidence_rows(spec: TargetSpec, identities: identity.IdentityMap,
 def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[str, Any],
                  module_candidates_doc: Mapping[str, Any], run_summary: Mapping[str, Any],
                  repository_ref: str | None, *,
-                 test_ci_rows: Mapping[str, dict] | None = None) -> dict[str, str]:
+                 test_ci_rows: Mapping[str, dict] | None = None,
+                 semantic_partition: str = "") -> dict[str, str]:
     inputs: dict[str, str] = {}
-    for row in _matching_signal_rows(run_summary, template.signals, repository_ref):
+    # The cross-repository residual partition consumes only explicit boundary
+    # summaries. Repository partitions account for all relevant raw views, so
+    # copying the full view universe into this one would be duplicate context.
+    signal_rows = [] if semantic_partition == "cross-repository" else _matching_signal_rows(
+        run_summary, template.signals, repository_ref)
+    for row in signal_rows:
         view_path = run / "signals" / str(row["view"])
         try:
             content = view_path.read_text("utf-8", errors="replace")
@@ -587,6 +616,22 @@ def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[s
         inputs[f"signals/{row['view']}"] = content
 
     candidates, candidates_meta = _split_module_candidates(module_candidates_doc, repository_ref)
+    if semantic_partition == "cross-repository":
+        group_counts: dict[tuple[str, str], int] = {}
+        for row in module_candidates_doc.get("candidates", []):
+            key = (str(row.get("repository_ref", "")), str(row.get("signal_kind", "")))
+            group_counts[key] = group_counts.get(key, 0) + 1
+        inputs["cross-partition-boundaries.json"] = json.dumps({
+            "repository_signal_groups": [
+                {"repository_ref": ref, "signal_kind": kind, "candidate_count": count}
+                for (ref, kind), count in sorted(group_counts.items())],
+            "graph_edge_summary": (synthesis_doc.get("graph") or {}).get("edges_by_type_and_status", {}),
+            "route_linkage_summary": (synthesis_doc.get("ui_route_linkage") or {}).get(
+                "calls_by_frontend_repository", {}),
+        }, sort_keys=True)
+        candidates, candidates_meta = [], {"partition": semantic_partition,
+                                           "candidate_count": len(module_candidates_doc.get("candidates", [])),
+                                           "content": "repository-local partitions carry candidate rows"}
     inputs["module-candidates.json"] = json.dumps(candidates, sort_keys=True)
     inputs["module-candidates-meta.json"] = json.dumps(candidates_meta, sort_keys=True)
     inputs["repositories.json"] = json.dumps(
@@ -604,16 +649,43 @@ def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[s
                 continue
             array_name, meta_name, split = _SECTION_SPLITTERS[key]
             array, meta = split(section)
+            if semantic_partition.startswith("repository:"):
+                # Every array-like evidence family has repository-ref rows.
+                # Keep only local evidence and disclose the omitted universe
+                # through counts/boundary metadata rather than copying it.
+                full_count = len(array)
+                array = [row for row in array if isinstance(row, dict)
+                         and row.get("repository_ref") == repository_ref]
+                meta = {"partition": semantic_partition, "included_count": len(array),
+                        "omitted_count": full_count - len(array), "boundary": "other repositories omitted"}
+            elif semantic_partition == "cross-repository":
+                continue
             inputs[array_name] = json.dumps(array, sort_keys=True)
             inputs[meta_name] = json.dumps(meta, sort_keys=True)
 
     if template.lens_id in _TEST_CI_EVIDENCE_LENSES:
         rows_by_ref = test_ci_rows or {}
-        if repository_ref is not None:
+        if semantic_partition == "cross-repository":
+            selected = []
+        elif repository_ref is not None:
             selected = [rows_by_ref[repository_ref]] if repository_ref in rows_by_ref else []
         else:
             selected = [rows_by_ref[ref] for ref in sorted(rows_by_ref)]
         inputs["test-ci-evidence.json"] = json.dumps(selected, sort_keys=True)
+    # Describe the bounded evidence immediately above with stable packet ids.
+    # Submission validation uses this exact artifact rather than a separate,
+    # manually maintained coverage list.
+    inputs["requirements.json"] = json.dumps(
+        requirements.lens_requirements(template.lens_id, inputs), sort_keys=True)
+    if semantic_partition:
+        inputs["semantic-partition.json"] = json.dumps({
+            "partition_id": semantic_partition,
+            "parent_plan": "open-lens",
+            "repository_ref": repository_ref or "",
+            "included_input_ids": sorted(name for name in inputs if name != "requirements.json"),
+        }, sort_keys=True)
+        inputs["requirements.json"] = json.dumps(
+            requirements.lens_requirements(template.lens_id, inputs), sort_keys=True)
     return inputs
 
 
@@ -735,7 +807,8 @@ def plan_judgment(run_dir: str | Path, *,
     for spec in _lens_task_specs(lens_templates, identities):
         template = spec.template
         inputs = _lens_inputs(run, template, synthesis_doc, module_candidates_doc,
-                              run_summary, spec.repository_ref, test_ci_rows=test_ci_rows)
+                              run_summary, spec.repository_ref, test_ci_rows=test_ci_rows,
+                              semantic_partition=spec.semantic_partition)
 
         if template.source_reads:
             # ONLY the select task is composed here -- the real lens-findings
@@ -743,6 +816,8 @@ def plan_judgment(run_dir: str | Path, *,
             # is created later by plan_lens_finalize, once fetch-selections
             # has produced real evidence for it. See the module docstring.
             select_task_id = _select_task_id(spec.task_id)
+            inputs["selection-requirements.json"] = json.dumps(
+                requirements.selection_requirements(spec.lens_id), sort_keys=True)
             select_instructions = tpl.render_selection_instructions(template, shared_body)
             select_version = tpl.content_digest(
                 tpl.selection_fetch_preamble(template.max_selections), shared_body,
@@ -915,6 +990,102 @@ def plan_dedup(run_dir: str | Path, *,
 
 
 # --------------------------------------------------------------------------- #
+# targeted remainders: formation and rekey are explicit judgment work, never
+# a log-only tail that later phases are allowed to ignore.
+# --------------------------------------------------------------------------- #
+
+_BOUNDARY_RESOLUTION_INSTRUCTIONS = """\
+Resolve the explicitly listed unresolved module candidates after first-pass
+formation. Return only JSON matching boundary-resolution.v1:
+{"modules": [...], "dispositions": [...]}. Disposition every supplied
+candidate exactly once. You may add an evidence-supported module, assign a
+candidate to an existing/new module, classify it platform/shared-infrastructure/
+excluded, or retain it unresolved only with a specific evidence-bounded reason.
+Do not rewrite accepted candidates or make a blanket remaining rule.\n"""
+
+_FINDING_RESOLUTION_INSTRUCTIONS = """\
+Resolve every finding that could not be re-keyed to a finalized module. Return
+only JSON matching finding-resolution.v1: {"dispositions": [...]}. Disposition
+every supplied finding exactly once as assigned, duplicate, unsupported, or
+unresolved. Assigned rows name existing module ids. Every outcome needs source
+or signal evidence. Unresolved is an explicit non-authoritative remainder,
+never permission to drop the finding.\n"""
+
+
+def plan_boundary_resolution(run_dir: str | Path, *,
+                             context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS) \
+        -> PlannedTask | None:
+    """Create the one targeted pass required after any first-pass remainder."""
+    from . import formation
+
+    run = Path(run_dir).expanduser().resolve()
+    if validated_outputs(run, task_type="boundary-resolution"):
+        return None
+    unresolved = formation.unresolved_rows(run)
+    if not unresolved:
+        return None
+    document = json.loads((run / "module-map.json").read_text("utf-8"))
+    by_group: dict[tuple[str, str], int] = {}
+    for row in unresolved:
+        key = (str(row.get("repository_ref", "")), str(row.get("signal_kind", "")))
+        by_group[key] = by_group.get(key, 0) + 1
+    inputs = {
+        "unresolved-candidates.json": json.dumps(unresolved, sort_keys=True),
+        "module-map.json": json.dumps({"modules": document.get("modules", []),
+                                        "candidate_dispositions": document.get("candidate_dispositions", [])},
+                                       sort_keys=True),
+        "unresolved-groups.json": json.dumps(
+            [{"repository_ref": repo, "signal_kind": kind, "candidate_count": count}
+             for (repo, kind), count in sorted(by_group.items())], sort_keys=True),
+    }
+    cohesion = run / "cohesion-bundle.json"
+    if cohesion.is_file():
+        inputs["cohesion-bundle.json"] = cohesion.read_text("utf-8")
+    built = compose(
+        task_id="boundary-resolution", template_id="boundary-resolution",
+        template_version=tpl.content_digest(_BOUNDARY_RESOLUTION_INSTRUCTIONS),
+        task_type="boundary-resolution", instructions=_BOUNDARY_RESOLUTION_INSTRUCTIONS,
+        inputs=inputs, output_schema_id="boundary-resolution.v1",
+        context_budget_tokens=context_budget_tokens, depends_on=("formation",))
+    created_ids = set(Engine(run).create_tasks(built))
+    return PlannedTask(task_id="boundary-resolution", task_type="boundary-resolution",
+                       lens_id="", shard="", repository_ref="",
+                       packet_ids=tuple(packet.task_id for packet in built),
+                       estimated_tokens=sum(_packet_tokens(packet) for packet in built),
+                       created=any(packet.task_id in created_ids for packet in built))
+
+
+def plan_finding_resolution(run_dir: str | Path, tail: list[dict], *,
+                            context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS) \
+        -> PlannedTask | None:
+    """Create a bounded disposition task for a non-empty rekey tail."""
+    run = Path(run_dir).expanduser().resolve()
+    if validated_outputs(run, task_type="finding-resolution"):
+        return None
+    if not tail:
+        return None
+    module_doc = json.loads((run / "module-map.json").read_text("utf-8"))
+    inputs = {
+        "rekey-tail.json": json.dumps(tail, sort_keys=True),
+        "module-map.json": json.dumps({"modules": module_doc.get("modules", []),
+                                        "candidate_dispositions": module_doc.get("candidate_dispositions", [])},
+                                       sort_keys=True),
+    }
+    built = compose(
+        task_id="finding-resolution", template_id="finding-resolution",
+        template_version=tpl.content_digest(_FINDING_RESOLUTION_INSTRUCTIONS),
+        task_type="finding-resolution", instructions=_FINDING_RESOLUTION_INSTRUCTIONS,
+        inputs=inputs, output_schema_id="finding-resolution.v1",
+        context_budget_tokens=context_budget_tokens, depends_on=("dedup-rank",))
+    created_ids = set(Engine(run).create_tasks(built))
+    return PlannedTask(task_id="finding-resolution", task_type="finding-resolution",
+                       lens_id="", shard="", repository_ref="",
+                       packet_ids=tuple(packet.task_id for packet in built),
+                       estimated_tokens=sum(_packet_tokens(packet) for packet in built),
+                       created=any(packet.task_id in created_ids for packet in built))
+
+
+# --------------------------------------------------------------------------- #
 # plan_lens_finalize -- phase 2 of the source_reads select/finalize pair
 # --------------------------------------------------------------------------- #
 
@@ -1026,8 +1197,13 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
     test_ci_rows = _test_ci_evidence_rows(target_spec, identities)
 
     inputs = _lens_inputs(run, spec.template, synthesis_doc, module_candidates_doc,
-                          run_summary, spec.repository_ref, test_ci_rows=test_ci_rows)
+                          run_summary, spec.repository_ref, test_ci_rows=test_ci_rows,
+                          semantic_partition=spec.semantic_partition)
     inputs["fetched-evidence.json"] = json.dumps(fetched_evidence, sort_keys=True)
+    # _lens_inputs writes requirements before fetched evidence exists. Rebuild
+    # it so the final analysis task must account for the source excerpts too.
+    inputs["requirements.json"] = json.dumps(
+        requirements.lens_requirements(spec.template.lens_id, inputs), sort_keys=True)
     instructions = tpl.render_instructions(spec.template, shared_body, source_verified=True)
 
     built = compose(

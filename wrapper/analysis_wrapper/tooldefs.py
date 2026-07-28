@@ -33,6 +33,7 @@ GuardFn = Callable[[RepoTarget], str]                       # "" = pass
 DegradeFn = Callable[[RepoTarget, str, int], str]           # "" = complete
 ValidateFn = Callable[[str, int], str]                      # "" = shape ok
 ArgvFn = Callable[[RepoTarget], list[str]]
+CwdFn = Callable[[RepoTarget, Path], Path]
 PreflightFn = Callable[[], str]                             # "" = online/ready
 
 
@@ -73,6 +74,7 @@ class ToolDef:
     reads_declared: list[str] = field(default_factory=list)  # target data files read
     applied_exclusions: list[str] = field(default_factory=list)
     cwd_mode: str = "target"                 # target | output
+    cwd_resolver: CwdFn | None = None         # optional module/root resolver
     preflight: PreflightFn | None = None
     prepare: PrepareFn | None = None         # per-run input generation (given the out dir)
     annotate: AnnotateFn | None = None       # post-run manifest note (metrics)
@@ -119,6 +121,12 @@ class ToolDef:
 
     def build_argv(self, target: RepoTarget) -> list[str]:
         return self.argv_builder(target)
+
+    def working_directory(self, target: RepoTarget, out: Path) -> Path:
+        """Resolve an execution cwd without consulting target-owned code."""
+        if self.cwd_resolver is not None:
+            return self.cwd_resolver(target, out).expanduser().resolve()
+        return Path(target.path).expanduser().resolve() if self.cwd_mode == "target" else out.resolve()
 
     def check_guards(self, target: RepoTarget) -> str:
         for g in self.guards:
