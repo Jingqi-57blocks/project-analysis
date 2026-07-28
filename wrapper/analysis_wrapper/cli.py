@@ -374,6 +374,19 @@ def parser() -> argparse.ArgumentParser:
              "in the current directory by default (override with --report), "
              "instead of the byte-level report -- tolerant of id/wording churn "
              "a migration is expected to cause, flags substance drift only")
+    freeze_acceptance = sub.add_parser(
+        "freeze-acceptance",
+        help="freeze the model-independent prepared inputs and planned task packets "
+             "before an overview model execution")
+    freeze_acceptance.add_argument("--run", required=True, help="prepared, planned overview run")
+    compare_acceptance = sub.add_parser(
+        "compare-acceptance",
+        help="compare frozen acceptance inputs, executor provenance, and semantic output "
+             "without treating a pipeline mismatch as a model-only result")
+    compare_acceptance.add_argument("base", help="first frozen acceptance run")
+    compare_acceptance.add_argument("candidate", help="second frozen acceptance run")
+    compare_acceptance.add_argument("--report", default="",
+                                    help="optional JSON output path")
     next_task = sub.add_parser(
         "next-task",
         help="(orchestrator, 57B-115) claim up to N ready orchestrator tasks; "
@@ -383,6 +396,10 @@ def parser() -> argparse.ArgumentParser:
     next_task.add_argument("--executor-kind", default="manual",
                            help="recorded executor kind (e.g. 'anthropic', 'manual')")
     next_task.add_argument("--model", default="unknown", help="recorded executor model")
+    next_task.add_argument("--effort", default="",
+                           help="actual reasoning effort only when the host exposes it")
+    next_task.add_argument("--temperature", type=float, default=None,
+                           help="actual temperature only when the host exposes it")
     submit_task = sub.add_parser(
         "submit-task",
         help="(orchestrator, 57B-115) submit + validate one orchestrator task result")
@@ -417,6 +434,8 @@ def parser() -> argparse.ArgumentParser:
         "--api-key-env", default="",
         help="env var holding the API key (default: ANTHROPIC_API_KEY / OPENAI_API_KEY)")
     run_executor_cmd.add_argument("--temperature", type=float, default=0.0)
+    run_executor_cmd.add_argument("--effort", default="",
+                                  help="actual reasoning effort when the adapter exposes it")
     run_executor_cmd.add_argument("--max-attempts", type=int, default=3)
     conformance = sub.add_parser(
         "executor-conformance",
@@ -561,6 +580,8 @@ def parser() -> argparse.ArgumentParser:
     run_pipeline_cmd.add_argument("--model", default="", help="executor model id")
     run_pipeline_cmd.add_argument("--base-url", default="", dest="base_url")
     run_pipeline_cmd.add_argument("--api-key-env", default="", dest="api_key_env")
+    run_pipeline_cmd.add_argument("--temperature", type=float, default=0.0)
+    run_pipeline_cmd.add_argument("--effort", default="")
     run_pipeline_cmd.add_argument("--concurrency", type=int, default=4)
     run_pipeline_cmd.add_argument(
         "--context-budget", type=int, default=180000, dest="context_budget",
@@ -628,6 +649,7 @@ def _run_pipeline_cmd(args: argparse.Namespace) -> int:
             run,
             executor=args.executor, adapter=args.adapter, model=args.model,
             base_url=args.base_url, api_key_env=args.api_key_env,
+            temperature=args.temperature, effort=args.effort,
             concurrency=args.concurrency, context_budget_tokens=args.context_budget,
             stop_after=args.stop_after or None, log=print)
     except driver.DriverError as exc:
@@ -1416,6 +1438,35 @@ def _compare_runs(args: argparse.Namespace) -> int:
     return 3 if parity.has_semantic_differences(report) else 0
 
 
+def _freeze_acceptance_cmd(args: argparse.Namespace) -> int:
+    from . import acceptance
+    try:
+        path = acceptance.freeze(Path(args.run).expanduser().resolve())
+        manifest = acceptance.load_manifest(path.parent)
+    except ValueError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    print(f"frozen acceptance manifest: {path}")
+    print(f"manifest digest: {manifest['manifest_digest']}")
+    return 0
+
+
+def _compare_acceptance_cmd(args: argparse.Namespace) -> int:
+    from . import acceptance
+    try:
+        report = acceptance.compare(args.base, args.candidate)
+    except ValueError as exc:
+        print(f"wrapper input error: {exc}", file=sys.stderr)
+        return 2
+    if args.report:
+        Path(args.report).expanduser().resolve().write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", "utf-8")
+        print(f"wrote {args.report}")
+    print(f"classification: {report['classification']}")
+    print(f"input differences: {len(report['input_differences'])}")
+    return 0 if report["classification"] == "model-only" else 3
+
+
 def _next_task(args: argparse.Namespace) -> int:
     from .orchestrator.engine import Engine
     run = Path(args.run).expanduser().resolve()
@@ -1425,7 +1476,15 @@ def _next_task(args: argparse.Namespace) -> int:
               f"{run / 'tasks' / 'ledger.jsonl'} -- create tasks before claiming",
               file=sys.stderr)
         return 6
-    claimed = engine.claim(args.claim, executor_kind=args.executor_kind, model=args.model)
+    params = {}
+    if args.effort:
+        params["effort"] = args.effort
+    if args.temperature is not None:
+        params["temperature"] = args.temperature
+    claimed = engine.claim(args.claim, executor_kind=args.executor_kind,
+                           model=args.model, params=params)
+    from . import acceptance
+    acceptance.write_execution_provenance(run)
     print(json.dumps([{"task": item.packet.to_dict(), "attempt": item.attempt}
                       for item in claimed], indent=2, sort_keys=True))
     return 0
@@ -1450,6 +1509,8 @@ def _submit_task(args: argparse.Namespace) -> int:
     except EngineError as exc:
         print(f"wrapper input error: {exc}", file=sys.stderr)
         return 2
+    from . import acceptance
+    acceptance.write_execution_provenance(run)
     print(json.dumps(outcome, indent=2, sort_keys=True))
     return 0 if outcome["status"] == "validated" else 3
 
@@ -1474,13 +1535,16 @@ def _run_executor_cmd(args: argparse.Namespace) -> int:
     from .orchestrator.executor_api import AdapterConfig, ExecutorError, run_executor
     run = Path(args.run).expanduser().resolve()
     config = AdapterConfig(name=args.adapter, model=args.model, base_url=args.base_url,
-                           api_key_env=args.api_key_env, temperature=args.temperature)
+                           api_key_env=args.api_key_env, temperature=args.temperature,
+                           effort=args.effort)
     try:
         summary = run_executor(run, config, concurrency=args.concurrency,
                                max_attempts=args.max_attempts)
     except ExecutorError as exc:
         print(f"wrapper executor error: {exc}", file=sys.stderr)
         return 4
+    from . import acceptance
+    acceptance.write_execution_provenance(run)
     print(f"validated: {len(summary['validated'])}, failed: {len(summary['failed'])}")
     for task_id in summary["failed"]:
         print(f"  failed: {task_id}")
@@ -1515,6 +1579,13 @@ def _plan_judgment_cmd(args: argparse.Namespace) -> int:
     except planner.PlannerError as exc:
         print(f"wrapper input error: {exc}", file=sys.stderr)
         return 2
+    if (run / "run-provenance.json").is_file():
+        from . import acceptance
+        try:
+            acceptance.freeze(run)
+        except ValueError as exc:
+            print(f"wrapper input error: cannot freeze acceptance inputs: {exc}", file=sys.stderr)
+            return 2
     for task in planned:
         detail = f", lens={task.lens_id}, shard={task.shard}" if task.lens_id else ""
         shard_note = f", {len(task.packet_ids)} packet(s)" if len(task.packet_ids) > 1 else ""
@@ -1623,6 +1694,10 @@ def main(argv: list[str] | None = None) -> int:
             return _export(args)
         if args.command == "compare-runs":
             return _compare_runs(args)
+        if args.command == "freeze-acceptance":
+            return _freeze_acceptance_cmd(args)
+        if args.command == "compare-acceptance":
+            return _compare_acceptance_cmd(args)
         if args.command == "next-task":
             return _next_task(args)
         if args.command == "submit-task":

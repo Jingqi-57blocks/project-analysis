@@ -125,6 +125,16 @@ def _phase_judgment(state: RunState) -> bool:
 
     outcome = state.phase("judgment: plan")
     planner.plan_judgment(state.run, context_budget_tokens=state.context_budget_tokens)
+    # A prepared production run has deterministic inputs and a complete first
+    # packet wave at this exact point, before _drain can hand any packet to a
+    # model. Synthetic protocol tests intentionally omit run provenance and
+    # therefore remain outside the acceptance-artifact contract.
+    if (state.run / "run-provenance.json").is_file():
+        from .. import acceptance
+        try:
+            acceptance.freeze(state.run)
+        except ValueError as exc:
+            raise DriverError(f"cannot freeze acceptance inputs: {exc}") from exc
     outcome.finished_at = time.monotonic()
 
     outcome = state.phase("judgment: execute selects and lenses")
@@ -337,6 +347,7 @@ PHASES: tuple[tuple[str, Callable[[RunState], bool]], ...] = (
 def run_pipeline(run_dir: str | Path, *, executor: str = "host",
                  adapter: str = "anthropic", model: str = "",
                  base_url: str = "", api_key_env: str = "",
+                 temperature: float = 0.0, effort: str = "",
                  concurrency: int = 4, context_budget_tokens: int = 180_000,
                  stop_after: str | None = None,
                  log: Log = print) -> dict[str, Any]:
@@ -363,7 +374,8 @@ def run_pipeline(run_dir: str | Path, *, executor: str = "host",
     if executor == "api":
         from .executor_api import AdapterConfig, ExecutorError, preflight
         state.executor_config = AdapterConfig(
-            name=adapter, model=model, base_url=base_url, api_key_env=api_key_env)
+            name=adapter, model=model, base_url=base_url, api_key_env=api_key_env,
+            temperature=temperature, effort=effort)
         try:
             preflight(state.executor_config)
         except ExecutorError as exc:
@@ -397,4 +409,6 @@ def run_pipeline(run_dir: str | Path, *, executor: str = "host",
     (run / "tasks" / "pipeline-timing.json").parent.mkdir(parents=True, exist_ok=True)
     (run / "tasks" / "pipeline-timing.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", "utf-8")
+    from .. import acceptance
+    acceptance.write_execution_provenance(run)
     return {"complete": complete, "summary": summary, "state": state}
