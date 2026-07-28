@@ -46,6 +46,7 @@ _TEXT = {
         "repositories": "Repositories and observed responsibilities", "relationships": "Recovered relationships",
         "dispositions": "Frontier disposition", "limitations": "Coverage limits", "claim_index": "Claim index",
         "unresolved": "Open or blocked frontiers", "none": "None", "closed": "closed", "open": "open", "blocked": "blocked",
+        "canonical_model": "Canonical source model", "canonical_model_note": "The complete node and relationship evidence is retained in `evidence/module-model.json`; this document shows a compact, grouped index.",
         "observed": "observed", "inferred": "inferred", "unresolved_observation": "unresolved",
         "observations": {"observed": "observed", "inferred": "inferred", "unresolved": "unresolved"},
         "dimensions": {
@@ -67,6 +68,7 @@ _TEXT = {
         },
         "generated_limits": {
             "no feature-local provider evidence was observed": "no feature-local provider evidence was observed",
+            "feature-local provider evidence was observed but no source-verified semantic claim was recovered": "feature-local provider evidence was observed but no source-verified semantic claim was recovered",
             "exact observed UI-to-route graph edge": "exact observed UI-to-route graph edge",
             "exact observed route-to-handler graph edge": "exact observed route-to-handler graph edge",
             "direct observed source anchor is the bounded semantic recovery unit; no exact call edge was observed": "a direct source anchor is the bounded semantic recovery unit; no exact call edge was observed",
@@ -103,6 +105,7 @@ _TEXT = {
         "no_data": "现有证据没有形成已最终确认的持久化声明。", "repositories": "仓库与观察到的职责",
         "relationships": "已恢复的关系", "dispositions": "前沿处置", "limitations": "覆盖限制",
         "claim_index": "声明索引", "unresolved": "未解决或受阻的前沿", "none": "无", "closed": "已闭合",
+        "canonical_model": "规范化源码模型", "canonical_model_note": "完整的节点与关系证据保存在 `evidence/module-model.json`；本文仅展示紧凑的分组索引。",
         "open": "未闭合", "blocked": "受阻", "observed": "已观察", "inferred": "推断", "unresolved_observation": "未解决",
         "observations": {"observed": "已观察", "inferred": "推断", "unresolved": "未解决"},
         "dimensions": {
@@ -124,6 +127,7 @@ _TEXT = {
         },
         "generated_limits": {
             "no feature-local provider evidence was observed": "没有观察到该功能范围内的提供方证据",
+            "feature-local provider evidence was observed but no source-verified semantic claim was recovered": "观察到该功能范围内的提供方证据，但没有恢复出经源码验证的语义声明",
             "exact observed UI-to-route graph edge": "已观察到精确的界面到路由关系",
             "exact observed route-to-handler graph edge": "已观察到精确的路由到处理器关系",
             "direct observed source anchor is the bounded semantic recovery unit; no exact call edge was observed": "直接观察到的源码锚点是有界语义恢复单元；未观察到精确调用边",
@@ -291,22 +295,38 @@ def _flow_edges(model: ModuleModel) -> tuple[FeatureEdge, ...]:
     return tuple(ordered)
 
 
+def _display_edge_groups(model: ModuleModel, text: dict[str, Any], edges: Iterable[FeatureEdge]) -> tuple[tuple[str, str, str, tuple[str, ...]], ...]:
+    """Collapse visually identical graph links without discarding evidence.
+
+    The canonical feature graph retains one edge per observed relation for
+    audit. A reader-facing document instead groups links with the same
+    rendered endpoints and keeps the union of their source references.
+    """
+    nodes = {node.node_id: node for node in model.nodes}
+    claims_by_anchor = _claims_by_anchor(model)
+    grouped: dict[tuple[str, str, str], list[FeatureEdge]] = defaultdict(list)
+    for edge in edges:
+        source = _node_label(nodes[edge.source_node_id], claims_by_anchor, text)
+        target = _node_label(nodes[edge.target_node_id], claims_by_anchor, text)
+        grouped[(edge.kind, source, target)].append(edge)
+    return tuple((kind, source, target, tuple(sorted({ref for edge in rows for ref in edge.evidence_refs})))
+                 for (kind, source, target), rows in sorted(grouped.items()))
+
+
 def _mermaid(model: ModuleModel, text: dict[str, Any]) -> str:
     """Draw only explicitly finalized flow edges, never the whole closure graph."""
     edges = _flow_edges(model)
     if not edges:
         return ""
-    nodes = {node.node_id: node for node in model.nodes}
-    claims_by_anchor = _claims_by_anchor(model)
-    used_ids = sorted({edge.source_node_id for edge in edges} | {edge.target_node_id for edge in edges})
+    groups = _display_edge_groups(model, text, edges)
+    labels = sorted({label for _, source, target, _ in groups for label in (source, target)})
     lines = ["```mermaid", "flowchart LR"]
-    for index, node_id in enumerate(used_ids, start=1):
-        node = nodes[node_id]
-        label = _node_label(node, claims_by_anchor, text).replace("\\", "\\\\").replace('"', "'").replace("\n", " ")
+    for index, value in enumerate(labels, start=1):
+        label = value.replace("\\", "\\\\").replace('"', "'").replace("\n", " ")
         lines.append(f'  n{index}["{label}"]')
-    aliases = {node_id: f"n{index}" for index, node_id in enumerate(used_ids, start=1)}
-    for edge in edges:
-        lines.append(f"  {aliases[edge.source_node_id]} -->|{_structured_label(text, 'edge_kinds', edge.kind)}| {aliases[edge.target_node_id]}")
+    aliases = {value: f"n{index}" for index, value in enumerate(labels, start=1)}
+    for kind, source, target, _ in groups:
+        lines.append(f"  {aliases[source]} -->|{_structured_label(text, 'edge_kinds', kind)}| {aliases[target]}")
     return "\n".join(lines) + "\n```\n"
 
 
@@ -321,10 +341,12 @@ def _flow_rows(model: ModuleModel, text: dict[str, Any]) -> list[list[str]]:
         refs: list[str] = []
         for edge_id in flow.edge_ids:
             edge = edges[edge_id]
-            steps.append(
+            step = (
                 f"{_node_label(nodes[edge.source_node_id], claims_by_anchor, text)} → "
                 f"{_node_label(nodes[edge.target_node_id], claims_by_anchor, text)} "
                 f"({_structured_label(text, 'edge_kinds', edge.kind)})")
+            if step not in steps:
+                steps.append(step)
         related_claims = [claims_by_id[claim_id] for claim_id in flow.claim_ids if claim_id in claims_by_id]
         refs.extend(ref for claim in related_claims for ref in claim.evidence_refs)
         claim_refs = [f"`{claim.claim_id}`" for claim in related_claims]
@@ -413,16 +435,11 @@ def _report_architecture(model: ModuleModel, text: dict[str, Any]) -> str:
     ])
     body += "\n" + _heading(2, text["relationships"])
     flow_edge_ids = {edge.edge_id for edge in _flow_edges(model)}
-    claims_by_anchor = _claims_by_anchor(model)
     visible_edges = [edge for edge in model.edges if edge.edge_id in flow_edge_ids]
     if visible_edges:
-        node_by_id = {node.node_id: node for node in model.nodes}
         body += _table(_headers(text, "relationship", "from", "to", "evidence"), [
-            [_structured_label(text, "edge_kinds", edge.kind),
-             _node_label(node_by_id[edge.source_node_id], claims_by_anchor, text),
-             _node_label(node_by_id[edge.target_node_id], claims_by_anchor, text),
-             _brief_refs(edge.evidence_refs, text)]
-            for edge in visible_edges
+            [_structured_label(text, "edge_kinds", kind), source, target, _brief_refs(refs, text)]
+            for kind, source, target, refs in _display_edge_groups(model, text, visible_edges)
         ])
     else:
         body += text["no_flows"] + "\n"
@@ -485,16 +502,28 @@ def _report_evidence(model: ModuleModel, provenance: dict[str, Any], text: dict[
         ] for item in unresolved])
     else:
         body += text["none"] + "\n"
+    body += "\n" + _heading(2, text["canonical_model"])
+    body += text["canonical_model_note"] + "\n"
+    node_groups: dict[tuple[str, str, str], list[FeatureNode]] = defaultdict(list)
+    for node in model.nodes:
+        node_groups[(node.repository_ref, node.kind, node.observation)].append(node)
     body += "\n" + _heading(2, text["nodes"])
-    body += _table(_headers(text, "id", "repository", "kind", "observation", "evidence"), [[
-        node.node_id, node.repository_ref, _structured_label(text, "node_kinds", node.kind),
-        text["observations"].get(node.observation, node.observation), _refs(node.evidence_refs)
-    ] for node in model.nodes])
+    body += _table(_headers(text, "repository", "kind", "observation", "count", "evidence"), [[
+        repository, _structured_label(text, "node_kinds", kind),
+        text["observations"].get(observation, observation), len(nodes),
+        _brief_refs((ref for node in nodes for ref in node.evidence_refs), text),
+    ] for (repository, kind, observation), nodes in sorted(node_groups.items())])
+    edge_groups: dict[tuple[str, str, str, str], list[FeatureEdge]] = defaultdict(list)
+    nodes_by_id = {node.node_id: node for node in model.nodes}
+    for edge in model.edges:
+        edge_groups[(edge.kind, nodes_by_id[edge.source_node_id].repository_ref,
+                     nodes_by_id[edge.target_node_id].repository_ref, edge.observation)].append(edge)
     body += "\n" + _heading(2, text["edges"])
-    body += _table(_headers(text, "id", "kind", "from", "to", "observation", "evidence"), [[
-        edge.edge_id, _structured_label(text, "edge_kinds", edge.kind), edge.source_node_id, edge.target_node_id,
-        text["observations"].get(edge.observation, edge.observation), _refs(edge.evidence_refs)
-    ] for edge in model.edges])
+    body += _table(_headers(text, "relationship", "from", "to", "observation", "count", "evidence"), [[
+        _structured_label(text, "edge_kinds", kind), source, target,
+        text["observations"].get(observation, observation), len(edges),
+        _brief_refs((ref for edge in edges for ref in edge.evidence_refs), text),
+    ] for (kind, source, target, observation), edges in sorted(edge_groups.items())])
     return body
 
 

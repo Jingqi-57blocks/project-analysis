@@ -56,6 +56,18 @@ def test_render_projects_each_finalized_category_into_stable_markdown(tmp_path):
     assert "node-" not in architecture
 
 
+def test_evidence_report_keeps_a_compact_index_and_points_to_the_canonical_model(tmp_path):
+    module_run = _ready(tmp_path)
+    assert finalize(module_run)[1].passed
+    _add_claim_and_flow(module_run)
+
+    evidence = render(module_run)["details/evidence-and-unknowns.md"].read_text()
+
+    assert "Canonical source model" in evidence
+    assert "`evidence/module-model.json`" in evidence
+    assert "node-" not in evidence
+
+
 def test_render_localizes_presentation_without_translating_source_claim_values(tmp_path):
     module_run = _ready(tmp_path)
     assert finalize(module_run)[1].passed

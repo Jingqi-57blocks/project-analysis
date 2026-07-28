@@ -182,10 +182,23 @@ def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc
 
     sync_status = status(sync_outputs)
     async_status = status((async_doc["output"],))
-    async_kinds = {
-        row.get("boundary_kind") for row in async_doc.get("requirements", {}).get("requirements", [])
+    boundary_requirements = tuple(
+        row for row in async_doc.get("requirements", {}).get("requirements", [])
         if isinstance(row, dict)
-    }
+    )
+
+    def boundary_refs(*, kinds: set[str] = set(), async_only: bool = False) -> tuple[str, ...]:
+        """Use only non-excluded, feature-local boundary requirements.
+
+        ``feature-boundary-closure`` intentionally retains every observed
+        graph node for audit.  A node that was excluded from the bounded
+        semantic frontier must not make configuration, integration, or async
+        coverage look complete merely because it exists in that graph.
+        """
+        return tuple(sorted({ref for row in boundary_requirements
+                             if (not kinds or row.get("boundary_kind") in kinds)
+                             and (not async_only or row.get("async_role") != "not-applicable")
+                             for ref in row.get("evidence_refs", []) if isinstance(ref, str) and ref}))
     node_refs_by_kind: dict[str, tuple[str, ...]] = {}
     for node in nodes:
         node_refs_by_kind.setdefault(node.kind, tuple())
@@ -210,19 +223,45 @@ def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc
         return CoverageStatus(Coverage("applicable", lane_status,
                                        tuple(sorted(set(provider_refs) | set(semantic_refs))), ()), closure, ())
 
+    async_refs = boundary_refs(async_only=True)
+    async_claim_refs = claim_refs(kinds={"async-effect", "scheduler", "event", "queue", "notification"})
+    if not async_refs:
+        async_coverage = Coverage(
+            "unknown", "unavailable", (),
+            ("no feature-local asynchronous boundary was observed",))
+    elif not async_claim_refs:
+        async_coverage = Coverage(
+            "applicable", "partial", async_refs,
+            ("feature-local provider evidence was observed but no source-verified semantic claim was recovered",))
+    else:
+        async_coverage = Coverage(
+            "applicable", async_status, tuple(sorted(set(async_refs) | set(async_claim_refs))), ())
     dimensions: dict[str, CoverageStatus] = {
         "synchronous-behavior": CoverageStatus(Coverage("applicable", sync_status, (), ()), closure, ()),
-        "asynchronous-behavior": CoverageStatus(Coverage(
-            "applicable" if async_kinds else "unknown", async_status if async_kinds else "unavailable", (),
-            () if async_kinds else ("no feature-local asynchronous boundary was observed",)), closure, ()),
+        "asynchronous-behavior": CoverageStatus(async_coverage, closure, ()),
     }
-    dimensions["configuration"] = dimension(
-        node_kinds={"configuration"}, claim_kinds={"configuration"},
-        lane_status=async_status,
+
+    def boundary_dimension(*, kinds: set[str], claim_kinds: set[str] = set(),
+                           claim_roles: set[str] = set()) -> CoverageStatus:
+        refs = boundary_refs(kinds=kinds)
+        semantic_refs = claim_refs(kinds=claim_kinds, roles=claim_roles)
+        if not refs:
+            return CoverageStatus(Coverage(
+                "unknown", "unavailable", (),
+                ("no feature-local provider evidence was observed",)), closure, ())
+        if not semantic_refs:
+            return CoverageStatus(Coverage(
+                "applicable", "partial", refs,
+                ("feature-local provider evidence was observed but no source-verified semantic claim was recovered",)), closure, ())
+        return CoverageStatus(Coverage(
+            "applicable", async_status, tuple(sorted(set(refs) | set(semantic_refs))), ()), closure, ())
+
+    dimensions["configuration"] = boundary_dimension(
+        kinds={"configuration"}, claim_kinds={"configuration"},
     )
-    dimensions["integration"] = dimension(
-        node_kinds={"integration-host", "integration-package"}, claim_kinds={"integration"},
-        claim_roles={"integration"}, lane_status=async_status,
+    dimensions["integration"] = boundary_dimension(
+        kinds={"integration-host", "integration-package"}, claim_kinds={"integration"},
+        claim_roles={"integration"},
     )
     dimensions["data"] = dimension(
         node_kinds={"datastore"}, claim_kinds={"persistence-effect"}, claim_roles={"persistence"},
@@ -237,7 +276,10 @@ def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc
         for seed_id in candidate.seed_ids
     }
     selected_ui = any(seed.kind == "ui-action" and seed.seed_id in selected_seed_ids for seed in scope.seeds)
-    ui_claim_refs = claim_refs(kinds={"ui-visibility"}, roles={"trigger", "effect"})
+    # Only a UI-visibility claim can complete the UI dimension.  Generic
+    # effect/trigger support may describe a route, configuration, or data
+    # boundary and must not accidentally certify a UI entry.
+    ui_claim_refs = claim_refs(kinds={"ui-visibility"})
     ui_node_refs = node_refs_by_kind.get("ui-action", ())
     if selected_ui and ui_node_refs and ui_claim_refs:
         dimensions["ui-entry"] = CoverageStatus(Coverage(

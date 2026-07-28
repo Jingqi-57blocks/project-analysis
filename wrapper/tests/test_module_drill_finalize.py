@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from analysis_wrapper.cli import main
 from analysis_wrapper.module_drill.async_recovery import build_packet as async_packet
@@ -10,7 +11,7 @@ from analysis_wrapper.module_drill.async_recovery import finalize as finalize_as
 from analysis_wrapper.module_drill.boundary_closure import write as write_boundary_closure
 from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.driver import ModuleDriver
-from analysis_wrapper.module_drill.finalize import finalize
+from analysis_wrapper.module_drill.finalize import _coverage, finalize
 from analysis_wrapper.module_drill.frontier_candidates import write as write_candidates
 from analysis_wrapper.module_drill.graph_closure import write as write_graph_closure
 from analysis_wrapper.module_drill.span_fetch import write as write_spans
@@ -28,6 +29,39 @@ def _no_concern(packet, name):
         {"requirement_id": row["requirement_id"], "outcome": "no-concern-observed",
          "claim_ids": [], "evidence_refs": row["evidence_refs"], "reason": ""}
         for row in requirements], "claims": [], "flows": []}
+
+
+def _async_output(packet):
+    """Give the happy-path fixture claims for applicable boundary dimensions."""
+    requirements = json.loads(packet.inputs["async-requirements.json"].content)["requirements"]
+    graph = json.loads(packet.inputs["feature-boundary-closure.json"].content)
+    anchors = {row["node_id"] for row in graph["nodes"]} | {row["edge_id"] for row in graph["edges"]}
+    claims = []
+    dispositions = []
+    for index, row in enumerate(requirements):
+        kind = row.get("boundary_kind")
+        claim_ids = []
+        claim_kind, operation, role = {
+            "configuration": ("configuration", "configures", "effect"),
+            "integration-host": ("integration", "invokes", "integration"),
+            "integration-package": ("integration", "invokes", "integration"),
+            "async-boundary": ("async-effect", "emits", "effect"),
+        }.get(kind, ("", "", ""))
+        local_anchors = [item for item in row["anchor_ids"] if item in anchors]
+        if claim_kind and local_anchors:
+            claim_id = f"claim-boundary-{index}"
+            claims.append({
+                "claim_id": claim_id, "kind": claim_kind, "anchor_ids": local_anchors[:1],
+                "support": [{"ref": row["evidence_refs"][0], "role": role}],
+                "subject": f"{kind} boundary {index}", "operation": operation, "value": kind,
+            })
+            claim_ids = [claim_id]
+        dispositions.append({
+            "requirement_id": row["requirement_id"],
+            "outcome": "claimed" if claim_ids else "no-concern-observed",
+            "claim_ids": claim_ids, "evidence_refs": row["evidence_refs"], "reason": "",
+        })
+    return {"dispositions": dispositions, "claims": claims, "flows": []}
 
 
 def _sync_output(packet, *, outcome="no-concern-observed", include_ui_claim=True):
@@ -97,7 +131,7 @@ def _ready(tmp_path, *, sync_outcome="no-concern-observed", include_ui_claim=Tru
     finalize_sync(module_run)
     async_task = async_packet(load(module_run))
     register_async(module_run)
-    _submit(driver, async_task, _no_concern(async_task, "async-requirements.json"))
+    _submit(driver, async_task, _async_output(async_task))
     finalize_async(module_run)
     return module_run
 
@@ -174,6 +208,27 @@ def test_finalization_marks_observed_datastore_as_applicable_not_unavailable(tmp
     assert data["applicability"] == "applicable"
     assert data["status"] == "complete"
     assert data["positive_evidence_refs"]
+
+
+def test_non_async_boundary_does_not_mark_async_coverage_complete(tmp_path):
+    async_doc = {
+        "requirements": {"requirements": [{
+            "boundary_kind": "access-check", "async_role": "not-applicable",
+            "evidence_refs": ["service@NON-GIT:src/app.ts:1"],
+        }]},
+        "output": {"dispositions": [{"outcome": "no-concern-observed"}]},
+    }
+    dimensions = _coverage(
+        SimpleNamespace(candidates=(), seeds=()), (), async_doc, "closed", nodes=(), claims=(),
+    )
+    asynchronous = dimensions["asynchronous-behavior"].coverage.to_dict()
+    assert asynchronous["applicability"] == "unknown"
+    assert asynchronous["status"] == "unavailable"
+    assert "no feature-local asynchronous boundary was observed" in asynchronous["limitations"]
+    for name in ("configuration", "integration"):
+        coverage = dimensions[name].coverage.to_dict()
+        assert coverage["applicability"] == "unknown"
+        assert coverage["status"] == "unavailable"
 
 
 def test_selected_ui_action_without_a_semantic_claim_fails_closed(tmp_path):
