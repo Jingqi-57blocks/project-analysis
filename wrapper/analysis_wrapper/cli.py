@@ -1147,10 +1147,13 @@ def _rekey_findings(args: argparse.Namespace) -> int:
 
 def _audit_overview(args: argparse.Namespace) -> int:
     from . import overview_audit
+    from .orchestrator import consumption
     run = Path(args.run).expanduser().resolve()
     if (run / "run-state.json").is_file():
         _assert_fresh_run(run)
-    out = overview_audit.write(run, require_module_map=True, require_reports=True)
+    consumption.write(run)
+    out = overview_audit.write(run, require_module_map=True, require_reports=True,
+                               require_final=True)
     result = _load_object(out)
     print(f"audit: {result['status']} ({result['failed_count']} failed checks)")
     for row in result["checks"]:
@@ -1215,6 +1218,16 @@ def _lifecycle_cmd(args: argparse.Namespace) -> int:
         if stale:
             raise ValueError("run is stale; mint a new run: " + "; ".join(stale))
     if args.command == "mark-stage":
+        if args.stage == "overview":
+            from . import overview_audit
+            audit_path = run_dir / "consistency-audit.json"
+            if not audit_path.is_file():
+                raise ValueError("overview requires a current successful final audit; run audit-overview first")
+            audit_doc = _load_object(audit_path)
+            expected = overview_audit.audit(
+                run_dir, require_module_map=True, require_reports=True, require_final=True)
+            if audit_doc != expected or audit_doc.get("status") != "passed":
+                raise ValueError("overview requires a current successful final audit; run audit-overview again")
         state.mark(args.stage)
         state.save(run_dir)
         if args.stage == "overview":

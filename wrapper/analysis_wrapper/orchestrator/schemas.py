@@ -469,6 +469,66 @@ def _validate_boundary_resolution(obj: Any) -> list[Failure]:
     return failures.rows
 
 
+_TERMINAL_FINDING_DISPOSITIONS = {
+    "consumed", "evidence-backed-no-finding", "partial", "failed",
+}
+
+
+def _validate_rekey_resolution(obj: Any) -> list[Failure]:
+    """Finite terminal outcomes for findings that cannot be mechanically re-keyed."""
+    failures = _Failures()
+    if not isinstance(obj, dict):
+        failures.add("output-shape", "rekey-resolution output must be an object")
+        return failures.rows
+    rows = obj.get("dispositions")
+    if not failures.require(isinstance(rows, list) and bool(rows), "rekey-dispositions-shape",
+                            "dispositions must be a non-empty list", "dispositions"):
+        return failures.rows
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        location = f"dispositions[{index}]"
+        if not isinstance(row, dict):
+            failures.add("rekey-disposition-shape", "disposition must be an object", location)
+            continue
+        finding_id = row.get("finding_id")
+        failures.require(_one_line_str(finding_id), "rekey-finding-id",
+                         "finding_id must be one non-empty line", f"{location}.finding_id")
+        if isinstance(finding_id, str):
+            failures.require(finding_id not in seen, "rekey-finding-id-unique",
+                             f"duplicate finding_id: {finding_id}", f"{location}.finding_id")
+            seen.add(finding_id)
+        disposition = row.get("disposition")
+        failures.require(disposition in _TERMINAL_FINDING_DISPOSITIONS,
+                         "rekey-terminal-disposition",
+                         "disposition must be one of " + ", ".join(sorted(_TERMINAL_FINDING_DISPOSITIONS)),
+                         f"{location}.disposition")
+        module_ids = row.get("module_ids")
+        if failures.require(_string_list(module_ids), "rekey-module-ids",
+                            "module_ids must be a string list", f"{location}.module_ids"):
+            if disposition == "consumed":
+                failures.require(bool(module_ids), "rekey-consumed-module",
+                                 "consumed finding needs at least one finalized module", f"{location}.module_ids")
+            elif module_ids:
+                failures.add("rekey-terminal-module-ids",
+                             "only consumed finding may list module_ids", f"{location}.module_ids")
+        failures.require(_one_line_str(row.get("reason_code")), "rekey-reason-code",
+                         "reason_code must be one non-empty line", f"{location}.reason_code")
+        refs = row.get("evidence_refs")
+        if failures.require(_string_list(refs, allow_empty=False), "rekey-evidence-refs",
+                            "evidence_refs must be a non-empty string list", f"{location}.evidence_refs"):
+            if any(citation_grammar_kind(ref) is None for ref in refs):
+                failures.add("rekey-evidence-ref-grammar", "evidence_refs contain an invalid citation",
+                             f"{location}.evidence_refs")
+        impact = row.get("coverage_impact", "")
+        if disposition in {"partial", "failed"}:
+            failures.require(_one_line_str(impact), "rekey-coverage-impact",
+                             "partial/failed finding needs a Coverage impact", f"{location}.coverage_impact")
+        elif impact and not _one_line_str(impact):
+            failures.add("rekey-coverage-impact", "coverage_impact must be one non-empty line",
+                         f"{location}.coverage_impact")
+    return failures.rows
+
+
 # --------------------------------------------------------------------------- #
 # dedup-rank
 # --------------------------------------------------------------------------- #
@@ -795,6 +855,7 @@ _VALIDATORS: dict[str, Callable[[Any], list[Failure]]] = {
     "lens-findings": _validate_lens_findings,
     "formation-proposal": _validate_formation_proposal,
     "boundary-resolution": _validate_boundary_resolution,
+    "rekey-resolution": _validate_rekey_resolution,
     "dedup-rank": _validate_dedup_rank,
     "section-generate": _validate_section_generate,
     "repair-edit-ops": _validate_repair_edit_ops,
@@ -1173,6 +1234,46 @@ def _crosscheck_boundary_resolution(obj: Any,
                     seen.add(module_id)
     return failures.rows
 
+
+def _crosscheck_rekey_resolution(obj: Any,
+                                 packet_inputs: Mapping[str, str]) -> list[Failure]:
+    """A repair packet must disposition exactly its supplied rekey tail."""
+    raw = packet_inputs.get("rekey-tail.json")
+    if raw is None:
+        return []
+    try:
+        tail = json.loads(raw)
+    except ValueError:
+        return [{"check": "rekey-tail-json", "detail": "rekey-tail.json is not valid JSON",
+                 "location": "rekey-tail.json"}]
+    if not isinstance(tail, list):
+        return [{"check": "rekey-tail-shape", "detail": "rekey-tail.json must be a list",
+                 "location": "rekey-tail.json"}]
+    expected = {row.get("finding_id") for row in tail if isinstance(row, dict)}
+    rows = obj.get("dispositions") if isinstance(obj, dict) else None
+    if not isinstance(rows, list):
+        return []
+    actual = [row.get("finding_id") for row in rows if isinstance(row, dict)]
+    failures = _Failures()
+    if len(actual) != len(rows) or len(set(actual)) != len(actual) or set(actual) != expected:
+        failures.add("rekey-tail-exact-accounting",
+                     "dispositions must account for every supplied tail finding exactly once",
+                     "dispositions")
+    tail_by_id = {row.get("finding_id"): row for row in tail if isinstance(row, dict)}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        refs = row.get("evidence_refs", [])
+        source_refs = {
+            ref for evidence in tail_by_id.get(row.get("finding_id"), {}).get("evidence", [])
+            if isinstance(evidence, dict) for ref in evidence.get("refs", [])
+        }
+        if source_refs and not set(refs) & source_refs:
+            failures.add("rekey-evidence-provenance",
+                         "terminal disposition must retain exact evidence from the tail finding",
+                         f"dispositions[{index}].evidence_refs")
+    return failures.rows
+
 def _crosscheck_dedup_rank(obj: Any, packet_inputs: Mapping[str, str]) -> list[Failure]:
     raw = packet_inputs.get("input-finding-ids.json")
     if raw is None:
@@ -1252,6 +1353,7 @@ _CROSSCHECKS: dict[str, Callable[[Any, Mapping[str, str]], list[Failure]]] = {
     "selection-fetch": _crosscheck_selection_requirements,
     "formation-proposal": _crosscheck_formation_partitions,
     "boundary-resolution": _crosscheck_boundary_resolution,
+    "rekey-resolution": _crosscheck_rekey_resolution,
     "dedup-rank": _crosscheck_dedup_rank,
     "section-generate": _crosscheck_section_generate,
 }

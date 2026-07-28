@@ -70,7 +70,15 @@ def _collect_pool(run: Path) -> dict[str, dict]:
                     f"{produced_by[finding_id]!r} and {task_id!r} -- lens "
                     "finding_ids must be globally unique across this run")
             produced_by[finding_id] = task_id
-            pool[finding_id] = row
+            # Stable lineage starts at the submitted lens finding.  It is
+            # carried through dedup/rekey unchanged so final audit can trace
+            # a canonical finding back to its exact ledger generation.
+            pooled = dict(row)
+            pooled["lineage"] = {
+                "source_finding_ids": [finding_id],
+                "source_task_ids": [task_id],
+            }
+            pool[finding_id] = pooled
     return pool
 
 
@@ -152,6 +160,13 @@ def _assembled_row(survivor_id: str, pool: dict[str, dict],
         "limitations": limitations,
         "suggested_direction": survivor["suggested_direction"],
         "changeability_question": survivor["changeability_question"],
+        "lineage": {
+            "source_finding_ids": [survivor_id, *absorbed_ids],
+            "source_task_ids": sorted({task_id for finding_id in [survivor_id, *absorbed_ids]
+                                        for task_id in pool[finding_id].get("lineage", {}).get(
+                                            "source_task_ids", [])}),
+            "dedup_survivor_id": survivor_id,
+        },
     }
 
 
