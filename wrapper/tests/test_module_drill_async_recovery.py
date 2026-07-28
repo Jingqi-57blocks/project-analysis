@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from analysis_wrapper.cli import main
-from analysis_wrapper.module_drill.async_recovery import INPUT_BUDGET_TOKENS, build_packet, finalize, register
+from analysis_wrapper.module_drill.async_recovery import INPUT_BUDGET_TOKENS, _packet_inputs, build_packet, finalize, register
 from analysis_wrapper.module_drill.boundary_closure import write as write_boundary_closure
 from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.driver import ModuleDriver
@@ -47,6 +47,32 @@ def test_packet_uses_only_span_bound_boundary_closure_and_semantic_spans(tmp_pat
     assert all(row["state"] != "excluded" for row in local_closure["boundary_dispositions"])
     assert estimate_tokens(packet.instructions) + sum(
         estimate_tokens(item.content) for item in packet.inputs.values()) <= INPUT_BUDGET_TOKENS
+
+
+def test_empty_applicable_boundary_universe_is_an_auditable_empty_task():
+    """All-excluded boundaries must not prevent final feature recovery."""
+    closure = {
+        "schema_version": "feature-boundary-closure/v1",
+        "source_manifest_digest": "digest", "feature_id": "feature",
+        "semantic_spans_digest": "digest", "nodes": [], "edges": [],
+        "boundary_dispositions": [{
+            "evidence_id": "evidence-excluded", "state": "excluded",
+            "evidence_refs": ["repo@NON-GIT:src/example.ts:1"],
+        }],
+    }
+    spans = {
+        "schema_version": "semantic-spans/v1", "source_manifest_digest": "digest",
+        "feature_id": "feature", "feature_graph_digest": "digest",
+        "semantic_span_plan_digest": "digest", "frontier_candidates_digest": "digest", "spans": [],
+    }
+    requirements = {
+        "schema_version": "module-async-recovery-requirements/v1",
+        "feature_boundary_closure_digest": "digest", "feature_id": "feature", "requirements": [],
+    }
+    inputs = _packet_inputs(closure, spans, requirements)
+    assert json.loads(inputs["async-requirements.json"])["requirements"] == []
+    assert json.loads(inputs["feature-boundary-closure.json"])["boundary_dispositions"] == []
+    assert json.loads(inputs["semantic-spans.json"])["spans"] == []
 
 
 def test_async_output_requires_exact_dispositions_and_packet_local_claims(tmp_path):

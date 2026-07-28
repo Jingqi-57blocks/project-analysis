@@ -116,7 +116,12 @@ def _packet_inputs(closure: dict[str, Any], spans: dict[str, Any],
     """
     rows = requirements["requirements"]
     evidence_ids = {row.get("evidence_id") for row in rows if isinstance(row, dict)}
-    if not evidence_ids or not all(isinstance(value, str) and value for value in evidence_ids):
+    # A fully excluded boundary universe is a valid, explicit outcome.  It
+    # means this feature has no applicable async/configuration/integration
+    # task to recover, not that packet construction failed.  The empty task
+    # remains useful: its validated empty output becomes auditable evidence
+    # that every boundary was dispositioned by the deterministic closure.
+    if not all(isinstance(value, str) and value for value in evidence_ids):
         raise ContractError("asynchronous recovery requirements lack stable evidence IDs")
     local_boundaries = [row for row in closure.get("boundary_dispositions", [])
                         if isinstance(row, dict) and row.get("evidence_id") in evidence_ids]
