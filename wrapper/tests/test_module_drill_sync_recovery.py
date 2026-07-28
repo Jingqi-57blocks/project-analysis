@@ -10,7 +10,8 @@ from analysis_wrapper.module_drill.frontier_candidates import write as write_can
 from analysis_wrapper.module_drill.span_fetch import write as write_spans
 from analysis_wrapper.module_drill.span_plan import write as write_plan
 from analysis_wrapper.module_drill.sync_recovery import (
-    INPUT_BUDGET_TOKENS, _bounded_packets, _estimated_input_tokens, build_packets,
+    INPUT_BUDGET_TOKENS, _bounded_packets, _estimated_input_tokens, _packet as _build_packet,
+    _requirements, build_packets,
 )
 from analysis_wrapper.module_drill.sync_recovery import finalize, register
 from analysis_wrapper.module_drill.driver import ModuleDriver
@@ -115,6 +116,43 @@ def test_large_semantic_group_splits_only_on_whole_requirements():
         assert not seen & ids
         seen.update(ids)
     assert seen == {row["requirement_id"] for row in requirements["requirements"]}
+
+
+def test_packet_does_not_expand_every_node_that_shares_a_provenance_ref():
+    """A shared framework locator is provenance, not an unbounded graph edge."""
+    shared_ref = "repo@NON-GIT:src/router.ts:1"
+    graph = {
+        "schema_version": "feature-graph/v1", "feature_id": "feature", "nodes": [
+            {"node_id": "node-selected", "kind": "route", "repository_ref": "repo",
+             "observation": "observed", "evidence_refs": [shared_ref]},
+            {"node_id": "node-unrelated", "kind": "route", "repository_ref": "repo",
+             "observation": "observed", "evidence_refs": [shared_ref]},
+        ],
+        "edges": [{"edge_id": "edge-shared", "kind": "routes-to",
+                   "source_node_id": "node-selected", "target_node_id": "node-unrelated",
+                   "observation": "observed", "evidence_refs": [shared_ref]}],
+        "frontiers": [{"frontier_id": "frontier-not-for-sync-recovery"}],
+    }
+    requirements = {
+        "schema_version": "module-sync-recovery-requirements/v1",
+        "feature_graph_digest": "graph", "semantic_spans_digest": "spans", "feature_id": "feature",
+        "requirements": [{
+            "requirement_id": "requirement-anchor-node-selected", "kind": "graph-anchor",
+            "anchor_ids": ["node-selected"], "evidence_refs": [shared_ref],
+        }],
+    }
+    packet = _build_packet(None, partition_id="routes-01", requirements=requirements,
+                           graph=graph, spans={"schema_version": "semantic-spans/v1", "spans": []},
+                           rows=requirements["requirements"])
+    local_graph = json.loads(packet.inputs["feature-graph.json"].content)
+    assert [row["node_id"] for row in local_graph["nodes"]] == ["node-selected"]
+    assert local_graph["edges"] == []
+    assert "frontiers" not in local_graph
+    shared_span = _requirements(graph, {"spans": [{
+        "span_id": "span-shared", "ref": shared_ref, "start_ref": shared_ref,
+        "end_ref": shared_ref, "status": "fetched", "reason": "",
+    }]})["requirements"]
+    assert next(row for row in shared_span if row["kind"] == "semantic-span")["anchor_ids"] == []
 
 
 def test_sync_output_requires_exact_requirement_dispositions(tmp_path):

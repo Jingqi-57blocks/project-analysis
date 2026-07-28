@@ -58,6 +58,13 @@ def _load(context: SourceContext, filename: str, schema: str) -> dict[str, Any]:
 
 
 def _requirements(graph: dict[str, Any], spans: dict[str, Any]) -> dict[str, Any]:
+    nodes_by_ref: dict[str, list[str]] = {}
+    for node in graph.get("nodes", []):
+        if not isinstance(node, dict) or not isinstance(node.get("node_id"), str):
+            raise ContractError("feature graph node is invalid for synchronous recovery")
+        for ref in node.get("evidence_refs", []):
+            if isinstance(ref, str) and ref:
+                nodes_by_ref.setdefault(ref, []).append(node["node_id"])
     requirements: list[dict[str, Any]] = []
     for node in graph.get("nodes", []):
         if not isinstance(node, dict) or not isinstance(node.get("node_id"), str):
@@ -78,10 +85,15 @@ def _requirements(graph: dict[str, Any], spans: dict[str, Any]) -> dict[str, Any
         valid = sorted({ref for ref in refs if isinstance(ref, str) and ref})
         if not valid:
             raise ContractError("semantic span lacks source references for synchronous recovery")
+        # A span can safely carry a graph anchor only when its exact source
+        # reference identifies one observed node.  Shared registration lines
+        # may back many unrelated routes; attaching every such node would
+        # turn one span requirement into an unbounded graph slice.
+        matching_nodes = sorted(set(nodes_by_ref.get(span.get("ref"), [])))
         requirements.append({
             "requirement_id": "requirement-span-" + span["span_id"],
             "kind": "semantic-span",
-            "anchor_ids": [],
+            "anchor_ids": matching_nodes if len(matching_nodes) == 1 else [],
             "evidence_refs": valid,
             "span_status": span.get("status"),
             "unresolved_reason": span.get("reason", ""),
@@ -163,18 +175,32 @@ def _packet_inputs(requirements: dict[str, Any], graph: dict[str, Any], spans: d
     }
     local_spans = [row for row in spans.get("spans", [])
                    if isinstance(row, dict) and row.get("span_id") in span_ids]
-    refs = {
-        ref for row in rows for ref in row.get("evidence_refs", []) if isinstance(ref, str) and ref
-    }
-    local_nodes = [row for row in graph.get("nodes", []) if isinstance(row, dict) and (
-        row.get("node_id") in node_ids or any(ref in refs for ref in row.get("evidence_refs", []))
-    )]
+    # ``evidence_refs`` are provenance locators, not a graph-closure relation:
+    # a framework registration line can legitimately be cited by many nodes.
+    # Selecting every node that shares such a reference repeated whole route
+    # groups in a single packet and could exceed the context budget even for
+    # one requirement.  A recovery packet therefore contains only its explicit
+    # requirement anchors; structural edges are retained only where both
+    # endpoints are in that same bounded packet.
+    local_nodes = [row for row in graph.get("nodes", []) if isinstance(row, dict)
+                   and row.get("node_id") in node_ids]
     local_node_ids = {row["node_id"] for row in local_nodes if isinstance(row.get("node_id"), str)}
     local_edges = [row for row in graph.get("edges", []) if isinstance(row, dict)
                    and row.get("source_node_id") in local_node_ids
                    and row.get("target_node_id") in local_node_ids]
     requirement_doc = {**requirements, "requirements": rows}
-    graph_doc = {**graph, "nodes": local_nodes, "edges": local_edges}
+    # The graph's full frontier inventory is a closure/audit artifact, not an
+    # input to source-level synchronous recovery.  Retaining it here repeats
+    # the complete frontier universe in every semantic partition and defeats
+    # otherwise local sharding.
+    graph_doc = {
+        "schema_version": graph.get("schema_version"),
+        "source_manifest_digest": graph.get("source_manifest_digest"),
+        "module_scope_digest": graph.get("module_scope_digest"),
+        "feature_id": graph.get("feature_id"),
+        "nodes": local_nodes,
+        "edges": local_edges,
+    }
     spans_doc = {**spans, "spans": local_spans}
     partition = {
         "partition_id": partition_id,
