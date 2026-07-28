@@ -164,8 +164,9 @@ def _provider_outcomes(
     return tuple(sorted(outcomes, key=lambda item: (item.provider_id, item.capability_id)))
 
 
-def build_from_overview(source_run: str | Path, *, snapshot_id: str) -> SourceManifest:
-    """Normalize one completed overview's deterministic evidence surface."""
+def _build(source_run: str | Path, *, snapshot_id: str,
+           source_mode: str, source_overview_run: str | None) -> SourceManifest:
+    """Normalize one complete deterministic evidence surface."""
     run = Path(source_run).expanduser().resolve()
     targets = _load_object(run / "targets.json", "targets.json")
     provenance = _load_object(run / "run-provenance.json", "run-provenance.json")
@@ -184,12 +185,25 @@ def build_from_overview(source_run: str | Path, *, snapshot_id: str) -> SourceMa
         raise ContractError("targets.json repositories must be objects")
     artifacts = _artifact_records(run)
     return SourceManifest(
-        source_mode="overview-backed", source_overview_run=run.name,
+        source_mode=source_mode, source_overview_run=source_overview_run,
         snapshot_id=snapshot_id, repositories=snapshots,
         preparation_options=dict(provenance.get("preparation") or {}),
         tools=_tool_identities(provenance), artifacts=artifacts,
         providers=_provider_outcomes(execution, artifacts),
     )
+
+
+def build_from_overview(source_run: str | Path, *, snapshot_id: str) -> SourceManifest:
+    """Normalize one completed overview's deterministic evidence surface."""
+    run = Path(source_run).expanduser().resolve()
+    return _build(run, snapshot_id=snapshot_id, source_mode="overview-backed",
+                  source_overview_run=run.name)
+
+
+def build_from_standalone(source_run: str | Path, *, snapshot_id: str) -> SourceManifest:
+    """Normalize a Module Drill-owned deterministic source snapshot."""
+    return _build(source_run, snapshot_id=snapshot_id, source_mode="standalone",
+                  source_overview_run=None)
 
 
 def write(path: str | Path, manifest: SourceManifest) -> Path:

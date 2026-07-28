@@ -969,6 +969,18 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     return 3
 
 
+def prepare_deterministic_evidence(args: argparse.Namespace) -> int:
+    """Run the canonical deterministic evidence pass without generating prose.
+
+    The historical command name remains ``prepare-overview`` because it is
+    the public overview entry point.  Its implementation has always stopped
+    before LLM judgment and report assembly, however, so Module Drill can
+    safely reuse the exact same discovery/provider/system-model preparation
+    surface for a standalone source snapshot.
+    """
+    return _prepare_overview(args)
+
+
 def _finalize_module_map(args: argparse.Namespace) -> int:
     from . import module_map, module_render, overview_audit, synthesis_input
     from .system_model.assemble import assemble, dump
@@ -1412,7 +1424,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "system-model":
             return _system_model(args)
         if args.command == "prepare-overview":
-            return _prepare_overview(args)
+            return prepare_deterministic_evidence(args)
         if args.command == "finalize-module-map":
             return _finalize_module_map(args)
         if args.command == "finalize-findings":
