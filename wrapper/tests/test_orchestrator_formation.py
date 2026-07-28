@@ -273,6 +273,71 @@ def test_partitioned_formation_merges_a_cross_repository_module_in_plan_order(tm
         "shared-capability"}
 
 
+def test_partitioned_formation_conservatively_merges_shared_module_metadata(tmp_path):
+    run = _build_run(tmp_path)
+    (run / "cohesion-bundle.json").write_text(json.dumps({
+        "clusters": [{
+            "kind": "route-prefix", "members": ["mc-api-folder", "mc-web-folder"],
+            "evidence_refs": ["signals/routes.view.txt:2"],
+        }],
+        "kinds": {}, "limits": {},
+    }), "utf-8")
+    plan = formation.build_partition_plan(run)
+    formation.write_partition_plan(run)
+    for index, partition in enumerate(plan["partitions"]):
+        _register_and_validate(run, formation.formation_task_id(partition["partition_id"]), {
+            "modules": [{
+                "module_id": "shared-capability", "name": "Shared capability",
+                "classification": "business",
+                "confidence": ("high", "low")[index],
+                "aliases": (["Order access"], ["Access orders"])[index],
+            }],
+            "candidate_dispositions": [{
+                "candidate_id": candidate_id, "disposition": "merged",
+                "module_ids": ["shared-capability"],
+                "reason": "cross-repository cohesion evidence supports one boundary",
+            } for candidate_id in partition["candidate_ids"]],
+        })
+
+    formation.write(run)
+
+    document = json.loads((run / "module-map.json").read_text("utf-8"))
+    assert document["modules"] == [{
+        "module_id": "shared-capability", "name": "Shared capability",
+        "classification": "business", "confidence": "low",
+        "aliases": ["Access orders", "Order access"],
+    }]
+
+
+def test_partitioned_formation_still_rejects_competing_module_definitions(tmp_path):
+    run = _build_run(tmp_path)
+    (run / "cohesion-bundle.json").write_text(json.dumps({
+        "clusters": [{
+            "kind": "route-prefix", "members": ["mc-api-folder", "mc-web-folder"],
+            "evidence_refs": ["signals/routes.view.txt:2"],
+        }],
+        "kinds": {}, "limits": {},
+    }), "utf-8")
+    plan = formation.build_partition_plan(run)
+    formation.write_partition_plan(run)
+    for index, partition in enumerate(plan["partitions"]):
+        _register_and_validate(run, formation.formation_task_id(partition["partition_id"]), {
+            "modules": [{
+                "module_id": "shared-capability",
+                "name": ("Shared capability", "Different capability")[index],
+                "classification": "business", "confidence": "medium", "aliases": [],
+            }],
+            "candidate_dispositions": [{
+                "candidate_id": candidate_id, "disposition": "merged",
+                "module_ids": ["shared-capability"],
+                "reason": "cross-repository cohesion evidence supports one boundary",
+            } for candidate_id in partition["candidate_ids"]],
+        })
+
+    with pytest.raises(formation.FormationWriterError, match="conflicting definition"):
+        formation.write(run)
+
+
 def test_structural_quality_gate_requires_resolution_without_a_fixed_ratio(tmp_path):
     run = _build_run(tmp_path)
     _register_and_validate(run, "formation", {
