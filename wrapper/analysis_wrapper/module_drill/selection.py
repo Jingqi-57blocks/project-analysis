@@ -12,6 +12,7 @@ from ..orchestrator.schemas import validate_output
 from .candidate_universe import load as load_universe
 from .context import SourceContext
 from .driver import ModuleDriver
+from .frontiers import initial as initial_frontiers
 from .ranking import TASK_ID, TASK_TYPE, build_packet
 from .scope import FeatureSeed, ModuleScope, ScopeCandidate
 from .validation import ContractError, sha256_json
@@ -68,14 +69,16 @@ def _scope(context: SourceContext, universe: dict[str, Any], output: dict[str, A
         )
         for row in universe["candidates"]
     )
+    selected = next(candidate for candidate in candidates if candidate.candidate_id == selected_id)
+    seeds = _feature_seeds(context)
     return ModuleScope(
         feature_id="feature-" + selected_id.removeprefix("candidate-"),
         selector=json.loads((context.module_run / "provenance.json").read_text("utf-8"))["selector"],
         source_manifest_digest=sha256_json(context.manifest.to_dict()),
         selected_candidate_id=selected_id,
         candidates=candidates,
-        seeds=_feature_seeds(context),
-        frontiers=(),
+        seeds=seeds,
+        frontiers=initial_frontiers(selected.seed_ids, seeds),
         closure_status="open",
     )
 
