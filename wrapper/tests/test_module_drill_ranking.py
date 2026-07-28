@@ -11,7 +11,7 @@ from analysis_wrapper.module_drill.candidate_universe import write as write_cand
 from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.driver import ModuleDriver
 from analysis_wrapper.module_drill.feature_evidence import write as write_feature_evidence
-from analysis_wrapper.module_drill.ranking import TASK_ID, build_packet
+from analysis_wrapper.module_drill.ranking import TASK_ID, build_packet, register as register_ranking
 from analysis_wrapper.module_drill.scope import ModuleScope
 from analysis_wrapper.module_drill.selection import finalize
 from analysis_wrapper.module_drill.validation import ContractError
@@ -29,6 +29,13 @@ def _prepared_run(tmp_path):
     write_feature_evidence(context)
     write_candidates(load(module_run))
     return module_run
+
+
+def _set_selector(module_run, selector):
+    path = module_run / "provenance.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["selector"] = selector
+    path.write_text(json.dumps(document), encoding="utf-8")
 
 
 def _result(task_id, attempt, output):
@@ -62,6 +69,73 @@ def test_ranking_packet_binds_selector_to_complete_candidate_evidence(tmp_path):
         row["candidate_id"] for row in universe["candidates"]
     }
     assert all(row["evidence"] for row in evidence)
+
+
+def test_exact_route_selector_bypasses_model_ranking_and_materializes_scope(tmp_path):
+    module_run = _prepared_run(tmp_path)
+    _set_selector(module_run, "POST /records/0")
+
+    assert register_ranking(module_run) == []
+    exact = json.loads((module_run / "evidence" / "exact-selector-resolution.json").read_text())
+    assert exact["decision"] == "selected"
+    assert exact["match_kind"] == "route"
+    assert not ModuleDriver(module_run).engine.ledger_exists()
+
+    result = finalize(module_run)
+    assert result.scope_path is not None
+    receipt = json.loads(result.resolution_path.read_text())
+    assert receipt["selection_mode"] == "deterministic-exact"
+    assert receipt["selected_candidate_ids"] == exact["candidate_ids"]
+
+
+def test_exact_source_path_with_multiple_evidence_anchors_stays_ambiguous(tmp_path):
+    module_run = _prepared_run(tmp_path)
+    _set_selector(module_run, "src/service.ts")
+
+    assert register_ranking(module_run) == []
+    exact = json.loads((module_run / "evidence" / "exact-selector-resolution.json").read_text())
+    assert exact["decision"] == "ambiguous"
+    assert len(exact["candidate_ids"]) > 1
+    result = finalize(module_run)
+    assert result.scope_path is None
+    assert json.loads(result.resolution_path.read_text())["selection_mode"] == "deterministic-exact"
+
+
+def test_exact_datastore_label_selects_only_the_matching_canonical_candidate(tmp_path):
+    module_run = _prepared_run(tmp_path)
+    _set_selector(module_run, "datastore:records")
+
+    assert register_ranking(module_run) == []
+    exact = json.loads((module_run / "evidence" / "exact-selector-resolution.json").read_text())
+    assert exact["decision"] == "selected"
+    assert exact["match_kind"] == "datastore-label"
+    assert finalize(module_run).scope_path is not None
+
+
+def test_user_can_resume_an_ambiguous_or_natural_selector_with_one_candidate(tmp_path):
+    module_run = _prepared_run(tmp_path)
+    candidates = json.loads((module_run / "evidence" / "candidate-universe.json").read_text())["candidates"]
+    candidate_id = candidates[0]["candidate_id"]
+
+    result = finalize(module_run, selected_candidate_id=candidate_id)
+
+    assert result.scope_path is not None
+    receipt = json.loads(result.resolution_path.read_text())
+    assert receipt["selection_mode"] == "user-selected-candidate"
+    assert receipt["selected_candidate_ids"] == [candidate_id]
+
+
+def test_exact_selector_receipt_is_rechecked_before_scope_materialization(tmp_path):
+    module_run = _prepared_run(tmp_path)
+    _set_selector(module_run, "POST /records/0")
+    assert register_ranking(module_run) == []
+    path = module_run / "evidence" / "exact-selector-resolution.json"
+    document = json.loads(path.read_text())
+    document["candidate_universe_digest"] = "0" * 64
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ContractError, match="exact selector resolution"):
+        finalize(module_run)
 
 
 def test_ranking_packet_keeps_every_candidate_when_route_inventory_exceeds_overview_caps(tmp_path):
@@ -192,3 +266,14 @@ def test_cli_registers_ranking_task_only_after_canonical_inputs_exist(tmp_path, 
     printed = json.loads(capsys.readouterr().out)
     assert printed["created"] == [TASK_ID]
     assert printed["next"] == "claim module-candidate-ranking"
+
+
+def test_cli_reports_deterministic_exact_selection_and_accepts_user_candidate(tmp_path, capsys):
+    module_run = _prepared_run(tmp_path)
+    _set_selector(module_run, "POST /records/0")
+    assert main(["module-plan-ranking", "--run", str(module_run)]) == 0
+    planned = json.loads(capsys.readouterr().out)
+    assert planned == {"created": [], "next": "module-finalize-ranking"}
+    candidate_id = json.loads((module_run / "evidence" / "exact-selector-resolution.json").read_text())["candidate_ids"][0]
+    assert main(["module-finalize-ranking", "--run", str(module_run), "--candidate", candidate_id]) == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "selected"

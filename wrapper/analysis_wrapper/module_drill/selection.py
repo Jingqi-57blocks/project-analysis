@@ -10,8 +10,9 @@ from typing import Any
 from ..executor import create_stage_dir, write_new_text
 from ..orchestrator.schemas import validate_output
 from .candidate_universe import load as load_universe
-from .context import SourceContext
+from .context import SourceContext, load as load_context
 from .driver import ModuleDriver
+from .exact_selector import ExactSelectorResolution, load as load_exact_resolution
 from .frontiers import initial as initial_frontiers
 from .ranking import TASK_ID, TASK_TYPE, build_packet
 from .scope import FeatureSeed, ModuleScope, ScopeCandidate
@@ -42,7 +43,7 @@ def _feature_seeds(context: SourceContext) -> tuple[FeatureSeed, ...]:
                  for index, row in enumerate(seeds))
 
 
-def _validated_ranking(driver: ModuleDriver) -> tuple[dict[str, Any], dict[str, Any]]:
+def _validated_ranking(driver: ModuleDriver) -> tuple[dict[str, Any], dict[str, Any], str, str]:
     """Load a current ranking only when its packet equals this run's plan."""
     expected = build_packet(driver.context)
     packet, output = driver.validated_task(TASK_ID)
@@ -54,7 +55,61 @@ def _validated_ranking(driver: ModuleDriver) -> tuple[dict[str, Any], dict[str, 
     )
     if failures:
         raise ContractError("validated ranking output no longer satisfies its packet: " + failures[0]["detail"])
-    return output, json.loads(expected.inputs["candidate-universe.json"].content)
+    return (output, json.loads(expected.inputs["candidate-universe.json"].content),
+            "validated-ranking-task", expected.input_digest)
+
+
+def _exact_output(resolution: ExactSelectorResolution) -> dict[str, Any]:
+    """Adapt a deterministic receipt to the same selection envelope.
+
+    The task schema's reason codes describe model decisions.  The source of
+    this result is persisted separately as ``selection_mode`` instead of
+    pretending that a model supplied it.
+    """
+    return {
+        "decision": resolution.decision,
+        "candidate_ids": list(resolution.candidate_ids),
+        "reason_code": (
+            "clear-dominant" if resolution.decision == "selected" else
+            "equally-supported" if resolution.decision == "ambiguous" else
+            "insufficient-evidence"
+        ),
+    }
+
+
+def _user_choice(context: SourceContext, candidate_id: str) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    universe = load_universe(context)
+    candidate_ids = {row["candidate_id"] for row in universe["candidates"]}
+    if candidate_id not in candidate_ids:
+        raise ContractError("selected candidate is outside the current candidate universe")
+    return ({"decision": "selected", "candidate_ids": [candidate_id],
+             "reason_code": "clear-dominant"}, universe,
+            "user-selected-candidate", sha256_json({
+                "selector": json.loads((context.module_run / "provenance.json").read_text("utf-8"))["selector"],
+                "candidate_id": candidate_id,
+                "candidate_universe_digest": sha256_json(universe),
+            }))
+
+
+def _selection_input(module_run: str | Path, selected_candidate_id: str | None) \
+        -> tuple[SourceContext, dict[str, Any], dict[str, Any], str, str]:
+    context = load_context(module_run)
+    if selected_candidate_id is not None:
+        output, universe, mode, digest = _user_choice(context, selected_candidate_id)
+    else:
+        exact = load_exact_resolution(context)
+        if exact is not None:
+            output, universe, mode, digest = (
+                _exact_output(exact), load_universe(context), "deterministic-exact", sha256_json(exact.to_dict()))
+        else:
+            output, universe, mode, digest = _validated_ranking(ModuleDriver(module_run))
+    failures = validate_output(
+        TASK_TYPE, output,
+        packet_inputs={"candidate-universe.json": json.dumps(universe, sort_keys=True)},
+    )
+    if failures:
+        raise ContractError("selection output no longer satisfies its candidate universe: " + failures[0]["detail"])
+    return context, output, universe, mode, digest
 
 
 def _scope(context: SourceContext, universe: dict[str, Any], output: dict[str, Any]) -> ModuleScope:
@@ -82,25 +137,28 @@ def _scope(context: SourceContext, universe: dict[str, Any], output: dict[str, A
     )
 
 
-def finalize(module_run: str | Path) -> FinalizedSelection:
-    """Write scope only after a uniquely selected, packet-bound candidate.
+def finalize(module_run: str | Path, *, selected_candidate_id: str | None = None) -> FinalizedSelection:
+    """Write scope only after a bounded, evidence-bound candidate selection.
 
-    Ambiguous and no-match decisions are persisted as a receipt and return
-    without a scope.  Later phases must not treat either as a feature.
+    The selection may be a validated ranking task, a deterministic exact
+    selector receipt, or an explicit reviewed candidate ID. Ambiguous and
+    no-match decisions are persisted without a scope; later phases must not
+    treat either as a feature.
     """
-    driver = ModuleDriver(module_run)
-    output, universe = _validated_ranking(driver)
+    context, output, universe, selection_mode, selection_input_digest = _selection_input(
+        module_run, selected_candidate_id)
     # Revalidate the persisted universe against canonical source evidence,
-    # rather than trusting only the copy embedded in the task packet.
-    current_universe = load_universe(driver.context)
+    # rather than trusting only the copy embedded in a task or receipt.
+    current_universe = load_universe(context)
     if current_universe != universe:
-        raise ContractError("validated ranking packet no longer matches current candidate universe")
-    evidence_dir = create_stage_dir(driver.run / "evidence")
-    scope = _scope(driver.context, universe, output) if output["decision"] == "selected" else None
+        raise ContractError("selection input no longer matches current candidate universe")
+    evidence_dir = create_stage_dir(context.module_run / "evidence")
+    scope = _scope(context, universe, output) if output["decision"] == "selected" else None
     resolution = {
         "schema_version": RESOLUTION_VERSION,
-        "source_manifest_digest": sha256_json(driver.context.manifest.to_dict()),
-        "ranking_packet_digest": build_packet(driver.context).input_digest,
+        "source_manifest_digest": sha256_json(context.manifest.to_dict()),
+        "selection_mode": selection_mode,
+        "selection_input_digest": selection_input_digest,
         "decision": output["decision"],
         "candidate_ids": output["candidate_ids"],
         "selected_candidate_ids": output["candidate_ids"],
