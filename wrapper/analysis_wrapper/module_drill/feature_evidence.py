@@ -165,15 +165,22 @@ def _ui_link_items(artifact_id: str, document: dict[str, Any],
                 or not isinstance(callers, list) or not isinstance(composition, list) \
                 or not all(isinstance(value, str) and value for value in composition):
             raise ContractError("UI-route linkage row has an invalid required field")
-        refs = (_source_refs((route_evidence, *composition), backend, revisions)
-                + _source_refs(callers, frontend, revisions))
+        backend_refs = _source_refs((route_evidence, *composition), backend, revisions)
+        frontend_refs = _source_refs(callers, frontend, revisions)
+        refs = backend_refs + frontend_refs
         repositories = (frontend,) if frontend == backend else (frontend, backend)
         items.append(EvidenceItem(
             _id(artifact_id, "ui-route-link", frontend, backend, method, path,
                 route_evidence, *sorted(composition), *sorted(callers)),
             "ui-action", repositories, tuple(sorted(set(refs))), artifact_id,
             {"method": method, "path": path, "route_status": row.get("status", ""),
-             "target_repository_ref": backend},
+             "target_repository_ref": backend,
+             # A UI-action node belongs to the frontend.  Keep its local
+             # evidence distinct from the backend route evidence used by the
+             # cross-repository edge, so repository-level report rows never
+             # attribute a backend file to the frontend implementation.
+             "frontend_source_refs": list(frontend_refs),
+             "backend_source_refs": list(backend_refs)},
         ))
     return items
 

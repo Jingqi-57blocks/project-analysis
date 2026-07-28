@@ -87,6 +87,20 @@ def test_render_localizes_supported_operations_without_translating_ui_literals(t
     assert "record submission allows" not in behavior
 
 
+def test_render_localizes_fixed_contract_vocabulary_but_not_source_literals(tmp_path):
+    module_run = _ready(tmp_path)
+    assert finalize(module_run)[1].passed
+    _add_claim_and_flow(module_run, language="zh-CN")
+
+    paths = render(module_run)
+
+    overview = paths["module.md"].read_text()
+    architecture = paths["details/architecture.md"].read_text()
+    assert "| 界面入口 |" in overview
+    assert "接口路由" in architecture
+    assert "异步边界" in architecture
+
+
 def test_cli_renders_the_complete_catalog(tmp_path, capsys):
     module_run = _ready(tmp_path)
     assert finalize(module_run)[1].passed

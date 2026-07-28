@@ -28,6 +28,10 @@ class SourceContext:
     manifest: SourceManifest
     source_spec: TargetSpec
     identities: identity.IdentityMap
+    # The requested presentation language is part of the run provenance.  It
+    # is carried into bounded semantic tasks so that narrative fields are not
+    # accidentally authored in a different language from their report.
+    language: str = "en"
 
 
 def load(module_run: str | Path) -> SourceContext:
@@ -66,4 +70,7 @@ def load(module_run: str | Path) -> SourceContext:
     problems.extend(run_provenance.target_source_staleness(provenance_document, spec))
     if problems:
         raise ContractError("source snapshot is stale: " + "; ".join(problems))
-    return SourceContext(run, source, manifest, spec, identities)
+    language = provenance.get("language", "en")
+    if language not in {"en", "zh-CN"}:
+        raise ContractError("module provenance has an unsupported language")
+    return SourceContext(run, source, manifest, spec, identities, language)
