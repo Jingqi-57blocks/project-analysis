@@ -343,6 +343,9 @@ def parser() -> argparse.ArgumentParser:
     module_graph_closure = sub.add_parser(
         "module-build-graph-closure", help="materialize bounded Module Drill structural graph closure")
     module_graph_closure.add_argument("--run", required=True)
+    module_boundary_closure = sub.add_parser(
+        "module-build-boundary-closure", help="link source-span-local Module Drill provider boundaries")
+    module_boundary_closure.add_argument("--run", required=True)
     module_spans_plan = sub.add_parser(
         "module-plan-spans", help="plan revision-checked Module Drill semantic spans")
     module_spans_plan.add_argument("--run", required=True)
