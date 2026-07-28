@@ -57,7 +57,9 @@ def _artifact_id(relative: str) -> str:
 
 def _artifact_records(source_run: Path) -> tuple[ArtifactRecord, ...]:
     records: list[ArtifactRecord] = []
-    for path in sorted(source_run.rglob("*.json")):
+    files = sorted(path for path in source_run.rglob("*")
+                   if path.is_file() and path.suffix in {".json", ".jsonl"})
+    for path in files:
         relative = path.relative_to(source_run).as_posix()
         parts = Path(relative).parts
         if any(part in _EXCLUDED_PARTS for part in parts):
@@ -72,8 +74,18 @@ def _artifact_records(source_run: Path) -> tuple[ArtifactRecord, ...]:
             # silently becoming source authority.
             kind = "view"
         try:
-            document = _load_object(path, relative)
-            schema_version = str(document.get("schema_version") or "unversioned")
+            if path.suffix == ".json":
+                document = _load_object(path, relative)
+                schema_version = str(document.get("schema_version") or "unversioned")
+            else:
+                # Callgraph fragments are JSONL, not JSON objects. Validate
+                # their line envelope before granting canonical authority, so
+                # Module Drill can later consume full call edges rather than a
+                # bounded report projection.
+                for line_no, line in enumerate(path.read_text("utf-8").splitlines(), start=1):
+                    if line.strip() and not isinstance(json.loads(line), dict):
+                        raise ContractError(f"{relative}:{line_no} must be a JSON object")
+                schema_version = "jsonl"
             integrity = "verified"
             digest = _digest(path)
         except ContractError:
