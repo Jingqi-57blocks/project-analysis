@@ -79,7 +79,7 @@
       {"edge_id": "edge-worker-external", "kind": "integrates-with", "source_node_id": "node-worker", "target_node_id": "node-external", "observation": "observed", "evidence_refs": ["worker-service@3333333:delivery.ts:18"]}
     ],
     "claims": [
-      {"claim_id": "claim-create-rule", "kind": "rule", "anchor_ids": ["node-rule", "edge-rule-store"], "evidence_refs": ["api-service@2222222:service/create.ts:30"], "support_roles": ["condition", "effect", "persistence"]}
+      {"claim_id": "claim-create-rule", "kind": "rule", "anchor_ids": ["node-rule", "edge-rule-store"], "evidence_refs": ["api-service@2222222:service/create.ts:30"], "support_roles": ["condition", "effect", "persistence"], "subject": "record", "operation": "writes", "value": "stored"}
     ],
     "flows": [
       {"flow_id": "flow-create", "edge_ids": ["edge-ui-client", "edge-client-route", "edge-route-rule", "edge-rule-store", "edge-rule-event", "edge-event-worker", "edge-worker-external"], "claim_ids": ["claim-create-rule"]}

@@ -81,26 +81,38 @@ class FeatureClaim:
     anchor_ids: tuple[str, ...]
     evidence_refs: tuple[str, ...]
     support_roles: tuple[str, ...]
+    subject: str
+    operation: str
+    value: str | int | float | bool | None
 
     def __post_init__(self) -> None:
         slug(self.claim_id, "claim_id")
         slug(self.kind, "claim kind")
         if not self.anchor_ids:
             raise ContractError("claim requires at least one graph anchor")
+        text(self.subject, "claim subject")
+        slug(self.operation, "claim operation")
+        if not isinstance(self.value, (str, int, float, bool)) and self.value is not None:
+            raise ContractError("claim value must be a scalar or null")
 
     def to_dict(self) -> dict[str, Any]:
         return {"claim_id": self.claim_id, "kind": self.kind,
                 "anchor_ids": list(self.anchor_ids), "evidence_refs": list(self.evidence_refs),
-                "support_roles": list(self.support_roles)}
+                "support_roles": list(self.support_roles), "subject": self.subject,
+                "operation": self.operation, "value": self.value}
 
     @classmethod
     def from_dict(cls, value: Any, label: str) -> "FeatureClaim":
-        row = exact_object(value, {"claim_id", "kind", "anchor_ids", "evidence_refs", "support_roles"}, label)
+        row = exact_object(value, {
+            "claim_id", "kind", "anchor_ids", "evidence_refs", "support_roles", "subject", "operation", "value",
+        }, label)
         return cls(slug(row["claim_id"], f"{label}.claim_id"),
                    slug(row["kind"], f"{label}.kind"),
                    string_list(row["anchor_ids"], f"{label}.anchor_ids", allow_empty=False),
                    ref_list(row["evidence_refs"], f"{label}.evidence_refs"),
-                   string_list(row["support_roles"], f"{label}.support_roles", allow_empty=False))
+                   string_list(row["support_roles"], f"{label}.support_roles", allow_empty=False),
+                   text(row["subject"], f"{label}.subject"),
+                   slug(row["operation"], f"{label}.operation"), row["value"])
 
 
 @dataclass(frozen=True)

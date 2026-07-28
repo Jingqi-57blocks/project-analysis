@@ -24,6 +24,7 @@ from .graph_closure import write as write_graph_closure
 from .boundary_closure import write as write_boundary_closure
 from .sync_recovery import finalize as finalize_sync_recovery, register as register_sync_recovery
 from .async_recovery import finalize as finalize_async_recovery, register as register_async_recovery
+from .finalize import finalize as finalize_module_model
 from .runtime import initialize_from_overview
 from .spans import fetch
 from .standalone import initialize as initialize_standalone
@@ -201,6 +202,12 @@ def _finalize_async_recovery(args) -> int:
     return 0
 
 
+def _finalize_model(args) -> int:
+    model, audit = finalize_module_model(args.run)
+    _print({"module_model": str(model) if model else "", "audit": audit.to_dict()})
+    return 0 if audit.passed else 3
+
+
 def run(args) -> int:
     """Dispatch a Module Drill subcommand and preserve normal CLI exit codes."""
     try:
@@ -222,6 +229,7 @@ def run(args) -> int:
             "module-finalize-sync-recovery": _finalize_sync_recovery,
             "module-plan-async-recovery": _async_recovery,
             "module-finalize-async-recovery": _finalize_async_recovery,
+            "module-finalize-model": _finalize_model,
         }
         handler = handlers.get(args.command)
         if handler is None:
