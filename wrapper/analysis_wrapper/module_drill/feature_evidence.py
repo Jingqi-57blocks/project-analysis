@@ -223,6 +223,7 @@ def _boundary_items(artifact_id: str, document: dict[str, Any], repository_ref: 
         ("async-boundary", "async_boundaries"),
         ("configuration", "configuration_references"),
         ("test-file", "test_files"),
+        ("test-link", "test_links"),
     )
     items: list[EvidenceItem] = []
     for kind, key in groups:

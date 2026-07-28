@@ -67,6 +67,8 @@ def _run(tmp_path: Path, *, route_count: int = 1) -> tuple[Path, Path]:
                                 "evidence": "src/service.ts:15"}],
         "configuration_references": [{"name": "RECORDS_ENABLED", "evidence": "src/service.ts:15"}],
         "test_files": [{"path": "src/service.spec.ts", "evidence": "src/service.ts:15"}],
+        "test_links": [{"path": "src/service.spec.ts", "specifier": "./service",
+                        "evidence": "src/service.ts:15"}],
     })
     initialized = initialize_from_overview(
         overview, output_root=tmp_path / "output", project_key="workspace",
@@ -79,10 +81,10 @@ def test_index_uses_complete_canonical_artifacts_and_emits_typed_seeds(tmp_path)
     document = build(load(module_run))
 
     assert document["schema_version"] == "feature-evidence/v1"
-    assert len(document["items"]) == 10
+    assert len(document["items"]) == 11
     assert {item["kind"] for item in document["items"]} == {
         "route", "ui-action", "datastore", "access-role", "access-check",
-        "integration-host", "integration-package", "async-boundary", "configuration", "test-file",
+        "integration-host", "integration-package", "async-boundary", "configuration", "test-file", "test-link",
     }
     assert {seed["kind"] for seed in document["seeds"]} == {
         "route", "ui-action", "datastore", "job-event", "symbol", "package",

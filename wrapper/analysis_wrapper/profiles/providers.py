@@ -672,6 +672,8 @@ class FeatureBoundariesProvider:
             facts.append(self._fact("configuration-reference", row, repository_ref, revision))
         for row in payload["test_files"]:
             facts.append(self._fact("test-file", row, repository_ref, revision))
+        for row in payload["test_links"]:
+            facts.append(self._fact("test-link", row, repository_ref, revision))
         capped = any(note.startswith("COVERAGE CAP:") for note in payload["notes"])
         return CapabilityResult(
             capability_id=self.capability_id, provider_id=self.provider_id,

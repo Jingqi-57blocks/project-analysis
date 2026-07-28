@@ -26,7 +26,10 @@ def _repo(tmp_path: Path) -> RepoTarget:
         "go runWorker()\n"
         "name := os.Getenv(\"WORKER_NAME\")\n"
         "events.Publish(name)\n", encoding="utf-8")
-    (repo / "test" / "worker.spec.ts").write_text("it('runs', () => {});\n", encoding="utf-8")
+    (repo / "test" / "worker.spec.ts").write_text(
+        "import worker from '../src/worker';\nit('runs', () => {});\n", encoding="utf-8")
+    (repo / "test" / "worker_test.go").write_text(
+        "package test\nimport \"example.test/service/worker\"\n", encoding="utf-8")
     return RepoTarget(repo_id=stable_repo_id(str(repo)), path=str(repo))
 
 
@@ -49,7 +52,15 @@ def test_feature_boundary_discovery_records_mechanical_anchors_only(tmp_path):
         "setInterval", "emit", "go", "Publish"}
     assert {row["name"] for row in result.configuration_references} == {
         "WORKER_ENABLED", "WORKER_NAME"}
-    assert result.test_files == [{"path": "test/worker.spec.ts", "evidence": "test/worker.spec.ts:1"}]
+    assert result.test_files == [
+        {"path": "test/worker.spec.ts", "evidence": "test/worker.spec.ts:1"},
+        {"path": "test/worker_test.go", "evidence": "test/worker_test.go:1"},
+    ]
+    assert result.test_links == [
+        {"path": "test/worker.spec.ts", "specifier": "../src/worker", "evidence": "test/worker.spec.ts:1"},
+        {"path": "test/worker_test.go", "specifier": "example.test/service/worker",
+         "evidence": "test/worker_test.go:2"},
+    ]
     assert all("value" not in row for row in result.configuration_references)
 
 
@@ -61,7 +72,7 @@ def test_provider_writes_full_artifact_and_cited_facts(tmp_path):
     artifact = context.output_dir / result.artifact_refs[0].path
     assert json.loads(artifact.read_text("utf-8")) == feature_boundaries.generate(repo).to_dict()
     assert {fact.kind for fact in result.facts} == {
-        "async-boundary", "configuration-reference", "test-file"}
+        "async-boundary", "configuration-reference", "test-file", "test-link"}
     assert all(fact.source_refs for fact in result.facts)
     assert result.coverage.applicability == "unknown"
     assert result.coverage.status == "complete"
