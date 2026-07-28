@@ -31,6 +31,7 @@ from typing import Mapping, Sequence
 
 from ..sanitize import sanitize_text
 from .contracts import TaskPacket
+from . import requirements
 
 CHARS_PER_TOKEN = 4  # a documented ESTIMATE, not a real tokenizer count
 
@@ -88,6 +89,52 @@ def _split_lines(content: str, shards: int) -> list[str]:
         chunks.append("\n".join(lines[start:start + size]))
         start += size
     return chunks
+
+
+def _shard_contract_inputs(inputs: Mapping[str, str], *, parent_task_id: str,
+                           shard_index: int, shard_total: int,
+                           split_input_id: str) -> dict[str, str]:
+    """Give each generic-composer shard its own truthful requirement scope.
+
+    Sharding used to copy the original requirements byte-for-byte, which made
+    a child packet appear to own the unsplit input.  Keep stable input ids but
+    attach the parent contract digest and concrete slice identity, so a child
+    cannot be mistaken for the whole analysis task.
+    """
+    result = dict(inputs)
+    raw = result.get("requirements.json")
+    if raw is not None:
+        try:
+            contract = json.loads(raw)
+        except ValueError:
+            contract = None
+        if isinstance(contract, dict):
+            parent_digest = requirements.canonical_digest(contract)
+            contract["parent_requirements_digest"] = parent_digest
+            contract["parent_task_id"] = parent_task_id
+            contract["shard_local_scope"] = {
+                "index": shard_index,
+                "total": shard_total,
+                "split_input_id": split_input_id,
+            }
+            result["requirements.json"] = json.dumps(contract, sort_keys=True)
+    raw_selection = result.get("selection-requirements.json")
+    if raw_selection is not None:
+        try:
+            selection_contract = json.loads(raw_selection)
+        except ValueError:
+            selection_contract = None
+        if isinstance(selection_contract, dict):
+            selection_contract["parent_selection_requirements_digest"] = (
+                requirements.canonical_digest(selection_contract))
+            selection_contract["parent_task_id"] = parent_task_id
+            selection_contract["shard_local_scope"] = {
+                "index": shard_index,
+                "total": shard_total,
+                "split_input_id": split_input_id,
+            }
+            result["selection-requirements.json"] = json.dumps(selection_contract, sort_keys=True)
+    return result
 
 
 def compose(*, task_id: str, template_id: str, template_version: str, task_type: str,
@@ -152,6 +199,9 @@ def compose(*, task_id: str, template_id: str, template_version: str, task_type:
             shard_inputs = dict(other_inputs)
             shard_inputs[largest_name] = chunk
             shard_inputs["sharding"] = _sharding_note(index, shard_count, largest_name)
+            shard_inputs = _shard_contract_inputs(
+                shard_inputs, parent_task_id=task_id, shard_index=index,
+                shard_total=shard_count, split_input_id=largest_name)
             if total_tokens(shard_inputs) > context_budget_tokens:
                 return None
             packets.append(TaskPacket.create(

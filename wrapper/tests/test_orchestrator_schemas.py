@@ -369,6 +369,36 @@ def test_selection_fetch_accepts_both_quoted_text_states():
     assert "selection-quoted-text" in _checks(failures)
 
 
+def test_selection_roles_require_exact_accounting_and_allow_declared_unresolved():
+    packet_inputs = {"graph-nodes.json": "[]", "selection-requirements.json": json.dumps({
+        "roles": [{
+            "role_id": "typed-source", "evidence_input_ids": ["graph-nodes.json"],
+            "inventory_paths": ["items[].kind"],
+        }],
+    })}
+    unresolved = {
+        "selections": [],
+        "role_dispositions": [{
+            "role_id": "typed-source", "status": "unresolved", "selection_ids": [],
+            "note": "the typed inventory has no resolvable source location",
+        }],
+    }
+    assert schemas.validate_output("selection-fetch", unresolved, packet_inputs=packet_inputs) == []
+
+    selected_metric = {
+        "selections": [{
+            "selection_id": "not-source", "purpose": "fixture",
+            "ref": "metric:code.analyzed-scope.total", "quoted_text": "",
+        }],
+        "role_dispositions": [{
+            "role_id": "typed-source", "status": "selected", "selection_ids": ["not-source"],
+            "note": "fixture",
+        }],
+    }
+    assert "role-disposition-source-ref" in _checks(
+        schemas.validate_output("selection-fetch", selected_metric, packet_inputs=packet_inputs))
+
+
 def test_dedup_rank_crosscheck_rejects_a_narrowed_id_universe():
     """A dedup output that drops ids from BOTH its echo and its merge_map is
     internally consistent and passes the schema — it just silently decides

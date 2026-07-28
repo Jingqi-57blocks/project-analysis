@@ -103,7 +103,7 @@ from typing import Any, Callable, Mapping
 from .. import identity
 from ..exclusions import is_excluded_relative
 from ..targetspec import RepoTarget, TargetSpec
-from . import templates as tpl
+from . import requirements, templates as tpl
 from .composer import compose, estimate_tokens
 from .contracts import TaskPacket
 from .engine import Engine
@@ -561,7 +561,9 @@ def _test_ci_evidence_rows(spec: TargetSpec, identities: identity.IdentityMap,
 def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[str, Any],
                  module_candidates_doc: Mapping[str, Any], run_summary: Mapping[str, Any],
                  repository_ref: str | None, *,
-                 test_ci_rows: Mapping[str, dict] | None = None) -> dict[str, str]:
+                 test_ci_rows: Mapping[str, dict] | None = None,
+                 task_id: str = "", context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS,
+                 ) -> dict[str, str]:
     inputs: dict[str, str] = {}
     for row in _matching_signal_rows(run_summary, template.signals, repository_ref):
         view_path = run / "signals" / str(row["view"])
@@ -614,6 +616,15 @@ def _lens_inputs(run: Path, template: tpl.LensTemplate, synthesis_doc: Mapping[s
         else:
             selected = [rows_by_ref[ref] for ref in sorted(rows_by_ref)]
         inputs["test-ci-evidence.json"] = json.dumps(selected, sort_keys=True)
+    # Keep the model-facing completeness contract with the evidence it
+    # describes.  This is deliberately generated AFTER every optional input
+    # above has been determined, never maintained as a second hand-written
+    # list that can silently drift from the actual packet.
+    inputs["requirements.json"] = json.dumps(requirements.lens_requirements(
+        template.lens_id, inputs, source_reads=template.source_reads,
+        task_id=task_id, shard=template.shard, repository_ref=repository_ref,
+        context_budget_tokens=context_budget_tokens,
+        max_selections=template.max_selections), sort_keys=True)
     return inputs
 
 
@@ -734,8 +745,10 @@ def plan_judgment(run_dir: str | Path, *,
 
     for spec in _lens_task_specs(lens_templates, identities):
         template = spec.template
-        inputs = _lens_inputs(run, template, synthesis_doc, module_candidates_doc,
-                              run_summary, spec.repository_ref, test_ci_rows=test_ci_rows)
+        inputs = _lens_inputs(
+            run, template, synthesis_doc, module_candidates_doc, run_summary,
+            spec.repository_ref, test_ci_rows=test_ci_rows, task_id=spec.task_id,
+            context_budget_tokens=context_budget_tokens)
 
         if template.source_reads:
             # ONLY the select task is composed here -- the real lens-findings
@@ -743,6 +756,9 @@ def plan_judgment(run_dir: str | Path, *,
             # is created later by plan_lens_finalize, once fetch-selections
             # has produced real evidence for it. See the module docstring.
             select_task_id = _select_task_id(spec.task_id)
+            lens_contract = json.loads(inputs["requirements.json"])
+            inputs["selection-requirements.json"] = json.dumps(
+                requirements.selection_requirements(lens_contract), sort_keys=True)
             select_instructions = tpl.render_selection_instructions(template, shared_body)
             select_version = tpl.content_digest(
                 tpl.selection_fetch_preamble(template.max_selections), shared_body,
@@ -829,11 +845,10 @@ def _pending_lens_task_ids(run: Path) -> set[str]:
     ``plan_dedup``'s merge pool simply because nothing was ever CREATED for
     it. Every CREATED ``<...>-select`` task_id whose paired lens-findings
     task_id has no "created" record yet is therefore ALSO reported pending,
-    using the select task_id itself as the (informative) placeholder --
-    UNLESS the select task itself is permanently FAILED, which gets the
-    exact same fail-open treatment as a directly failed lens shard (its
-    lens's findings can never be produced without it, so it is excluded
-    from the merge pool rather than blocking every other lens forever)."""
+    using the select task_id itself as the informative placeholder. This
+    includes a permanently failed select: finalization turns that failure
+    into a source-coverage gap in the paired lens rather than excluding the
+    lens from the merge pool."""
     engine = Engine(run)
     if not engine.ledger_exists():
         return set()
@@ -854,7 +869,12 @@ def _pending_lens_task_ids(run: Path) -> set[str]:
         if lens_task_id in lens_task_ids:
             continue  # already finalized -- its own lens-findings state is checked above
         if states.get(select_task_id) == "failed":
-            continue  # permanently failed select -- fail-open, same as a failed lens shard
+            # A failed source-selection task is not an excuse to omit the
+            # paired lens. plan_lens_finalize can compose that lens without a
+            # failed dependency and carries a deterministic coverage gap; do
+            # not let dedup proceed until it exists.
+            pending.add(select_task_id)
+            continue
         pending.add(select_task_id)
     return pending
 
@@ -938,6 +958,126 @@ def _select_shard_task_ids(run: Path, select_task_id: str) -> list[str]:
     return sorted(shard_ids, key=lambda task_id: int(task_id[len(prefix):]))
 
 
+def _packet_input_content(run: Path, task_id: str, input_id: str) -> str | None:
+    """Read one immutable packet input from the ledger's created record."""
+    for record in Engine(run)._read_records():
+        if record.event != "created" or record.task_id != task_id:
+            continue
+        raw = record.detail["task"].get("inputs", {}).get(input_id)
+        return raw.get("content") if isinstance(raw, dict) else None
+    return None
+
+
+def _selection_role_results(run: Path, shard_task_ids: list[str], *,
+                            states: Mapping[str, str],
+                            select_outputs: Mapping[str, dict],
+                            fetched_by_task: Mapping[str, list[Any]]) -> list[dict[str, Any]]:
+    """Materialize deterministic source-role coverage for the final lens.
+
+    A selection request that was unavailable, unresolved, permanently failed,
+    or could not fetch its requested source cannot turn into a clean final
+    lens just because another evidence input was readable.  This projection is
+    an input to the final lens packet and its status is cross-checked into the
+    lens's coverage rows by ``schemas.py``.
+    """
+    observations: dict[str, list[dict[str, Any]]] = {}
+    role_metadata: dict[str, dict[str, Any]] = {}
+    for task_id in shard_task_ids:
+        raw = _packet_input_content(run, task_id, "selection-requirements.json")
+        if raw is None:
+            raise PlannerError(f"{task_id!r} has no selection-requirements.json")
+        try:
+            contract = json.loads(raw)
+        except ValueError as exc:
+            raise PlannerError(f"{task_id!r}: invalid selection requirements: {exc}") from exc
+        roles = contract.get("roles") if isinstance(contract, dict) else None
+        if not isinstance(roles, list):
+            raise PlannerError(f"{task_id!r}: selection requirements has no roles list")
+        output = select_outputs.get(task_id, {})
+        dispositions = {
+            row.get("role_id"): row for row in output.get("role_dispositions", [])
+            if isinstance(row, dict) and isinstance(row.get("role_id"), str)
+        }
+        fetched = {
+            row.get("selection_id"): row for row in fetched_by_task.get(task_id, [])
+            if isinstance(row, dict) and isinstance(row.get("selection_id"), str)
+        }
+        for role in roles:
+            if not isinstance(role, dict) or not isinstance(role.get("role_id"), str):
+                raise PlannerError(f"{task_id!r}: invalid role requirement")
+            role_id = role["role_id"]
+            role_metadata.setdefault(role_id, role)
+            if states.get(task_id) == "failed":
+                observations.setdefault(role_id, []).append({
+                    "status": "unavailable", "selection_ids": [], "note":
+                    f"selection task {task_id} failed permanently", "fetch_status": "failed",
+                    "failed_selection_ids": [], "fetched_selection_ids": [],
+                })
+                continue
+            disposition = dispositions.get(role_id)
+            if disposition is None:
+                raise PlannerError(f"{task_id!r}: validated selection output omitted {role_id!r}")
+            selection_ids = list(disposition.get("selection_ids", []))
+            failed_selection_ids = [selection_id for selection_id in selection_ids
+                                    if str(fetched.get(selection_id, {}).get("excerpt", "")).startswith(
+                                        "NOT FETCHED:")]
+            fetched_selection_ids = [selection_id for selection_id in selection_ids
+                                     if selection_id in fetched and selection_id not in failed_selection_ids]
+            observations.setdefault(role_id, []).append({
+                "status": disposition.get("status"), "selection_ids": selection_ids,
+                "note": disposition.get("note", ""),
+                "fetch_status": ("failed" if selection_ids and not fetched_selection_ids
+                                 and failed_selection_ids else "partial" if failed_selection_ids
+                                 else "complete" if selection_ids else "not-applicable"),
+                "failed_selection_ids": failed_selection_ids,
+                "fetched_selection_ids": fetched_selection_ids,
+            })
+
+    results: list[dict[str, Any]] = []
+    for role_id in sorted(role_metadata):
+        rows = observations.get(role_id, [])
+        statuses = {row.get("status") for row in rows}
+        all_selection_ids = sorted({selection_id for row in rows
+                                    for selection_id in row.get("selection_ids", [])})
+        fetched_ids = sorted({selection_id for row in rows
+                              for selection_id in row.get("fetched_selection_ids", [])})
+        failed_ids = sorted({selection_id for row in rows
+                             for selection_id in row.get("failed_selection_ids", [])})
+        has_fetch_failure = any(row.get("fetch_status") in {"partial", "failed"} for row in rows)
+        if has_fetch_failure or "unresolved" in statuses or "unavailable" in statuses:
+            coverage_status = "partial" if fetched_ids else "failed"
+        elif statuses == {"not-applicable"}:
+            coverage_status = "skipped"
+        else:
+            coverage_status = "complete"
+        if "unresolved" in statuses:
+            status = "unresolved"
+        elif "unavailable" in statuses:
+            status = "unavailable"
+        elif has_fetch_failure:
+            status = "unresolved"
+        elif "selected" in statuses:
+            status = "selected"
+        else:
+            status = "not-applicable"
+        fetch_status = ("failed" if coverage_status == "failed" else "partial"
+                        if coverage_status == "partial" else "not-applicable"
+                        if coverage_status == "skipped" else "complete")
+        notes = sorted({str(row.get("note", "")) for row in rows if str(row.get("note", ""))})
+        results.append({
+            "role_id": role_id,
+            "status": status,
+            "selection_ids": all_selection_ids,
+            "fetched_selection_ids": fetched_ids,
+            "failed_selection_ids": failed_ids,
+            "fetch_status": fetch_status,
+            "coverage_status": coverage_status,
+            "note": "; ".join(notes) or "no source selection result recorded",
+            "evidence_input_ids": role_metadata[role_id].get("evidence_input_ids", []),
+        })
+    return results
+
+
 def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
                        context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS,
                        skill_root: str | Path | None = None) -> PlannedTask:
@@ -952,20 +1092,18 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
     A select task's own packet may itself have been composer-sharded (its
     inputs are the SAME size as the lens task's own, so it is just as
     liable to need sharding) into ``<select_task_id>-shard-1..K`` --
-    ``_select_shard_task_ids`` discovers however many shards actually exist;
-    EVERY one must be validated and separately ``fetch-selections``-ed
-    (once per shard task_id) before this call proceeds, and their fetched-
-    evidence arrays are concatenated in shard order into one
-    ``fetched-evidence.json`` input. ``depends_on`` names every real shard
-    task_id (never the possibly-fictional bare ``select_task_id`` -- when
-    sharded, that id was never itself created, and depends_on must
-    reference an existing task_id or ``Engine.create_tasks`` fails closed).
+    ``_select_shard_task_ids`` discovers however many shards actually exist.
+    Every shard must be terminal: validated shards need separately fetched
+    evidence and are concatenated in shard order; a permanently failed shard
+    becomes a deterministic source-coverage gap. ``depends_on`` names only
+    validated real shard ids (never the possibly-fictional bare
+    ``select_task_id`` -- when sharded, that id was never itself created).
 
     Fails closed when: ``lens_task_id`` names no known lens task; that lens
     is not source_reads (nothing to finalize -- plan_judgment already
     created it directly); its select task (or any of its shards) has not
-    been created or validated yet; or ``fetch-selections`` has not written
-    fetched-evidence.json for every shard yet.
+    reached a terminal state; or ``fetch-selections`` has not written
+    fetched-evidence.json for a validated shard yet.
 
     ``context_budget_tokens`` should match whatever was passed to
     ``plan_judgment`` for this same run: the select task's packet size is a
@@ -996,15 +1134,24 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
             f"{select_task_id!r} has not been created yet -- run plan-judgment "
             "before plan-lens-finalize")
 
-    select_outputs = validated_outputs(run, task_type="selection-fetch")
-    not_validated = [task_id for task_id in shard_task_ids if task_id not in select_outputs]
-    if not_validated:
+    engine = Engine(run)
+    states = engine.task_states()
+    pending = [task_id for task_id in shard_task_ids if states.get(task_id) == "pending"]
+    if pending:
         raise PlannerError(
-            f"select task(s) not yet validated: {', '.join(not_validated)} -- run "
+            f"select task(s) not yet validated or failed: {', '.join(pending)} -- run "
             "their executor(s) to completion before plan-lens-finalize")
+    select_outputs = validated_outputs(run, task_type="selection-fetch")
 
     fetched_evidence: list[Any] = []
+    fetched_by_task: dict[str, list[Any]] = {}
     for task_id in shard_task_ids:
+        if states.get(task_id) == "failed":
+            # The final lens will receive a deterministic role-result gap for
+            # this permanently failed select task.  Do not make the final
+            # lens depend on it: Engine would cascade-fail instead of letting
+            # the lens disclose the lost source coverage.
+            continue
         fetched_path = fetch_selections_output_path(run, task_id)
         if not fetched_path.is_file():
             raise PlannerError(
@@ -1017,7 +1164,12 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
             raise PlannerError(f"{fetched_path}: invalid JSON: {exc}") from exc
         if not isinstance(shard_evidence, list):
             raise PlannerError(f"{fetched_path} must contain a JSON array")
+        fetched_by_task[task_id] = shard_evidence
         fetched_evidence.extend(shard_evidence)
+
+    role_results = _selection_role_results(
+        run, shard_task_ids, states=states, select_outputs=select_outputs,
+        fetched_by_task=fetched_by_task)
 
     run_summary = _load_json(run / "signals" / "run-summary.json")
     synthesis_doc = _load_json(run / "synthesis-input.json")
@@ -1025,17 +1177,30 @@ def plan_lens_finalize(run_dir: str | Path, lens_task_id: str, *,
     target_spec = TargetSpec.load(run / "targets.json")
     test_ci_rows = _test_ci_evidence_rows(target_spec, identities)
 
-    inputs = _lens_inputs(run, spec.template, synthesis_doc, module_candidates_doc,
-                          run_summary, spec.repository_ref, test_ci_rows=test_ci_rows)
+    inputs = _lens_inputs(
+        run, spec.template, synthesis_doc, module_candidates_doc, run_summary,
+        spec.repository_ref, test_ci_rows=test_ci_rows, task_id=lens_task_id,
+        context_budget_tokens=context_budget_tokens)
     inputs["fetched-evidence.json"] = json.dumps(fetched_evidence, sort_keys=True)
+    inputs["selection-role-results.json"] = json.dumps({"roles": role_results}, sort_keys=True)
+    # The final lens packet has one extra evidence family.  Rebuild the
+    # contract only after adding it so its input ids remain exact.
+    inputs["requirements.json"] = json.dumps(requirements.lens_requirements(
+        spec.template.lens_id, inputs, source_reads=spec.template.source_reads,
+        task_id=lens_task_id, shard=spec.template.shard,
+        repository_ref=spec.repository_ref,
+        context_budget_tokens=context_budget_tokens,
+        max_selections=spec.template.max_selections), sort_keys=True)
     instructions = tpl.render_instructions(spec.template, shared_body, source_verified=True)
 
     built = compose(
         task_id=lens_task_id, template_id=f"lens-{spec.lens_id}",
         template_version=spec.template.version, task_type="lens-findings",
         instructions=instructions, inputs=inputs, output_schema_id=tpl.LENS_OUTPUT_SCHEMA_ID,
-        context_budget_tokens=context_budget_tokens, depends_on=tuple(shard_task_ids))
-    created_ids = set(Engine(run).create_tasks(built))
+        context_budget_tokens=context_budget_tokens,
+        depends_on=tuple(task_id for task_id in shard_task_ids
+                         if states.get(task_id) == "validated"))
+    created_ids = set(engine.create_tasks(built))
     return PlannedTask(
         task_id=lens_task_id, task_type="lens-findings", lens_id=spec.lens_id,
         shard=spec.template.shard, repository_ref=spec.repository_ref or "",

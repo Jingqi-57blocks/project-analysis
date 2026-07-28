@@ -135,17 +135,30 @@ def _phase_judgment(state: RunState) -> bool:
     # Any select task that validated now has evidence to fetch and a real
     # lens task to compose. This is the two-phase pair completing itself.
     outcome = state.phase("judgment: fetch selections and finalize lenses")
+    engine = Engine(state.run)
+    states = engine.task_states()
+    created_select_ids = {
+        record.task_id for record in engine._read_records()
+        if record.event == "created"
+        and record.detail["task"].get("task_type") == "selection-fetch"
+    }
     selects = validated_outputs(state.run, task_type="selection-fetch")
     finalized = 0
+    # Fetch every validated select first, then finalize each parent only once
+    # all of its select shards are terminal.  A permanently failed select is
+    # intentionally still finalized: planner.plan_lens_finalize materializes
+    # the resulting source-coverage gap instead of silently dropping the
+    # lens from the rest of the pipeline.
     for select_task_id in sorted(selects):
-        if not select_task_id.endswith("-select") and "-select-shard-" not in select_task_id:
-            continue
         try:
             selection.fetch(state.run, select_task_id)
         except Exception as exc:  # noqa: BLE001 - disclosed, never silent
             state.log(f"  fetch-selections {select_task_id}: {exc}")
-            continue
-        lens_task_id = select_task_id.split("-select")[0]
+    lens_task_ids = {
+        select_task_id.split("-select")[0] for select_task_id in created_select_ids
+        if "-select" in select_task_id and states.get(select_task_id) in {"validated", "failed"}
+    }
+    for lens_task_id in sorted(lens_task_ids):
         try:
             planner.plan_lens_finalize(
                 state.run, lens_task_id,

@@ -87,7 +87,9 @@ this run, not only as catches you happen to stumble on:
 Rules:
 - Same shape, same citation discipline, same two-signal bar for high
   confidence as every other lens — freedom of TOPIC, not of rigor.
-- Do not duplicate other lenses' findings; if a discovery belongs to a
-  specialized lens, leave it there and add only what they cannot see.
+- Do not restate a specialized-lens finding when this packet itself contains
+  the comparison evidence. If no such comparison set is supplied, state the
+  boundary of this lens's own evidence rather than claiming a hidden
+  cross-lens de-duplication judgment.
 - This lens has no tool to fail, so its coverage line states what you did
   NOT get to look at (views you lacked time/rows for, skipped lanes).
