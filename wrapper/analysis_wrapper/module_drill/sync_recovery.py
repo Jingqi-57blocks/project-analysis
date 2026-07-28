@@ -179,15 +179,34 @@ def _packet_inputs(requirements: dict[str, Any], graph: dict[str, Any], spans: d
     # a framework registration line can legitimately be cited by many nodes.
     # Selecting every node that shares such a reference repeated whole route
     # groups in a single packet and could exceed the context budget even for
-    # one requirement.  A recovery packet therefore contains only its explicit
-    # requirement anchors; structural edges are retained only where both
-    # endpoints are in that same bounded packet.
-    local_nodes = [row for row in graph.get("nodes", []) if isinstance(row, dict)
-                   and row.get("node_id") in node_ids]
+    # one requirement.  Preserve only the explicit anchors, plus narrow
+    # observed flow bridges needed to interpret a UI action or route:
+    # UI action -> route and route -> handler/symbol.  This is bounded by
+    # actual graph edges rather than citation fan-out.
+    all_nodes = {
+        row.get("node_id"): row for row in graph.get("nodes", [])
+        if isinstance(row, dict) and isinstance(row.get("node_id"), str)
+    }
+    bridged_node_ids = set(node_ids)
+    bridged_edges: list[dict[str, Any]] = []
+    for edge in graph.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        source_id, target_id = edge.get("source_node_id"), edge.get("target_node_id")
+        source, target = all_nodes.get(source_id), all_nodes.get(target_id)
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            continue
+        if source_id in node_ids and source.get("kind") == "ui-action" and target.get("kind") == "route":
+            bridged_node_ids.add(target_id)
+            bridged_edges.append(edge)
+        elif source_id in node_ids and source.get("kind") == "route" \
+                and target.get("kind") in {"handler", "symbol"}:
+            bridged_node_ids.add(target_id)
+            bridged_edges.append(edge)
+    local_nodes = [all_nodes[node_id] for node_id in sorted(bridged_node_ids) if node_id in all_nodes]
     local_node_ids = {row["node_id"] for row in local_nodes if isinstance(row.get("node_id"), str)}
-    local_edges = [row for row in graph.get("edges", []) if isinstance(row, dict)
-                   and row.get("source_node_id") in local_node_ids
-                   and row.get("target_node_id") in local_node_ids]
+    local_edges = [row for row in bridged_edges
+                   if row.get("source_node_id") in local_node_ids and row.get("target_node_id") in local_node_ids]
     requirement_doc = {**requirements, "requirements": rows}
     # The graph's full frontier inventory is a closure/audit artifact, not an
     # input to source-level synchronous recovery.  Retaining it here repeats
