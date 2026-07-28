@@ -140,7 +140,8 @@ def _ui_link_items(artifact_id: str, document: dict[str, Any],
         refs = _source_refs((route_evidence,), backend, revisions) + _source_refs(callers, frontend, revisions)
         repositories = (frontend,) if frontend == backend else (frontend, backend)
         items.append(EvidenceItem(
-            _id(artifact_id, "ui-route-link", frontend, backend, method, path, *sorted(callers)),
+            _id(artifact_id, "ui-route-link", frontend, backend, method, path,
+                route_evidence, *sorted(callers)),
             "ui-action", repositories, tuple(sorted(set(refs))), artifact_id,
             {"method": method, "path": path, "route_status": row.get("status", ""),
              "target_repository_ref": backend},

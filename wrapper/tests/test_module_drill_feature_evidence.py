@@ -178,3 +178,39 @@ def test_cross_repository_ui_link_keeps_the_frontend_as_the_seed_owner(tmp_path)
     action = next(item for item in document["items"] if item["kind"] == "ui-action")
     assert action["repository_refs"] == ["web", "api"]
     assert next(seed for seed in document["seeds"] if seed["kind"] == "ui-action")["repository_ref"] == "web"
+
+
+def test_ui_links_with_the_same_client_call_but_distinct_backend_handlers_remain_distinct(tmp_path):
+    workspace = tmp_path / "workspace"
+    web, api = workspace / "web", workspace / "api"
+    web.mkdir(parents=True)
+    api.mkdir()
+    spec = TargetSpec([
+        RepoTarget(repo_id=stable_repo_id(str(web)), path=str(web)),
+        RepoTarget(repo_id=stable_repo_id(str(api)), path=str(api)),
+    ])
+    identities = identity.build(spec, workspace_root=workspace,
+                                project_id=stable_repo_id(str(workspace)))
+    source = tmp_path / "source"
+    (source / "routes").mkdir(parents=True)
+    path = source / "routes" / "ui-route-linkage.json"
+    rows = [{"frontend_repository_ref": "web", "repository_ref": "api",
+             "method": "GET", "path": "/records", "route_evidence": f"routes.go:{line}",
+             "caller_evidence": ["src/client.ts:4"], "status": "ui-called"}
+            for line in (9, 21)]
+    path.write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    manifest = SourceManifest(
+        "standalone", None, "a" * 64,
+        (RepositorySnapshot("web", "NON-GIT", "non-git"),
+         RepositorySnapshot("api", "NON-GIT", "non-git")), {}, (),
+        (ArtifactRecord("artifact-ui-route", "routes/ui-route-linkage.json", "v1",
+                        hashlib.sha256(path.read_bytes()).hexdigest(), "canonical", "verified"),),
+        (),
+    )
+    context = SourceContext(tmp_path / "module-run", source, manifest, spec, identities)
+
+    document = build(context)
+
+    actions = [item for item in document["items"] if item["kind"] == "ui-action"]
+    assert len(actions) == 2
+    assert len({item["evidence_id"] for item in actions}) == 2
