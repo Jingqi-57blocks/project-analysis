@@ -39,6 +39,7 @@ _MODULE_MAP_FIELDS = ("modules", "candidate_rules", "candidate_dispositions",
 PARTITION_PLAN_SCHEMA_VERSION = 1
 PARTITION_PLAN_FILENAME = "formation-partitions.json"
 QUALITY_FILENAME = "module-formation-quality.json"
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
 class FormationWriterError(ValueError):
@@ -132,6 +133,36 @@ def _canonical(value: Mapping[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _merge_cross_partition_module(
+    existing: Mapping[str, Any], incoming: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Mechanically reconcile one shared module proposed by multiple partitions.
+
+    Each partition owns a disjoint candidate universe, so it may independently
+    propose the same cross-boundary module.  A lower confidence or an extra
+    alias is local judgment about the same definition, not a competing module
+    boundary.  Preserve both signals deterministically: confidence is the most
+    conservative value and aliases are a sorted set.  All other fields must
+    still agree exactly, so this never chooses between competing names,
+    classifications, or unrecognized semantic fields.
+    """
+    module_id = existing["module_id"]
+    for key in sorted(set(existing) | set(incoming)):
+        if key in {"confidence", "aliases"}:
+            continue
+        if (key not in existing or key not in incoming
+                or existing[key] != incoming[key]):
+            raise FormationWriterError(
+                f"conflicting definition for cross-partition module {module_id!r}")
+    merged = dict(existing)
+    merged["confidence"] = min(
+        (existing["confidence"], incoming["confidence"]),
+        key=lambda value: _CONFIDENCE_RANK[value],
+    )
+    merged["aliases"] = sorted(set(existing["aliases"]) | set(incoming["aliases"]))
+    return merged
+
+
 def _merge_partitioned_outputs(run: Path, outputs: Mapping[str, Any], plan: Mapping[str, Any]) -> dict:
     """Losslessly merge independently validated formation partitions.
 
@@ -188,10 +219,9 @@ def _merge_partitioned_outputs(run: Path, outputs: Mapping[str, Any], plan: Mapp
                 if not isinstance(row, Mapping) or not isinstance(row.get("module_id"), str):
                     raise FormationWriterError(f"{task_id} contains an invalid module row")
                 existing = modules.get(row["module_id"])
-                if existing is not None and _canonical(existing) != _canonical(row):
-                    raise FormationWriterError(
-                        f"conflicting definition for cross-partition module {row['module_id']!r}")
-                modules[row["module_id"]] = row
+                modules[row["module_id"]] = (
+                    _merge_cross_partition_module(existing, row)
+                    if existing is not None else row)
             additions = output.get("additional_candidates", [])
             if not isinstance(additions, list):
                 raise FormationWriterError(f"{task_id} additional_candidates must be a list when present")
