@@ -49,6 +49,17 @@ def test_source_manifest_rejects_bounded_view_as_provider_authority():
         SourceManifest.from_dict(payload)
 
 
+def test_source_manifest_binds_its_mode_to_overview_lineage():
+    payload = load_fixture()["source_manifest"]
+    payload = copy.deepcopy(payload)
+    payload["source_mode"] = "overview-backed"
+    with pytest.raises(ContractError, match="source_overview_run"):
+        SourceManifest.from_dict(payload)
+
+    payload["source_overview_run"] = "overview_123.abc-456"
+    assert SourceManifest.from_dict(payload).source_overview_run == "overview_123.abc-456"
+
+
 def test_fixture_rejects_stale_manifest_binding_and_missing_linkage():
     stale = load_fixture()
     stale["module_scope"]["source_manifest_digest"] = "0" * 64

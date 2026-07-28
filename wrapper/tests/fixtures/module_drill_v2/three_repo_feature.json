@@ -3,6 +3,7 @@
   "source_manifest": {
     "schema_version": "source-manifest/v1",
     "source_mode": "standalone",
+    "source_overview_run": null,
     "snapshot_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "repositories": [
       {"repository_ref": "web-app", "revision": "1111111", "dirty_state": "clean"},
@@ -28,7 +29,7 @@
     "schema_version": "module-scope/v2",
     "feature_id": "sample-capability",
     "selector": "create a record",
-    "source_manifest_digest": "4df65d3f98d2be852131361120eb970f30b85498a9b1985dc0418b1571d2f4c0",
+    "source_manifest_digest": "de6a89df6a122ca930be817a203478e6ecfebd118292754d53f24e3a227c1603",
     "selected_candidate_id": "candidate-create-record",
     "candidates": [
       {
