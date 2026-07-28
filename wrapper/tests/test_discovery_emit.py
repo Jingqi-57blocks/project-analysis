@@ -130,6 +130,25 @@ def test_nested_repo_disclosed_not_targeted(tmp_path):
     assert any("nested in" in line for line in report["not_targeted"])
 
 
+def test_linked_worktree_disclosed_not_targeted(tmp_path):
+    """Alternative linked checkouts must not add another branch to a run."""
+    ws = _workspace(tmp_path)
+    worktree = ws / ".worktrees" / "feature"
+    _write(worktree / "package.json", "{}")
+    (worktree / ".git").write_text(
+        "gitdir: /somewhere/main/.git/worktrees/feature\n")
+
+    spec, report = emit.discover(ws)
+
+    assert {Path(repo.path).name for repo in spec.repos} == {
+        "audit-svc", "billing-app",
+    }
+    assert any(
+        str(worktree) in line and "linked git worktree" in line
+        for line in report["not_targeted"]
+    )
+
+
 def test_non_git_workspace_container_targets_children_once(tmp_path):
     ws = tmp_path / "container"
     _write(ws / "web" / "package.json", "{}")

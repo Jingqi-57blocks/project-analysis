@@ -224,6 +224,15 @@ def discover(workspace_root: str | Path,
         disclosed.append(f"{path} (source files present, no supported manifest)")
 
     for hit in inv.repos:
+        # A linked Git worktree is an alternate checkout of another repository,
+        # not an additional workspace project.  Treating it as a target mixes
+        # an unrelated branch into the run and makes the result non-reproducible
+        # for the requested workspace revision.  Inventory still records it so
+        # the omission is explicit in the discovery report.
+        if hit.linked_kind == "worktree":
+            disclosed.append(
+                f"{hit.path} (linked git worktree — excluded from workspace targets)")
+            continue
         if self_excluded(hit.path):
             continue
         if Path(hit.path).name in excluded:
