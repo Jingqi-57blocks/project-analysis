@@ -14,6 +14,7 @@ from .feature_evidence import write as write_feature_evidence
 from .candidate_universe import write as write_candidate_universe
 from .context import load as load_source_context
 from .ranking import register as register_ranking
+from .selection import finalize as finalize_selection
 from .runtime import initialize_from_overview
 from .spans import fetch
 from .standalone import initialize as initialize_standalone
@@ -118,6 +119,13 @@ def _rank_candidates(args) -> int:
     return 0
 
 
+def _finalize_ranking(args) -> int:
+    result = finalize_selection(args.run)
+    _print({"decision": result.decision, "resolution": str(result.resolution_path),
+            "scope": str(result.scope_path) if result.scope_path else ""})
+    return 0 if result.scope_path is not None else 3
+
+
 def run(args) -> int:
     """Dispatch a Module Drill subcommand and preserve normal CLI exit codes."""
     try:
@@ -127,6 +135,7 @@ def run(args) -> int:
             "module-build-evidence": _evidence,
             "module-build-candidates": _candidates,
             "module-plan-ranking": _rank_candidates,
+            "module-finalize-ranking": _finalize_ranking,
         }
         handler = handlers.get(args.command)
         if handler is None:

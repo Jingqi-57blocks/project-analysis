@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 from ..executor import replace_artifact_text
 from ..orchestrator.contracts import TaskPacket
 from ..orchestrator.engine import ClaimedTask, Engine
+from ..orchestrator.results import validated_outputs
 from .context import SourceContext, load as load_source_context
 from .protocol import MODULE_TASK_TYPES, schema_for_task_type
 from .run_state import AuditResult, RunStateProjection
@@ -114,3 +115,20 @@ class ModuleDriver:
 
     def status(self) -> DriverStatus:
         return self.refresh()
+
+    def validated_task(self, task_id: str) -> tuple[TaskPacket, Any]:
+        """Return one current validated task packet and its submitted output.
+
+        Downstream Module Drill phases must not independently parse the
+        append-only ledger.  This method keeps the current-generation check
+        and output lookup adjacent to the driver that owns the ledger.
+        """
+        self.context = load_source_context(self.run)
+        records = self.engine._read_records()
+        task = self.engine._rebuild(records).get(task_id)
+        if task is None or not task.done:
+            raise ContractError(f"module task {task_id!r} is not validated")
+        output = validated_outputs(self.run, task_type=task.packet.task_type).get(task_id)
+        if output is None:
+            raise ContractError(f"module task {task_id!r} has no validated output")
+        return task.packet, output
