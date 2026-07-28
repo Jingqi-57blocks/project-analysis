@@ -12,8 +12,12 @@ from analysis_wrapper.module_drill.span_plan import write as write_span_plan
 from test_module_drill_frontier_candidates import _prepared
 
 
-def _ready(tmp_path, *, integration_path="src/service.ts"):
-    module_run = _prepared(tmp_path, integration_path=integration_path)
+def _ready(tmp_path, *, integration_path="src/service.ts", route_handler_anchors=None):
+    module_run = _prepared(
+        tmp_path,
+        integration_path=integration_path,
+        route_handler_anchors=route_handler_anchors,
+    )
     write_candidates(load(module_run))
     write_graph_closure(load(module_run))
     write_span_plan(load(module_run))
@@ -37,6 +41,25 @@ def test_boundary_closure_expands_only_provider_evidence_inside_handler_span(tmp
     assert all(row["cycle_key"] for row in document["boundary_dispositions"])
     assert all(row["state"] in {"expanded", "excluded", "unresolved"}
                for row in document["boundary_dispositions"])
+
+
+def test_boundary_closure_expands_evidence_inside_a_source_resolved_route_handler(tmp_path):
+    module_run = _ready(tmp_path, route_handler_anchors=[{
+        "symbol": "createRecord", "evidence": "src/service.ts:15",
+    }])
+    document = build(load(module_run))
+
+    handler = next(row for row in document["nodes"] if row["kind"] == "handler")
+    linked_edges = [row for row in document["edges"]
+                    if row["source_node_id"] == handler["node_id"]]
+    assert {row["kind"] for row in linked_edges} >= {
+        "async-boundary", "configuration-boundary", "integration-boundary",
+    }
+    handler_frontier = next(
+        row for row in document["handler_frontier_dispositions"]
+        if row["anchor_id"] == handler["node_id"]
+    )
+    assert handler_frontier["state"] == "expanded"
 
 
 def test_boundary_closure_excludes_same_provider_candidate_outside_handler_span(tmp_path):

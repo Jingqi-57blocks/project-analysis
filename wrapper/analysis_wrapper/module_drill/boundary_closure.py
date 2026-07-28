@@ -135,7 +135,12 @@ def build(context: SourceContext) -> dict[str, Any]:
         # A route registration is a verified handler entry point even where a
         # language callgraph cannot resolve the inline implementation.  The
         # exact route span is fetched before any provider boundary is attached.
-        if node.get("kind") in {"symbol", "route"} and node.get("observation") == "observed"
+        # ``handler`` is a source-resolved route target.  It must be eligible
+        # for the same bounded span closure as legacy route and callgraph
+        # anchors; otherwise a verified ``route -> handler`` edge would never
+        # expose the handler's own provider evidence.
+        if node.get("kind") in {"symbol", "route", "handler"}
+        and node.get("observation") == "observed"
     }
     fetched_spans = [row for row in spans.get("spans", []) if isinstance(row, dict)]
     if not all(isinstance(row.get("span_id"), str) for row in fetched_spans):
