@@ -906,6 +906,48 @@ def _load_object(path: Path) -> dict:
     return value
 
 
+def _validate_reused_staticcheck_invocations(signals: Path, spec: TargetSpec,
+                                             identities) -> None:
+    """Reject a reused staticcheck artifact when its execution identity drifted.
+
+    A signal summary is a reusable checkpoint only for the exact tool/module
+    invocation that produced it. Target source staleness is checked separately
+    by ``_assert_fresh_run``; this closes the remaining cwd/package-pattern/
+    tool-version hole without re-running the target analysis.
+    """
+    from .registry import staticcheck
+    # The artifact key is the public filename namespace, never a target path.
+    for target in spec.repos:
+        manifest_path = signals / (
+            f"staticcheck-{identities.artifact_key_for(target.repo_id)}.manifest.json")
+        if not manifest_path.is_file():
+            continue
+        try:
+            observed = _load_object(manifest_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot validate reused staticcheck manifest: {exc}") from exc
+        definition = staticcheck(target)
+        plan = definition.build_invocation(target, signals)
+        binary = definition.resolved_binary()
+        current_version = definition.probe_version(binary) if binary else None
+        differences = []
+        if observed.get("invocation") != plan.identity:
+            differences.append("invocation identity")
+        if observed.get("argv") != plan.argv:
+            differences.append("package pattern")
+        if observed.get("cwd") != plan.manifest_cwd:
+            differences.append("logical cwd/module root")
+        if observed.get("env") != definition.env:
+            differences.append("Go environment")
+        if not current_version or observed.get("tool_version") != current_version:
+            differences.append("tool version")
+        if differences:
+            raise ValueError(
+                "reused staticcheck artifact invocation changed ("
+                + ", ".join(differences)
+                + "); mint a new run instead of reusing signals")
+
+
 def _assert_fresh_run(run: Path, *, require_provenance: bool = True) -> "object":
     """Refuse to advance a real run after target/analyzer state changed."""
     from . import lifecycle, run_provenance
@@ -974,6 +1016,8 @@ def _prepare_overview(args: argparse.Namespace) -> int:
     fresh_sweep_results: list[SignalResult] | None = None
     if signal_summary.is_file():
         _load_object(signal_summary)
+        from . import identity
+        _validate_reused_staticcheck_invocations(signals, spec, identity.load(run))
         print("signals: reused canonical run-summary.json")
     else:
         if signals.exists():
