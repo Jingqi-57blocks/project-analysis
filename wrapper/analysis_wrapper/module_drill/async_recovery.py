@@ -16,7 +16,7 @@ from .validation import ContractError, sha256_json
 TASK_ID = "module-async-recovery"
 TASK_TYPE = "module-async-recovery"
 TEMPLATE_ID = "module-async-recovery"
-TEMPLATE_VERSION = "v1"
+TEMPLATE_VERSION = "v2"
 OUTPUT_SCHEMA_ID = "module-async-recovery/v1"
 CONTEXT_BUDGET_TOKENS = 32_000
 INPUT_BUDGET_TOKENS = 24_000
@@ -35,6 +35,16 @@ configuration, a producer/consumer counterpart, delivery, or external-service
 implementation. Preserve supplied identifiers and literals verbatim. Unknown
 must name the missing semantic evidence. Do not write report prose or Mermaid.
 """
+
+_LANGUAGE_INSTRUCTIONS = {
+    "en": "Write explanatory claim subjects in English. Preserve supplied identifiers and literals verbatim.",
+    "zh-CN": "使用中文编写解释性声明主体；UI 标签、标识符、路由、状态和其他源码字面量必须保持原样。",
+}
+
+
+def _instructions(context: SourceContext | None) -> str:
+    language = getattr(context, "language", "en")
+    return _INSTRUCTIONS + "\n" + _LANGUAGE_INSTRUCTIONS[language] + "\n"
 
 
 def _load(context: SourceContext, filename: str, schema: str) -> dict[str, Any]:
@@ -168,7 +178,7 @@ def build_packet(context: SourceContext) -> TaskPacket:
         task_type=TASK_TYPE,
         template_id=TEMPLATE_ID,
         template_version=TEMPLATE_VERSION,
-        instructions=_INSTRUCTIONS,
+        instructions=_instructions(context),
         inputs=_packet_inputs(closure, spans, requirements),
         output_schema_id=OUTPUT_SCHEMA_ID,
         context_budget_tokens=CONTEXT_BUDGET_TOKENS,

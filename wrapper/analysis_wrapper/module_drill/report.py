@@ -48,6 +48,29 @@ _TEXT = {
         "unresolved": "Open or blocked frontiers", "none": "None", "closed": "closed", "open": "open", "blocked": "blocked",
         "observed": "observed", "inferred": "inferred", "unresolved_observation": "unresolved",
         "observations": {"observed": "observed", "inferred": "inferred", "unresolved": "unresolved"},
+        "dimensions": {
+            "asynchronous-behavior": "asynchronous behavior", "authorization": "authorization",
+            "configuration": "configuration", "data": "data", "integration": "integration",
+            "synchronous-behavior": "synchronous behavior", "ui-entry": "UI entry",
+        },
+        "node_kinds": {
+            "ui-action": "UI action", "route": "route", "handler": "handler", "symbol": "symbol",
+            "datastore": "data store", "access-check": "access check", "access-role": "access role",
+            "async-boundary": "asynchronous boundary", "configuration": "configuration",
+            "integration-host": "external host", "integration-package": "integration package",
+            "test-file": "test file", "test-link": "test link",
+        },
+        "edge_kinds": {
+            "ui-route": "UI to route", "routes-to": "route to handler", "calls": "calls",
+            "reads": "reads", "writes": "writes", "emits": "emits", "consumes": "consumes",
+            "async-boundary": "asynchronous boundary",
+        },
+        "generated_limits": {
+            "no feature-local provider evidence was observed": "no feature-local provider evidence was observed",
+            "exact observed UI-to-route graph edge": "exact observed UI-to-route graph edge",
+            "exact observed route-to-handler graph edge": "exact observed route-to-handler graph edge",
+            "direct observed source anchor is the bounded semantic recovery unit; no exact call edge was observed": "a direct source anchor is the bounded semantic recovery unit; no exact call edge was observed",
+        },
         "coverage_applicability": {"applicable": "applicable", "not-applicable": "not applicable", "unknown": "unknown"},
         "coverage_status": {"complete": "complete", "partial": "partial", "unavailable": "unavailable", "skipped": "skipped", "failed": "failed"},
         "frontier_states": {"expanded": "expanded", "terminal": "terminal", "excluded": "excluded", "unresolved": "unresolved", "blocked": "blocked"},
@@ -82,6 +105,29 @@ _TEXT = {
         "claim_index": "声明索引", "unresolved": "未解决或受阻的前沿", "none": "无", "closed": "已闭合",
         "open": "未闭合", "blocked": "受阻", "observed": "已观察", "inferred": "推断", "unresolved_observation": "未解决",
         "observations": {"observed": "已观察", "inferred": "推断", "unresolved": "未解决"},
+        "dimensions": {
+            "asynchronous-behavior": "异步行为", "authorization": "授权", "configuration": "配置",
+            "data": "数据", "integration": "外部集成", "synchronous-behavior": "同步行为",
+            "ui-entry": "界面入口",
+        },
+        "node_kinds": {
+            "ui-action": "界面操作", "route": "接口路由", "handler": "处理器", "symbol": "符号",
+            "datastore": "数据存储", "access-check": "访问检查", "access-role": "访问角色",
+            "async-boundary": "异步边界", "configuration": "配置",
+            "integration-host": "外部主机", "integration-package": "集成包",
+            "test-file": "测试文件", "test-link": "测试关联",
+        },
+        "edge_kinds": {
+            "ui-route": "界面到接口", "routes-to": "路由到处理器", "calls": "调用",
+            "reads": "读取", "writes": "写入", "emits": "产生", "consumes": "消费",
+            "async-boundary": "异步边界",
+        },
+        "generated_limits": {
+            "no feature-local provider evidence was observed": "没有观察到该功能范围内的提供方证据",
+            "exact observed UI-to-route graph edge": "已观察到精确的界面到路由关系",
+            "exact observed route-to-handler graph edge": "已观察到精确的路由到处理器关系",
+            "direct observed source anchor is the bounded semantic recovery unit; no exact call edge was observed": "直接观察到的源码锚点是有界语义恢复单元；未观察到精确调用边",
+        },
         "coverage_applicability": {"applicable": "适用", "not-applicable": "不适用", "unknown": "未知"},
         "coverage_status": {"complete": "完整", "partial": "部分覆盖", "unavailable": "不可用", "skipped": "已跳过", "failed": "失败"},
         "frontier_states": {"expanded": "已展开", "terminal": "终止", "excluded": "已排除", "unresolved": "未解决", "blocked": "受阻"},
@@ -136,6 +182,16 @@ def _cell(value: object) -> str:
 
 def _headers(text: dict[str, Any], *keys: str) -> list[str]:
     return [text["headers"][key] for key in keys]
+
+
+def _structured_label(text: dict[str, Any], category: str, value: str) -> str:
+    """Localize only fixed contract vocabulary, never source-derived values."""
+    return text[category].get(value, value.replace("-", " "))
+
+
+def _generated_limit(text: dict[str, Any], value: str) -> str:
+    """Translate deterministic diagnostic wording while preserving unknown text."""
+    return text["generated_limits"].get(value, value)
 
 
 def _code(value: object) -> str:
@@ -199,7 +255,8 @@ def _claim_groups(model: ModuleModel) -> dict[str, tuple[FeatureClaim, ...]]:
     return {key: tuple(sorted(value, key=lambda item: item.claim_id)) for key, value in buckets.items()}
 
 
-def _node_label(node: FeatureNode, claims_by_anchor: dict[str, tuple[FeatureClaim, ...]] | None = None) -> str:
+def _node_label(node: FeatureNode, claims_by_anchor: dict[str, tuple[FeatureClaim, ...]] | None = None,
+                text: dict[str, Any] | None = None) -> str:
     """Prefer a finalized source-backed claim over an opaque graph identifier."""
     if claims_by_anchor:
         claims = claims_by_anchor.get(node.node_id, ())
@@ -207,7 +264,10 @@ def _node_label(node: FeatureNode, claims_by_anchor: dict[str, tuple[FeatureClai
             claim = claims[0]
             value = "" if claim.value is None else f" {claim.value}"
             return f"{claim.subject}{value}"[:120]
-    return f"{node.repository_ref} · {node.kind}"
+    # A node label is presentation text, while claim subject/value remain the
+    # only route for source-derived literals into a diagram or prose.
+    kind = _structured_label(text, "node_kinds", node.kind) if text is not None else node.kind
+    return f"{node.repository_ref} · {kind}"
 
 
 def _claims_by_anchor(model: ModuleModel) -> dict[str, tuple[FeatureClaim, ...]]:
@@ -231,7 +291,7 @@ def _flow_edges(model: ModuleModel) -> tuple[FeatureEdge, ...]:
     return tuple(ordered)
 
 
-def _mermaid(model: ModuleModel) -> str:
+def _mermaid(model: ModuleModel, text: dict[str, Any]) -> str:
     """Draw only explicitly finalized flow edges, never the whole closure graph."""
     edges = _flow_edges(model)
     if not edges:
@@ -242,11 +302,11 @@ def _mermaid(model: ModuleModel) -> str:
     lines = ["```mermaid", "flowchart LR"]
     for index, node_id in enumerate(used_ids, start=1):
         node = nodes[node_id]
-        label = _node_label(node, claims_by_anchor).replace("\\", "\\\\").replace('"', "'").replace("\n", " ")
+        label = _node_label(node, claims_by_anchor, text).replace("\\", "\\\\").replace('"', "'").replace("\n", " ")
         lines.append(f'  n{index}["{label}"]')
     aliases = {node_id: f"n{index}" for index, node_id in enumerate(used_ids, start=1)}
     for edge in edges:
-        lines.append(f"  {aliases[edge.source_node_id]} -->|{edge.kind}| {aliases[edge.target_node_id]}")
+        lines.append(f"  {aliases[edge.source_node_id]} -->|{_structured_label(text, 'edge_kinds', edge.kind)}| {aliases[edge.target_node_id]}")
     return "\n".join(lines) + "\n```\n"
 
 
@@ -261,7 +321,10 @@ def _flow_rows(model: ModuleModel, text: dict[str, Any]) -> list[list[str]]:
         refs: list[str] = []
         for edge_id in flow.edge_ids:
             edge = edges[edge_id]
-            steps.append(f"{_node_label(nodes[edge.source_node_id], claims_by_anchor)} → {_node_label(nodes[edge.target_node_id], claims_by_anchor)} ({edge.kind})")
+            steps.append(
+                f"{_node_label(nodes[edge.source_node_id], claims_by_anchor, text)} → "
+                f"{_node_label(nodes[edge.target_node_id], claims_by_anchor, text)} "
+                f"({_structured_label(text, 'edge_kinds', edge.kind)})")
         related_claims = [claims_by_id[claim_id] for claim_id in flow.claim_ids if claim_id in claims_by_id]
         refs.extend(ref for claim in related_claims for ref in claim.evidence_refs)
         claim_refs = [f"`{claim.claim_id}`" for claim in related_claims]
@@ -272,10 +335,12 @@ def _flow_rows(model: ModuleModel, text: dict[str, Any]) -> list[list[str]]:
 
 def _coverage_rows(model: ModuleModel, text: dict[str, Any]) -> list[list[str]]:
     statuses = {"closed": text["closed"], "open": text["open"], "blocked": text["blocked"]}
-    return [[name, text["coverage_applicability"].get(value.coverage.applicability, value.coverage.applicability),
+    return [[_structured_label(text, "dimensions", name),
+             text["coverage_applicability"].get(value.coverage.applicability, value.coverage.applicability),
              text["coverage_status"].get(value.coverage.status, value.coverage.status),
              statuses.get(value.closure_status, value.closure_status),
-             "; ".join(value.unresolved_reasons or value.coverage.limitations) or "—"]
+             "; ".join(_generated_limit(text, reason) for reason in
+                       (value.unresolved_reasons or value.coverage.limitations)) or "—"]
             for name, value in sorted(model.dimension_coverage.items())]
 
 
@@ -336,13 +401,13 @@ def _report_architecture(model: ModuleModel, text: dict[str, Any]) -> str:
     for node in model.nodes:
         nodes_by_repo[node.repository_ref].append(node)
     body = _heading(1, text["architecture"])
-    diagram = _mermaid(model)
+    diagram = _mermaid(model, text)
     if diagram:
         body += diagram + "\n"
     body += _heading(2, text["repositories"])
     body += _table(_headers(text, "repository", "kinds", "evidence"), [
         [repository,
-         ", ".join(sorted({node.kind for node in nodes})) + f" ({len(nodes)})",
+         ", ".join(sorted({_structured_label(text, "node_kinds", node.kind) for node in nodes})) + f" ({len(nodes)})",
          _brief_refs((ref for node in nodes for ref in node.evidence_refs), text)]
         for repository, nodes in sorted(nodes_by_repo.items())
     ])
@@ -353,8 +418,10 @@ def _report_architecture(model: ModuleModel, text: dict[str, Any]) -> str:
     if visible_edges:
         node_by_id = {node.node_id: node for node in model.nodes}
         body += _table(_headers(text, "relationship", "from", "to", "evidence"), [
-            [edge.kind, _node_label(node_by_id[edge.source_node_id], claims_by_anchor),
-             _node_label(node_by_id[edge.target_node_id], claims_by_anchor), _brief_refs(edge.evidence_refs, text)]
+            [_structured_label(text, "edge_kinds", edge.kind),
+             _node_label(node_by_id[edge.source_node_id], claims_by_anchor, text),
+             _node_label(node_by_id[edge.target_node_id], claims_by_anchor, text),
+             _brief_refs(edge.evidence_refs, text)]
             for edge in visible_edges
         ])
     else:
@@ -370,7 +437,8 @@ def _report_data(model: ModuleModel, text: dict[str, Any]) -> str:
     body += _heading(2, text["nodes"])
     if data_nodes:
         body += _table(_headers(text, "repository", "boundary", "evidence"), [
-            [node.repository_ref, node.kind, _brief_refs(node.evidence_refs, text)] for node in data_nodes
+            [node.repository_ref, _structured_label(text, "node_kinds", node.kind),
+             _brief_refs(node.evidence_refs, text)] for node in data_nodes
         ])
     else:
         body += text["no_data"] + "\n"
@@ -384,11 +452,12 @@ def _report_changeability(model: ModuleModel, text: dict[str, Any]) -> str:
     body = _heading(1, text["change"])
     body += _heading(2, text["dispositions"])
     body += _table(_headers(text, "state", "count", "reasons"), [
-        [text["frontier_states"].get(state, state), len(items), "; ".join(sorted(set(reason for reason in items if reason))) or "—"]
+        [text["frontier_states"].get(state, state), len(items),
+         "; ".join(sorted({_generated_limit(text, reason) for reason in items if reason})) or "—"]
         for state, items in sorted(grouped.items())
     ])
     body += "\n" + _heading(2, text["limitations"])
-    limits = sorted({limit for item in model.dimension_coverage.values()
+    limits = sorted({_generated_limit(text, limit) for item in model.dimension_coverage.values()
                      for limit in (*item.coverage.limitations, *item.unresolved_reasons)})
     body += "\n".join(f"- {limit}" for limit in limits) + "\n" if limits else text["none"] + "\n"
     return body
@@ -412,17 +481,18 @@ def _report_evidence(model: ModuleModel, provenance: dict[str, Any], text: dict[
     unresolved = [item for item in model.dispositions if item.state in {"unresolved", "blocked"}]
     if unresolved:
         body += _table(_headers(text, "frontier", "state", "reason"), [[
-            item.frontier_id, text["frontier_states"].get(item.state, item.state), item.reason
+            item.frontier_id, text["frontier_states"].get(item.state, item.state), _generated_limit(text, item.reason)
         ] for item in unresolved])
     else:
         body += text["none"] + "\n"
     body += "\n" + _heading(2, text["nodes"])
     body += _table(_headers(text, "id", "repository", "kind", "observation", "evidence"), [[
-        node.node_id, node.repository_ref, node.kind, text["observations"].get(node.observation, node.observation), _refs(node.evidence_refs)
+        node.node_id, node.repository_ref, _structured_label(text, "node_kinds", node.kind),
+        text["observations"].get(node.observation, node.observation), _refs(node.evidence_refs)
     ] for node in model.nodes])
     body += "\n" + _heading(2, text["edges"])
     body += _table(_headers(text, "id", "kind", "from", "to", "observation", "evidence"), [[
-        edge.edge_id, edge.kind, edge.source_node_id, edge.target_node_id,
+        edge.edge_id, _structured_label(text, "edge_kinds", edge.kind), edge.source_node_id, edge.target_node_id,
         text["observations"].get(edge.observation, edge.observation), _refs(edge.evidence_refs)
     ] for edge in model.edges])
     return body

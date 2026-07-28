@@ -16,7 +16,7 @@ from .validation import ContractError, sha256_json
 TASK_ID = "module-sync-recovery"
 TASK_TYPE = "module-sync-recovery"
 TEMPLATE_ID = "module-sync-recovery"
-TEMPLATE_VERSION = "v2"
+TEMPLATE_VERSION = "v3"
 OUTPUT_SCHEMA_ID = "module-sync-recovery/v1"
 CONTEXT_BUDGET_TOKENS = 32_000
 # Reserve room for a structured response and validation repair.  This uses
@@ -37,6 +37,19 @@ asynchronous behaviour, configuration, notifications, or external-service
 semantics. A no-concern or not-applicable result needs cited evidence; unknown
 must name the missing semantic evidence. Do not write report prose or Mermaid.
 """
+
+_LANGUAGE_INSTRUCTIONS = {
+    "en": "Write explanatory claim subjects in English. Preserve supplied identifiers and literals verbatim.",
+    "zh-CN": "使用中文编写解释性声明主体；UI 标签、标识符、路由、状态和其他源码字面量必须保持原样。",
+}
+
+
+def _instructions(context: SourceContext | None) -> str:
+    # Small unit tests exercise the packet partitioner without a run context;
+    # production callers always supply SourceContext and therefore preserve the
+    # requested language in the packet digest.
+    language = getattr(context, "language", "en")
+    return _INSTRUCTIONS + "\n" + _LANGUAGE_INSTRUCTIONS[language] + "\n"
 
 _ARTIFACTS = {
     "feature-graph.json": "feature-graph/v1",
@@ -239,7 +252,7 @@ def _packet(context: SourceContext, *, partition_id: str, requirements: dict[str
     return TaskPacket.create(
         task_id=f"{TASK_ID}-{partition_id}", task_type=TASK_TYPE,
         template_id=TEMPLATE_ID, template_version=TEMPLATE_VERSION,
-        instructions=_INSTRUCTIONS,
+        instructions=_instructions(context),
         inputs=_packet_inputs(requirements, graph, spans, partition_id=partition_id, rows=rows),
         output_schema_id=OUTPUT_SCHEMA_ID, context_budget_tokens=CONTEXT_BUDGET_TOKENS,
     )

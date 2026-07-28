@@ -208,6 +208,8 @@ def test_cross_repository_ui_link_keeps_the_frontend_as_the_seed_owner(tmp_path)
     document = build(context)
     action = next(item for item in document["items"] if item["kind"] == "ui-action")
     assert action["repository_refs"] == ["web", "api"]
+    assert action["data"]["frontend_source_refs"] == ["web@NON-GIT:src/submit.ts:4"]
+    assert action["data"]["backend_source_refs"] == ["api@NON-GIT:internal/routes.go:9"]
     assert next(seed for seed in document["seeds"] if seed["kind"] == "ui-action")["repository_ref"] == "web"
 
 

@@ -89,12 +89,19 @@ def _selected_items(context: SourceContext, scope: ModuleScope,
 
 def _node(item: dict[str, Any]) -> FeatureNode:
     evidence_id = item["evidence_id"]
+    local_refs = item["source_refs"]
+    if item.get("kind") == "ui-action":
+        data = item.get("data")
+        frontend_refs = data.get("frontend_source_refs") if isinstance(data, dict) else None
+        if isinstance(frontend_refs, list) and frontend_refs \
+                and all(isinstance(ref, str) and ref for ref in frontend_refs):
+            local_refs = frontend_refs
     return FeatureNode(
         node_id="node-" + evidence_id.removeprefix("evidence-"),
         kind=str(item.get("kind", "evidence")),
         repository_ref=item["repository_refs"][0],
         observation="observed",
-        evidence_refs=tuple(item["source_refs"]),
+        evidence_refs=tuple(local_refs),
     )
 
 

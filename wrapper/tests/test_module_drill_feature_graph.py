@@ -7,7 +7,7 @@ import pytest
 from analysis_wrapper.module_drill.candidate_universe import write as write_candidates
 from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.feature_evidence import write as write_feature_evidence
-from analysis_wrapper.module_drill.feature_graph import build, write
+from analysis_wrapper.module_drill.feature_graph import _node, build, write
 from analysis_wrapper.module_drill.ranking import TASK_ID, build_packet, register as register_ranking
 from analysis_wrapper.module_drill.selection import finalize
 from analysis_wrapper.module_drill.driver import ModuleDriver
@@ -48,6 +48,17 @@ def test_graph_contains_only_selected_observed_anchors_and_exact_ui_route_edge(t
     assert [edge["kind"] for edge in graph["edges"]] == ["ui-route"]
     assert graph["frontiers"]
     assert all(row["wave"] == 0 for row in graph["frontiers"])
+
+
+def test_ui_action_node_retains_frontend_local_evidence_not_backend_link_evidence():
+    node = _node({
+        "evidence_id": "evidence-ui", "kind": "ui-action", "repository_refs": ["web", "api"],
+        "source_refs": ["api@NON-GIT:internal/routes.go:9", "web@NON-GIT:src/submit.ts:4"],
+        "data": {"frontend_source_refs": ["web@NON-GIT:src/submit.ts:4"],
+                 "backend_source_refs": ["api@NON-GIT:internal/routes.go:9"]},
+    })
+    assert node.repository_ref == "web"
+    assert node.evidence_refs == ("web@NON-GIT:src/submit.ts:4",)
 
 
 def test_graph_adds_a_route_to_exact_source_resolved_handler_only(tmp_path):
