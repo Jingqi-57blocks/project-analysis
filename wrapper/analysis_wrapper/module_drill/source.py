@@ -2,26 +2,17 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from .coverage import Coverage
-from .validation import ContractError, enum, exact_object, mapping, sha256, slug, string_list, text, unique_ids
+from .validation import (ContractError, enum, exact_object, mapping, run_id,
+                         sha256, slug, string_list, text, unique_ids)
 
 SOURCE_MANIFEST_VERSION = "source-manifest/v1"
 SOURCE_MODES = frozenset({"overview-backed", "standalone"})
 ARTIFACT_KINDS = frozenset({"canonical", "fragment", "index", "view"})
 INTEGRITY_STATES = frozenset({"verified", "missing", "corrupt", "stale"})
-_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-
-
-def _overview_run_id(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not _RUN_ID.fullmatch(value):
-        raise ContractError(f"{label} must be a safe overview run id")
-    return value
-
-
 @dataclass(frozen=True)
 class RepositorySnapshot:
     repository_ref: str
@@ -154,7 +145,7 @@ class SourceManifest:
     def __post_init__(self) -> None:
         enum(self.source_mode, SOURCE_MODES, "source_mode")
         if self.source_mode == "overview-backed":
-            _overview_run_id(self.source_overview_run, "source_overview_run")
+            run_id(self.source_overview_run, "source_overview_run")
         elif self.source_overview_run is not None:
             raise ContractError("standalone source manifest must not name an overview run")
         sha256(self.snapshot_id, "snapshot_id")
@@ -207,7 +198,7 @@ class SourceManifest:
         return cls(
             source_mode=enum(row["source_mode"], SOURCE_MODES, f"{label}.source_mode"),
             source_overview_run=(
-                _overview_run_id(row["source_overview_run"], f"{label}.source_overview_run")
+                run_id(row["source_overview_run"], f"{label}.source_overview_run")
                 if row["source_overview_run"] is not None else None
             ),
             snapshot_id=sha256(row["snapshot_id"], f"{label}.snapshot_id"),
