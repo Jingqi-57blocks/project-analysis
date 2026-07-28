@@ -673,9 +673,8 @@ def _validate_selection_fetch(obj: Any) -> list[Failure]:
         failures.add("output-shape", "selection-fetch output must be an object")
         return failures.rows
     selections = obj.get("selections")
-    if not failures.require(isinstance(selections, list) and bool(selections),
-                             "selections-shape",
-                             "selections must be a non-empty list", "selections"):
+    if not failures.require(isinstance(selections, list), "selections-shape",
+                             "selections must be a list", "selections"):
         return failures.rows
     seen: set[str] = set()
     for index, row in enumerate(selections):
@@ -686,6 +685,105 @@ def _validate_selection_fetch(obj: Any) -> list[Failure]:
                               f"duplicate selection_id: {selection_id}",
                               f"selections[{index}].selection_id")
             seen.add(selection_id)
+    return failures.rows
+
+
+def _crosscheck_selection_requirements(obj: Any,
+                                       packet_inputs: Mapping[str, str]) -> list[Failure]:
+    """Ensure source requests answer every typed role in the packet.
+
+    A role may truthfully be unavailable, not applicable, or unresolved, but
+    that is a declared coverage condition rather than permission to omit the
+    role or substitute a keyword-similar source.
+    """
+    contract, parse_failures = _load_requirement_object(
+        packet_inputs.get("selection-requirements.json"), filename="selection-requirements")
+    if contract is None:
+        # Legacy/synthetic packets retain the historical non-empty selection
+        # contract. New planned packets always have explicit roles below.
+        if packet_inputs.get("selection-requirements.json") is None \
+                and isinstance(obj, dict) and not obj.get("selections"):
+            return [{"check": "selections-shape", "detail": "selections must be non-empty without requirements",
+                     "location": "selections"}]
+        return parse_failures
+    failures = _Failures()
+    expected_ids = _unique_requirement_ids(contract.get("roles"), "role_id",
+                                           filename="selection-requirements.roles", failures=failures)
+    packet_evidence_ids = set(packet_inputs) - {
+        "requirements.json", "selection-requirements.json", "sharding",
+    }
+    for role in contract.get("roles", []):
+        if not isinstance(role, dict):
+            continue
+        evidence_ids = role.get("evidence_input_ids")
+        inventory_paths = role.get("inventory_paths")
+        if not _string_list(evidence_ids, allow_empty=False) \
+                or not set(evidence_ids).issubset(packet_evidence_ids):
+            failures.add("selection-role-typed-evidence",
+                         "role evidence_input_ids must name packet-backed typed inputs",
+                         f"selection-requirements.roles[{role.get('role_id', '')}]")
+        if not _string_list(inventory_paths):
+            failures.add("selection-role-inventory-paths",
+                         "role inventory_paths must be a string list",
+                         f"selection-requirements.roles[{role.get('role_id', '')}]")
+    rows = obj.get("role_dispositions") if isinstance(obj, dict) else None
+    if not isinstance(rows, list):
+        failures.add("role-dispositions-shape", "role_dispositions must be a list", "role_dispositions")
+        return failures.rows
+    selections = obj.get("selections", []) if isinstance(obj, dict) else []
+    selection_refs = {row.get("selection_id"): row.get("ref") for row in selections
+                      if isinstance(row, dict) and isinstance(row.get("selection_id"), str)}
+    found: dict[str, dict] = {}
+    linked_selection_ids: set[str] = set()
+    for index, row in enumerate(rows):
+        location = f"role_dispositions[{index}]"
+        if not isinstance(row, dict):
+            failures.add("role-disposition-shape", "role disposition must be an object", location)
+            continue
+        role_id = row.get("role_id")
+        if not _one_line_str(role_id):
+            failures.add("role-disposition-id", "role_id must be one non-empty line", location)
+            continue
+        if role_id in found:
+            failures.add("role-disposition-duplicate", f"duplicate role_id: {role_id}", location)
+            continue
+        found[role_id] = row
+        status = row.get("status")
+        if status not in _ROLE_DISPOSITION_STATUSES:
+            failures.add("role-disposition-status",
+                         "status must be selected, unavailable, not-applicable, or unresolved", location)
+        ids = row.get("selection_ids")
+        if not _string_list(ids):
+            failures.add("role-disposition-selection-ids", "selection_ids must be a string list",
+                         f"{location}.selection_ids")
+            ids = []
+        if not _one_line_str(row.get("note")):
+            failures.add("role-disposition-note", "note must be one non-empty line", f"{location}.note")
+        if isinstance(ids, list):
+            unknown = set(ids) - set(selection_refs)
+            if unknown:
+                failures.add("role-disposition-selection-ids",
+                             f"selection_ids do not exist: {sorted(unknown)}",
+                             f"{location}.selection_ids")
+            if status == "selected":
+                if not ids:
+                    failures.add("role-disposition-selected-evidence",
+                                 "selected role requires at least one selection_id", location)
+                for selection_id in ids:
+                    if citation_grammar_kind(selection_refs.get(selection_id, "")) != "source":
+                        failures.add("role-disposition-source-ref",
+                                     "selected role must be backed by a source-ref selection", location)
+            elif ids:
+                failures.add("role-disposition-empty-selection-ids",
+                             "unavailable/not-applicable/unresolved roles cannot claim selection_ids", location)
+            linked_selection_ids.update(ids)
+    if set(found) != set(expected_ids):
+        failures.add("role-disposition-exact-accounting",
+                     f"missing={sorted(set(expected_ids) - set(found))}; "
+                     f"unknown={sorted(set(found) - set(expected_ids))}", "role_dispositions")
+    if set(selection_refs) != linked_selection_ids:
+        failures.add("selection-role-selection-accounting",
+                     f"unlinked={sorted(set(selection_refs) - linked_selection_ids)}", "selections")
     return failures.rows
 
 
@@ -721,6 +819,232 @@ assert set(_VALIDATORS) == TASK_TYPES  # every task type has exactly one schema
 # Cross-checks close that gap at the gate; they are skipped when the caller
 # has no packet to check against, so a bare schema call is unchanged.
 # --------------------------------------------------------------------------- #
+
+_INPUT_DISPOSITION_STATUSES = {"examined", "unavailable", "failed", "not-applicable"}
+_CHECKLIST_OUTCOMES = {
+    "finding", "positive-evidence", "no-concern-observed", "unknown", "not-applicable",
+}
+_ROLE_DISPOSITION_STATUSES = {"selected", "unavailable", "not-applicable", "unresolved"}
+
+
+def _load_requirement_object(raw: str | None, *, filename: str) -> tuple[dict[str, Any] | None, list[Failure]]:
+    if raw is None:
+        return None, []
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None, [{"check": f"{filename}-json", "location": filename,
+                       "detail": f"{filename} is not valid JSON"}]
+    if not isinstance(value, dict):
+        return None, [{"check": f"{filename}-shape", "location": filename,
+                       "detail": f"{filename} must be an object"}]
+    return value, []
+
+
+def _unique_requirement_ids(rows: Any, field: str, *, filename: str,
+                            failures: _Failures) -> list[str]:
+    if not isinstance(rows, list):
+        failures.add(f"{filename}-shape", f"{filename} must be a list", filename)
+        return []
+    values = [row.get(field) for row in rows if isinstance(row, dict)]
+    if len(values) != len(rows) or not all(_one_line_str(value) for value in values) \
+            or len(set(values)) != len(values):
+        failures.add(f"{filename}-ids", f"{filename} needs unique non-empty {field} values", filename)
+        return []
+    return values
+
+
+def _crosscheck_lens_requirements(obj: Any, packet_inputs: Mapping[str, str]) -> list[Failure]:
+    """Exact accounting for the input, checklist and coverage contract.
+
+    These checks run while an output is still retryable.  A successful empty
+    finding list is therefore meaningful only when every requested input and
+    checklist dimension carries evidence for its scoped negative conclusion.
+    """
+    contract, parse_failures = _load_requirement_object(
+        packet_inputs.get("requirements.json"), filename="requirements")
+    if contract is None:
+        return parse_failures
+    failures = _Failures()
+    input_ids = _unique_requirement_ids(contract.get("input_requirements"), "input_id",
+                                        filename="requirements.input_requirements", failures=failures)
+    dimension_ids = _unique_requirement_ids(contract.get("checklist_requirements"), "dimension_id",
+                                            filename="requirements.checklist_requirements", failures=failures)
+    coverage_ids = _unique_requirement_ids(contract.get("coverage_requirements"), "coverage_id",
+                                           filename="requirements.coverage_requirements", failures=failures)
+    packet_evidence_ids = set(packet_inputs) - {
+        "requirements.json", "selection-requirements.json", "sharding",
+    }
+    if set(input_ids) != packet_evidence_ids:
+        failures.add("requirements-packet-input-accounting",
+                     f"missing={sorted(packet_evidence_ids - set(input_ids))[:8]}; "
+                     f"unknown={sorted(set(input_ids) - packet_evidence_ids)[:8]}",
+                     "requirements.input_requirements")
+    role_ids = _unique_requirement_ids(contract.get("selection_role_requirements"), "role_id",
+                                       filename="requirements.selection_role_requirements",
+                                       failures=failures)
+    for row in contract.get("selection_role_requirements", []):
+        if not isinstance(row, dict):
+            continue
+        evidence_ids = row.get("evidence_input_ids")
+        inventory_paths = row.get("inventory_paths")
+        if not _string_list(evidence_ids, allow_empty=False) \
+                or not set(evidence_ids).issubset(packet_evidence_ids):
+            failures.add("selection-role-typed-evidence",
+                         "every source-selection role needs packet-backed typed evidence_input_ids",
+                         f"requirements.selection_role_requirements[{row.get('role_id', '')}]")
+        if not _string_list(inventory_paths):
+            failures.add("selection-role-inventory-paths",
+                         "inventory_paths must be a string list",
+                         f"requirements.selection_role_requirements[{row.get('role_id', '')}]")
+    expected_coverage_ids = {
+        input_id for input_id in input_ids if input_id.startswith("signals/")
+    } | {f"source-selection/{role_id}" for role_id in role_ids}
+    if set(coverage_ids) != expected_coverage_ids:
+        failures.add("requirements-coverage-accounting",
+                     f"missing={sorted(expected_coverage_ids - set(coverage_ids))[:8]}; "
+                     f"unknown={sorted(set(coverage_ids) - expected_coverage_ids)[:8]}",
+                     "requirements.coverage_requirements")
+
+    def collect_rows(key: str, id_key: str, expected: list[str], statuses: set[str]) -> dict[str, dict]:
+        rows = obj.get(key) if isinstance(obj, dict) else None
+        if not isinstance(rows, list):
+            failures.add(f"{key}-shape", f"{key} must be a list", key)
+            return {}
+        found: dict[str, dict] = {}
+        status_key = "status" if key == "input_dispositions" else "outcome"
+        for index, row in enumerate(rows):
+            location = f"{key}[{index}]"
+            if not isinstance(row, dict):
+                failures.add(f"{key}-row", "disposition must be an object", location)
+                continue
+            item_id = row.get(id_key)
+            if not _one_line_str(item_id):
+                failures.add(f"{key}-id", f"{id_key} must be one non-empty line", location)
+                continue
+            if item_id in found:
+                failures.add(f"{key}-duplicate", f"duplicate {id_key}: {item_id}", location)
+                continue
+            found[item_id] = row
+            if row.get(status_key) not in statuses:
+                failures.add(f"{key}-{status_key}",
+                             f"{status_key} must be one of {', '.join(sorted(statuses))}", location)
+            refs = row.get("evidence_refs")
+            if not _string_list(refs):
+                failures.add(f"{key}-evidence-refs", "evidence_refs must be a string list",
+                             f"{location}.evidence_refs")
+            elif any(citation_grammar_kind(ref) is None for ref in refs):
+                failures.add(f"{key}-evidence-ref-grammar", "evidence_refs contain an invalid citation",
+                             f"{location}.evidence_refs")
+            text_key = "note" if key == "input_dispositions" else "limitation"
+            if not _one_line_str(row.get(text_key)):
+                failures.add(f"{key}-{text_key}", f"{text_key} must be one non-empty line",
+                             f"{location}.{text_key}")
+        if set(found) != set(expected):
+            failures.add(f"{key}-exact-accounting",
+                         f"missing={sorted(set(expected) - set(found))[:8]}; "
+                         f"unknown={sorted(set(found) - set(expected))[:8]}", key)
+        return found
+
+    inputs = collect_rows("input_dispositions", "input_id", input_ids,
+                          _INPUT_DISPOSITION_STATUSES)
+    checklist = collect_rows("checklist_dispositions", "dimension_id", dimension_ids,
+                             _CHECKLIST_OUTCOMES)
+    for input_id, row in inputs.items():
+        status = row.get("status")
+        refs = row.get("evidence_refs")
+        if status in {"examined", "not-applicable"} and not refs:
+            failures.add("input-disposition-evidence",
+                         "examined/not-applicable requires evidence_refs",
+                         f"input_dispositions[{input_id}]")
+        if status in {"unavailable", "failed"} and refs:
+            failures.add("input-disposition-failure-refs",
+                         "unavailable/failed must disclose the failure in note, not cite absent evidence",
+                         f"input_dispositions[{input_id}]")
+
+    finding_ids = {row.get("finding_id") for row in obj.get("findings", [])
+                   if isinstance(row, dict) and isinstance(row.get("finding_id"), str)} \
+        if isinstance(obj, dict) else set()
+    referenced_findings: set[str] = set()
+    for dimension_id, row in checklist.items():
+        ids = row.get("finding_ids")
+        if not _string_list(ids):
+            failures.add("checklist-disposition-finding-ids", "finding_ids must be a string list",
+                         f"checklist_dispositions[{dimension_id}].finding_ids")
+            continue
+        outcome = row.get("outcome")
+        refs = row.get("evidence_refs")
+        if outcome == "finding":
+            if not ids or not refs:
+                failures.add("checklist-disposition-finding-evidence",
+                             "finding outcome needs finding_ids and evidence_refs",
+                             f"checklist_dispositions[{dimension_id}]")
+            referenced_findings.update(ids)
+        elif ids:
+            failures.add("checklist-disposition-nonfinding-ids",
+                         "only finding outcome may name finding_ids",
+                         f"checklist_dispositions[{dimension_id}].finding_ids")
+        if outcome in {"positive-evidence", "no-concern-observed", "not-applicable"} and not refs:
+            failures.add("checklist-disposition-negative-evidence",
+                         "positive/no-concern/not-applicable outcome requires evidence_refs",
+                         f"checklist_dispositions[{dimension_id}]")
+    if finding_ids != referenced_findings:
+        failures.add("checklist-finding-lineage",
+                     f"findings={sorted(finding_ids)}; referenced={sorted(referenced_findings)}",
+                     "checklist_dispositions")
+
+    coverage = obj.get("coverage") if isinstance(obj, dict) else None
+    coverage_by_id: dict[str, dict] = {}
+    if isinstance(coverage, list):
+        for index, row in enumerate(coverage):
+            if not isinstance(row, dict) or not _one_line_str(row.get("signal")):
+                continue
+            coverage_id = row["signal"]
+            if coverage_id in coverage_by_id:
+                failures.add("coverage-duplicate", f"duplicate coverage id: {coverage_id}",
+                             f"coverage[{index}]")
+            coverage_by_id[coverage_id] = row
+        if set(coverage_by_id) != set(coverage_ids):
+            failures.add("coverage-exact-accounting",
+                         f"missing={sorted(set(coverage_ids) - set(coverage_by_id))[:8]}; "
+                         f"unknown={sorted(set(coverage_by_id) - set(coverage_ids))[:8]}",
+                         "coverage")
+
+    raw_role_results = packet_inputs.get("selection-role-results.json")
+    role_results, role_parse_failures = _load_requirement_object(
+        raw_role_results, filename="selection-role-results")
+    for failure in role_parse_failures:
+        failures.add(failure["check"], failure["detail"], failure["location"])
+    if role_results is not None:
+        rows = role_results.get("roles")
+        role_ids = _unique_requirement_ids(
+            contract.get("selection_role_requirements"), "role_id",
+            filename="requirements.selection_role_requirements", failures=failures)
+        result_ids = _unique_requirement_ids(rows, "role_id",
+                                             filename="selection-role-results.roles", failures=failures)
+        if set(role_ids) != set(result_ids):
+            failures.add("selection-role-results-exact-accounting",
+                         f"missing={sorted(set(role_ids) - set(result_ids))}; "
+                         f"unknown={sorted(set(result_ids) - set(role_ids))}",
+                         "selection-role-results.roles")
+        for row in rows if isinstance(rows, list) else []:
+            role_id = row.get("role_id") if isinstance(row, dict) else ""
+            source_coverage = coverage_by_id.get(f"source-selection/{role_id}")
+            status = row.get("coverage_status") if isinstance(row, dict) else None
+            if status not in SIGNAL_STATUSES:
+                failures.add("selection-role-coverage-status",
+                             "selection role result needs a valid coverage_status", role_id)
+            elif source_coverage is not None and source_coverage.get("status") != status:
+                failures.add("selection-role-coverage-projection",
+                             "source-selection coverage must exactly project the deterministic role result",
+                             f"source-selection/{role_id}")
+            if isinstance(row, dict) and row.get("fetch_status") in {"partial", "failed"}:
+                fetched = inputs.get("fetched-evidence.json")
+                if fetched is not None and fetched.get("status") == "examined":
+                    failures.add("fetched-evidence-coverage-gap",
+                                 "failed/partial source fetch cannot be recorded as fully examined",
+                                 "input_dispositions[fetched-evidence.json]")
+    return failures.rows
 
 def _crosscheck_dedup_rank(obj: Any, packet_inputs: Mapping[str, str]) -> list[Failure]:
     raw = packet_inputs.get("input-finding-ids.json")
@@ -797,6 +1121,8 @@ def _crosscheck_section_generate(obj: Any, packet_inputs: Mapping[str, str]) -> 
 
 
 _CROSSCHECKS: dict[str, Callable[[Any, Mapping[str, str]], list[Failure]]] = {
+    "lens-findings": _crosscheck_lens_requirements,
+    "selection-fetch": _crosscheck_selection_requirements,
     "dedup-rank": _crosscheck_dedup_rank,
     "section-generate": _crosscheck_section_generate,
 }

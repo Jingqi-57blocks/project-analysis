@@ -54,7 +54,8 @@ LENS_OUTPUT_SCHEMA_ID = "lens-findings.v1"
 # reinforcement, not a duplicate.
 LENS_OUTPUT_CONTRACT_PREAMBLE = (
     "Return a single JSON object matching the lens-findings output schema: "
-    '{"findings": [...], "coverage": [...]}. Every finding uses the exact '
+    '{"findings": [...], "coverage": [...], "input_dispositions": [...], '
+    '"checklist_dispositions": [...]}. Every finding uses the exact '
     "atomic shape given below, including the required changeability_question "
     "field. Return ONLY this JSON object -- no prose outside it, no code "
     "fence unless it wraps exactly this JSON.\n"
@@ -76,7 +77,18 @@ LENS_OUTPUT_CONTRACT_PREAMBLE = (
     "A ref is NEVER a candidate_id (module-candidates.json's own ids, e.g. "
     '"mc-1a2b3c4d") and NEVER an input\'s own file or section name (e.g. '
     '"module-candidates.json", "graph-nodes.json") -- those identify WHICH '
-    "input you read, not a citable location inside it."
+    "input you read, not a citable location inside it.\n"
+    "\n"
+    "requirements.json is authoritative. Return exactly one input_disposition "
+    "for every input_requirements[].input_id and one checklist_disposition "
+    "for every checklist_requirements[].dimension_id. input_disposition uses "
+    "input_id, status (examined|unavailable|failed|not-applicable), "
+    "evidence_refs, and note. checklist_disposition uses dimension_id, outcome "
+    "(finding|positive-evidence|no-concern-observed|unknown|not-applicable), "
+    "finding_ids, evidence_refs, and limitation. A no-concern or "
+    "not-applicable conclusion still needs evidence_refs. coverage must name "
+    "every coverage_requirements[].coverage_id exactly once; source-selection "
+    "coverage is not complete when its supplied role result reports a gap."
 )
 
 # Appended (57B-116) ONLY to a source_reads lens's FINAL lens-findings
@@ -111,7 +123,7 @@ SELECTION_FETCH_OUTPUT_SCHEMA_ID = "selection-fetch.v1"
 # never a second, independently-typed number.
 _SELECTION_FETCH_PREAMBLE_TEMPLATE = (
     "Return a single JSON object matching the selection-fetch output schema: "
-    '{{"selections": [...]}}. This is a REQUEST, not a fetch -- a later, '
+    '{{"selections": [...], "role_dispositions": [...]}}. This is a REQUEST, not a fetch -- a later, '
     "separate step reads the actual source and fills in quoted_text; leave "
     'quoted_text EMPTY ("") on every row here. Name UP TO {max_selections} source '
     "locations (repo@revision:path:line -- take revision from the "
@@ -122,7 +134,13 @@ _SELECTION_FETCH_PREAMBLE_TEMPLATE = (
     "the locations that would most change a confidence or priority call if "
     "confirmed, not a mechanical sample. One selection per location; "
     "selection_id is a stable kebab-case slug; purpose is one line stating "
-    "what you are trying to confirm. Return ONLY this JSON object -- no "
+    "what you are trying to confirm. selection-requirements.json is authoritative: "
+    "return one role_disposition for every listed role, with role_id, status "
+    "(selected|unavailable|not-applicable|unresolved), selection_ids, and note. "
+    "A selected role names source-ref selection_ids; unavailable, not-applicable, "
+    "or unresolved roles name none and explain the limit. Use only the typed "
+    "evidence_input_ids and inventory_paths attached to the role, not keyword "
+    "similarity. Return ONLY this JSON object -- no "
     "prose outside it."
 )
 

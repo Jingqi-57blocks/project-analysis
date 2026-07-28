@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # wrapper/ on path
 
 from analysis_wrapper import identity
 from analysis_wrapper.orchestrator import planner
+from analysis_wrapper.orchestrator import schemas
 from analysis_wrapper.orchestrator import templates as tpl
 from analysis_wrapper.orchestrator.contracts import (
     ExecutorInfo, TaskResult, TaskTiming, ValidationOutcome,
@@ -251,7 +252,35 @@ def test_select_task_gets_the_exact_same_inputs_the_lens_task_itself_would(tmp_p
     run_summary = _load_json(run / "signals" / "run-summary.json")
     expected_inputs = _lens_inputs(run, lens_templates["dependencies-cycles"], synthesis_doc,
                                    module_candidates_doc, run_summary, None)
-    assert set(select_packet["inputs"]) == set(expected_inputs)
+    assert set(select_packet["inputs"]) == set(expected_inputs) | {"selection-requirements.json"}
+
+
+def test_requirements_packet_names_exact_inputs_scope_limits_and_typed_source_roles(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planner.plan_judgment(run)
+    engine = Engine(run)
+    created = {rec.task_id: rec.detail["task"] for rec in engine._read_records()
+               if rec.event == "created"}
+
+    direct = created["lens-complexity-api-14c2529e"]
+    contract = json.loads(direct["inputs"]["requirements.json"]["content"])
+    assert contract["parent_task_id"] == "lens-complexity-api-14c2529e"
+    assert contract["expected_shard_scope"] == {"shard": "repo", "repository_ref": "api"}
+    assert contract["inherited_limits"]["max_selections"] == 0
+    assert {row["input_id"] for row in contract["input_requirements"]} == {
+        name for name in direct["inputs"] if name != "requirements.json"
+    }
+    assert {row["coverage_id"] for row in contract["coverage_requirements"]} == {
+        name for name in direct["inputs"] if name.startswith("signals/")
+    }
+
+    select = created["lens-safety-net-api-14c2529e-select"]
+    selection_contract = json.loads(select["inputs"]["selection-requirements.json"]["content"])
+    roles = {row["role_id"]: row for row in selection_contract["roles"]}
+    assert {"lens-critical-source", "test-source", "ci-config", "declared-validation-tooling"} <= set(roles)
+    assert roles["test-source"]["inventory_paths"] == ["test_files.paths"]
+    assert roles["ci-config"]["inventory_paths"] == ["ci_configs.path"]
+    assert selection_contract["parent_requirements_digest"]
 
 
 def test_select_task_instructions_request_up_to_its_own_lens_cap_with_empty_quoted_text(tmp_path):
@@ -600,10 +629,17 @@ def test_a_large_extra_section_now_composes_and_shards_instead_of_failing(tmp_pa
     # tight budget (it was a dict, not an array); now it shards cleanly.
     packets = compose(task_id="t", template_id="t", template_version=template.version,
                       task_type="lens-findings", instructions=instructions, inputs=inputs,
-                      output_schema_id="lens-findings.v1", context_budget_tokens=3000)
+                          output_schema_id="lens-findings.v1", context_budget_tokens=6000)
     assert len(packets) > 1
     assert all("-shard-" in packet.task_id for packet in packets)
-    assert all(_packet_tokens(packet) <= 3000 for packet in packets)
+    assert all(_packet_tokens(packet) <= 6000 for packet in packets)
+    for index, packet in enumerate(packets, start=1):
+        contract = json.loads(packet.inputs["requirements.json"].content)
+        assert contract["parent_task_id"] == "t"
+        assert contract["parent_requirements_digest"]
+        assert contract["shard_local_scope"] == {
+            "index": index, "total": len(packets), "split_input_id": "graph-nodes.json",
+        }
     # graph-meta.json (the small sibling) rides on every shard, unsplit.
     for packet in packets:
         assert "graph-meta.json" in packet.inputs
@@ -722,6 +758,61 @@ def _collision_lens_output(task_id):
 
 
 def _submit(engine, item, output, *, status="ok"):
+    if item.packet.task_type == "lens-findings" and isinstance(output, dict) \
+            and isinstance(output.get("findings"), list):
+        raw = item.packet.inputs.get("requirements.json")
+        if raw is not None:
+            contract = json.loads(raw.content)
+            output = dict(output)
+            coverage = contract["coverage_requirements"]
+            output["coverage"] = [{
+                "signal": row["coverage_id"], "status": "complete",
+                "note": "fixture",
+            } for row in coverage]
+            role_results = item.packet.inputs.get("selection-role-results.json")
+            if role_results is not None:
+                for result in json.loads(role_results.content)["roles"]:
+                    for row in output["coverage"]:
+                        if row["signal"] == f"source-selection/{result['role_id']}":
+                            row["status"] = result["coverage_status"]
+            output["input_dispositions"] = [{
+                "input_id": row["input_id"], "status": "examined",
+                "evidence_refs": ["metric:code.analyzed-scope.total"], "note": "fixture",
+            } for row in contract["input_requirements"]]
+            if role_results is not None:
+                results = json.loads(role_results.content)["roles"]
+                if any(row["fetch_status"] in {"partial", "failed"} for row in results):
+                    for row in output["input_dispositions"]:
+                        if row["input_id"] == "fetched-evidence.json":
+                            row["status"] = "failed"
+                            row["evidence_refs"] = []
+            finding_ids = [row["finding_id"] for row in output["findings"]]
+            output["checklist_dispositions"] = [{
+                "dimension_id": row["dimension_id"],
+                "outcome": "finding" if index == 0 else "unknown",
+                "finding_ids": finding_ids if index == 0 else [],
+                "evidence_refs": ["metric:code.analyzed-scope.total"] if index == 0 else [],
+                "limitation": "fixture",
+            } for index, row in enumerate(contract["checklist_requirements"])]
+    if item.packet.task_type == "selection-fetch" and isinstance(output, dict):
+        raw = item.packet.inputs.get("selection-requirements.json")
+        if raw is not None:
+            contract = json.loads(raw.content)
+            output = dict(output)
+            selections = output.get("selections", [])
+            if not isinstance(selections, list):
+                # Deliberately malformed fixtures exercise the engine's
+                # schema-failure/retry path; do not try to decorate them.
+                selection_ids = []
+            else:
+                selection_ids = [row["selection_id"] for row in selections
+                                 if isinstance(row, dict) and "selection_id" in row]
+            output["role_dispositions"] = [{
+                "role_id": row["role_id"],
+                "status": "selected" if selection_ids else "unavailable",
+                "selection_ids": selection_ids if selection_ids else [],
+                "note": "fixture",
+            } for row in contract["roles"]]
     at = now_iso()
     result = TaskResult(
         task_id=item.packet.task_id, status=status, output=output,
@@ -1000,6 +1091,74 @@ def test_plan_lens_finalize_composes_the_real_lens_task_with_fetched_evidence(tm
     assert ready and ready[0].packet.task_id == "lens-open-lens"
     outcome = _submit(engine, ready[0], _lens_output("lens-open-lens"))
     assert outcome["status"] == "validated", outcome
+
+
+def test_fetch_failure_becomes_final_lens_coverage_gap_and_rejects_a_clean_projection(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planner.plan_judgment(run)
+    engine = Engine(run)
+    claimed = engine.claim(len(engine.ready_task_ids()), executor_kind="manual", model="test")
+    bad_ref_output = {"selections": [{
+        "selection_id": "missing-source", "purpose": "fixture source",
+        "ref": "api@" + "a" * 40 + ":internal/missing.go:1", "quoted_text": "",
+    }]}
+    for item in claimed:
+        if item.packet.task_id == "lens-open-lens-select":
+            assert _submit(engine, item, bad_ref_output)["status"] == "validated"
+
+    from analysis_wrapper.orchestrator import selection
+    rows = json.loads(selection.fetch(run, "lens-open-lens-select").read_text("utf-8"))
+    assert rows[0]["excerpt"].startswith("NOT FETCHED:")
+    planner.plan_lens_finalize(run, "lens-open-lens")
+    record = next(rec for rec in engine._read_records()
+                  if rec.event == "created" and rec.task_id == "lens-open-lens")
+    packet_inputs = {name: value["content"]
+                     for name, value in record.detail["task"]["inputs"].items()}
+    role_results = json.loads(packet_inputs["selection-role-results.json"])["roles"]
+    assert role_results and all(row["coverage_status"] == "failed" for row in role_results)
+
+    contract = json.loads(packet_inputs["requirements.json"])
+    clean_output = {
+        "findings": [],
+        "coverage": [{"signal": row["coverage_id"], "status": "complete", "note": "clean"}
+                     for row in contract["coverage_requirements"]],
+        "input_dispositions": [{
+            "input_id": row["input_id"], "status": "examined",
+            "evidence_refs": ["metric:code.analyzed-scope.total"], "note": "clean",
+        } for row in contract["input_requirements"]],
+        "checklist_dispositions": [{
+            "dimension_id": row["dimension_id"], "outcome": "no-concern-observed",
+            "finding_ids": [], "evidence_refs": ["metric:code.analyzed-scope.total"],
+            "limitation": "clean",
+        } for row in contract["checklist_requirements"]],
+    }
+    checks = {row["check"] for row in schemas.validate_output(
+        "lens-findings", clean_output, packet_inputs=packet_inputs)}
+    assert {"selection-role-coverage-projection", "fetched-evidence-coverage-gap"} <= checks
+
+
+def test_permanently_failed_selection_is_finalized_as_a_source_coverage_gap(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planner.plan_judgment(run)
+    engine = Engine(run)
+    target = "lens-open-lens-select"
+    claimed = engine.claim(len(engine.ready_task_ids()), executor_kind="manual", model="test")
+    target_item = next(item for item in claimed if item.packet.task_id == target)
+    _submit(engine, target_item, {"selections": "invalid"})
+    while engine.task_states()[target] == "pending":
+        item = engine.claim(1, executor_kind="manual", model="test")[0]
+        assert item.packet.task_id == target
+        _submit(engine, item, {"selections": "invalid"})
+    assert engine.task_states()[target] == "failed"
+
+    finalized = planner.plan_lens_finalize(run, "lens-open-lens")
+    assert finalized.created is True
+    record = next(rec for rec in engine._read_records()
+                  if rec.event == "created" and rec.task_id == "lens-open-lens")
+    role_results = json.loads(record.detail["task"]["inputs"]
+                              ["selection-role-results.json"]["content"])["roles"]
+    assert role_results and all(row["status"] == "unavailable" for row in role_results)
+    assert all(row["coverage_status"] == "failed" for row in role_results)
 
 
 def test_plan_lens_finalize_is_idempotent(tmp_path):
