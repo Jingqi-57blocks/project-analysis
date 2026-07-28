@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # wrapper/ on path
 
-from analysis_wrapper import identity
+from analysis_wrapper import identity, module_map
 from analysis_wrapper.orchestrator import formation, planner
 from analysis_wrapper.orchestrator import schemas
 from analysis_wrapper.orchestrator import templates as tpl
@@ -246,6 +246,34 @@ def test_formation_packet_carries_a_deterministic_partition_plan(tmp_path):
         candidates = json.loads(packet["inputs"]["module-candidates.json"]["content"])
         assert {row["candidate_id"] for row in candidates} <= set(context["partition"]["candidate_ids"])
         assert context["partition"]["partition_id"] in context["merge_order"]
+
+
+def test_boundary_resolution_depends_on_validated_formation_partitions(tmp_path):
+    """Partitioned formation has no legacy singular ``formation`` task."""
+    run, _ = _build_run(tmp_path)
+    planner.plan_judgment(run)
+    engine = Engine(run)
+    claimed = engine.claim(2, executor_kind="manual", model="test")
+    assert {item.packet.task_type for item in claimed} == {"formation-proposal"}
+    for item in claimed:
+        _submit(engine, item, _FORMATION_PLACEHOLDER_OUTPUT)
+    formation.write(run)
+    module_map.expand_candidate_rules(run)
+    document = json.loads((run / "module-map.json").read_text("utf-8"))
+    document["candidate_dispositions"][0].update({
+        "disposition": "unresolved", "module_ids": [],
+        "reason": "fixture needs targeted boundary resolution",
+    })
+    (run / "module-map.json").write_text(json.dumps(document), "utf-8")
+
+    task = planner.plan_boundary_resolution(run)
+
+    assert task is not None
+    created = next(record for record in engine._read_records()
+                   if record.event == "created" and record.task_id == "boundary-resolution")
+    assert set(created.detail["task"]["depends_on"]) == {
+        "formation-formation-0000", "formation-formation-0001",
+    }
 
 
 # --------------------------------------------------------------------------- #

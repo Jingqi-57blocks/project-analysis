@@ -971,6 +971,14 @@ def plan_boundary_resolution(run_dir: str | Path, *,
     document = _load_json(run / "module-map.json")
     quality = formation.formation_quality(run, refined=False)
     partition_plan = formation.build_partition_plan(run)
+    # Formation is partitioned, so there is no singular ``formation`` task
+    # in the ledger.  Depend on the actual validated packet ids (including
+    # any composer shards) that produced the map we are resolving from.
+    formation_dependencies = tuple(sorted(
+        validated_outputs(run, task_type="formation-proposal")))
+    if not formation_dependencies:
+        raise PlannerError(
+            "boundary resolution requires validated formation-proposal output")
     involved_partitions = sorted({row.get("partition_id") for row in unresolved
                                   if isinstance(row.get("partition_id"), str)})
     inputs = {
@@ -989,7 +997,7 @@ def plan_boundary_resolution(run_dir: str | Path, *,
         template_version=tpl.content_digest(_BOUNDARY_RESOLUTION_INSTRUCTIONS),
         task_type="boundary-resolution", instructions=_BOUNDARY_RESOLUTION_INSTRUCTIONS,
         inputs=inputs, output_schema_id="boundary-resolution.v1",
-        context_budget_tokens=context_budget_tokens, depends_on=("formation",))
+        context_budget_tokens=context_budget_tokens, depends_on=formation_dependencies)
     created_ids = set(Engine(run).create_tasks(built))
     return PlannedTask(
         task_id="boundary-resolution", task_type="boundary-resolution", lens_id="",
