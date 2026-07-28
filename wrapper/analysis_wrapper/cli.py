@@ -325,6 +325,9 @@ def parser() -> argparse.ArgumentParser:
     module_candidates = sub.add_parser(
         "module-build-candidates", help="build deterministic Module Drill candidates")
     module_candidates.add_argument("--run", required=True)
+    module_rank = sub.add_parser(
+        "module-plan-ranking", help="register the bounded Module Drill candidate ranking task")
+    module_rank.add_argument("--run", required=True)
     finalize_map = sub.add_parser(
         "finalize-module-map",
         help="validate complete candidate dispositions in module-map.json, "

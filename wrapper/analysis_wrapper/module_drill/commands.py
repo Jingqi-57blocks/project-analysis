@@ -13,6 +13,7 @@ from .driver import ModuleDriver
 from .feature_evidence import write as write_feature_evidence
 from .candidate_universe import write as write_candidate_universe
 from .context import load as load_source_context
+from .ranking import register as register_ranking
 from .runtime import initialize_from_overview
 from .spans import fetch
 from .standalone import initialize as initialize_standalone
@@ -111,6 +112,12 @@ def _candidates(args) -> int:
     return 0
 
 
+def _rank_candidates(args) -> int:
+    created = register_ranking(args.run)
+    _print({"created": created, "next": "claim module-candidate-ranking"})
+    return 0
+
+
 def run(args) -> int:
     """Dispatch a Module Drill subcommand and preserve normal CLI exit codes."""
     try:
@@ -119,6 +126,7 @@ def run(args) -> int:
             "module-next": _next, "module-submit": _submit, "module-fetch-spans": _spans,
             "module-build-evidence": _evidence,
             "module-build-candidates": _candidates,
+            "module-plan-ranking": _rank_candidates,
         }
         handler = handlers.get(args.command)
         if handler is None:

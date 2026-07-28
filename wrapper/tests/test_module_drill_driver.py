@@ -44,7 +44,10 @@ def _result(task_id: str, attempt: int) -> dict:
     at = now_iso()
     return TaskResult(
         task_id=task_id, status="ok",
-        output={"candidate_ids": ["candidate-a"], "selected_candidate_id": "candidate-a"},
+        output={
+            "decision": "selected", "candidate_ids": ["candidate-a"],
+            "selected_candidate_id": "candidate-a", "reason_code": "clear-dominant",
+        },
         executor=ExecutorInfo(kind="test", model="test-model", params={}),
         timing=TaskTiming(started_at=at, finished_at=at, wall_clock_s=0.0),
         tokens=None, validation=ValidationOutcome(passed=True, failures=()), attempt=attempt,
