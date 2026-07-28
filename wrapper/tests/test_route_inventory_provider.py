@@ -107,6 +107,42 @@ def test_provider_gate_and_rows_match_direct_liveness_scan_on_a_real_backend(tmp
     assert result.coverage.status == "complete"
 
 
+def test_provider_keeps_declared_go_group_route_and_source_proven_full_path(tmp_path):
+    """A provider fragment, not only the helper, must retain enough
+    provenance for a later UI/API join to use a Go router group's full path.
+    """
+    ws = tmp_path / "workspace"
+    api = ws / "api"
+    _write(api / "go.mod", """module example.com/api
+
+require github.com/gin-gonic/gin v1.10.0
+""")
+    _write(api / "handlers.go", '''package api
+func bind(engine Router) {
+    root := engine.Group("/api")
+    records := root.Group("/records")
+    records.POST("", create)
+    records.GET("/:id", get)
+}
+''')
+    run = tmp_path / "run"
+    spec, report = emit.discover(ws)
+    emit.write_stage1(run, spec, report)
+    identities = identity.load(run)
+    context = _run_context(spec, run, identities)
+
+    result = RouteInventoryProvider().run(context, spec.repos[0])
+
+    fragment = json.loads((run / result.artifact_refs[0].path).read_text("utf-8"))
+    root_post = next(row for row in fragment["rows"] if row["method"] == "POST")
+    nested_get = next(row for row in fragment["rows"] if row["method"] == "GET")
+    assert root_post["path"] == ""
+    assert root_post["full_path"] == "/api/records"
+    assert root_post["composition_evidence"] == ["handlers.go:3", "handlers.go:4"]
+    assert nested_get["path"] == "/:id"
+    assert nested_get["full_path"] == "/api/records/:id"
+
+
 def test_provider_gate_is_false_with_no_route_signal_and_no_profile(tmp_path):
     """A repo discovery found NO route signal in, and that carries no
     route-inventory-capability profile (a bare Go repo with no framework),

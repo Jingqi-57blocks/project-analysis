@@ -128,10 +128,16 @@ def _concrete_route_segments(rows: list[dict]) -> list[list[str]]:
     for row in rows:
         if row.get("registration_kind") == "mount":
             continue
-        segs = liveness._norm_segments(row["path"])
+        segs = liveness._norm_segments(_route_path(row))
         if any(s != "*" for s in segs):
             concrete.append(segs)
     return concrete
+
+
+def _route_path(row: dict) -> str:
+    """Use an adapter-proven composed path when one is available."""
+    full = row.get("full_path")
+    return full if isinstance(full, str) and full.startswith("/") else row["path"]
 
 
 def _paths_by_base_from_calls(calls: list[dict]) -> dict:
@@ -163,7 +169,8 @@ def _classify_backend_rows(backend: dict, calls: list[dict],
     for row in backend.get("rows", []):
         if row.get("registration_kind") == "mount":
             continue
-        rsegs = liveness._norm_segments(row["path"])
+        route_path = _route_path(row)
+        rsegs = liveness._norm_segments(route_path)
         if not any(s != "*" for s in rsegs):
             rows.append({**row, "repository_ref": repository_ref,
                         "status": "match-ambiguous", "caller_evidence": []})
@@ -173,12 +180,12 @@ def _classify_backend_rows(backend: dict, calls: list[dict],
         here = sorted(c["evidence"] for c in bound_here
                       if c.get("method") and c["method"] == row["method"].upper())
         if here:
-            rows.append({**row, "repository_ref": repository_ref,
+            rows.append({**row, "path": route_path, "repository_ref": repository_ref,
                         "status": "ui-called", "caller_evidence": here[:3]})
             continue
         unknown_or_mismatch = sorted(c["evidence"] for c in bound_here)
         if unknown_or_mismatch:
-            rows.append({**row, "repository_ref": repository_ref,
+            rows.append({**row, "path": route_path, "repository_ref": repository_ref,
                         "status": "method-unresolved",
                         "caller_evidence": unknown_or_mismatch[:3]})
             continue
@@ -187,10 +194,10 @@ def _classify_backend_rows(backend: dict, calls: list[dict],
         # `liveness.liveness(frontend.path, backends)` call always leaves it
         # at the default None/{}), so there is nothing to replicate here.
         if matching:
-            rows.append({**row, "repository_ref": repository_ref,
+            rows.append({**row, "path": route_path, "repository_ref": repository_ref,
                         "status": "base-unresolved", "caller_evidence": []})
             continue
-        rows.append({**row, "repository_ref": repository_ref,
+        rows.append({**row, "path": route_path, "repository_ref": repository_ref,
                     "status": "no-direct-path-match", "caller_evidence": []})
     return rows
 
@@ -259,14 +266,20 @@ def assemble(out_dir: str | Path) -> RouteAssembly:
                     if row["status"] not in {"ui-called", "method-unresolved"} \
                             or not row["caller_evidence"]:
                         continue
-                    linkage_rows.append({
+                    linkage_row = {
                         "frontend_repository_ref": frontend["repository_ref"],
                         "repository_ref": row["repository_ref"],
                         "method": row["method"], "path": row["path"],
                         "route_evidence": row["route_evidence"],
                         "status": row["status"],
                         "caller_evidence": row["caller_evidence"],
-                    })
+                    }
+                    # Preserve the legacy linkage shape for ordinary
+                    # registrations. This chain exists only when the full
+                    # path was deterministically composed from literal groups.
+                    if row.get("composition_evidence"):
+                        linkage_row["composition_evidence"] = row["composition_evidence"]
+                    linkage_rows.append(linkage_row)
         result.linkage_rows = len(linkage_rows)
         _write_json(routes_dir / UI_ROUTE_LINKAGE_FILE, {
             "frontends": [f["repository_ref"] for f in frontends],

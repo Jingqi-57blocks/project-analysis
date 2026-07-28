@@ -113,13 +113,21 @@ def _route_items(artifact_id: str, document: dict[str, Any],
             raise ContractError("route inventory rows must be objects")
         repository_ref = row.get("repository_ref")
         method, path, evidence = row.get("method"), row.get("path"), row.get("route_evidence")
-        if not all(isinstance(value, str) and value for value in (repository_ref, method, path, evidence)):
+        if not all(isinstance(value, str) and value for value in (repository_ref, method, evidence)) \
+                or not isinstance(path, str):
             raise ContractError("route inventory row lacks repository_ref, method, path, or route_evidence")
-        refs = _source_refs((evidence,), repository_ref, revisions)
+        full_path = row.get("full_path", path)
+        composition = row.get("composition_evidence", [])
+        if not isinstance(full_path, str) or not full_path.startswith("/") \
+                or not isinstance(composition, list) \
+                or not all(isinstance(value, str) and value for value in composition):
+            raise ContractError("route inventory row has invalid composed-path evidence")
+        refs = _source_refs((evidence, *composition), repository_ref, revisions)
         items.append(EvidenceItem(
-            _id(artifact_id, "route", repository_ref, method, path, evidence), "route",
+            _id(artifact_id, "route", repository_ref, method, full_path, evidence, *composition), "route",
             (repository_ref,), refs, artifact_id,
-            {"method": method, "path": path, "status": row.get("status", "")},
+            {"method": method, "path": full_path, "declared_path": path,
+             "status": row.get("status", "")},
         ))
     return items
 
@@ -134,14 +142,17 @@ def _ui_link_items(artifact_id: str, document: dict[str, Any],
         backend = row.get("repository_ref")
         method, path, route_evidence = row.get("method"), row.get("path"), row.get("route_evidence")
         callers = row.get("caller_evidence")
+        composition = row.get("composition_evidence", [])
         if not all(isinstance(value, str) and value for value in (frontend, backend, method, path, route_evidence)) \
-                or not isinstance(callers, list):
+                or not isinstance(callers, list) or not isinstance(composition, list) \
+                or not all(isinstance(value, str) and value for value in composition):
             raise ContractError("UI-route linkage row has an invalid required field")
-        refs = _source_refs((route_evidence,), backend, revisions) + _source_refs(callers, frontend, revisions)
+        refs = (_source_refs((route_evidence, *composition), backend, revisions)
+                + _source_refs(callers, frontend, revisions))
         repositories = (frontend,) if frontend == backend else (frontend, backend)
         items.append(EvidenceItem(
             _id(artifact_id, "ui-route-link", frontend, backend, method, path,
-                route_evidence, *sorted(callers)),
+                route_evidence, *sorted(composition), *sorted(callers)),
             "ui-action", repositories, tuple(sorted(set(refs))), artifact_id,
             {"method": method, "path": path, "route_status": row.get("status", ""),
              "target_repository_ref": backend},

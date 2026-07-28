@@ -169,6 +169,28 @@ def test_mount_registrations_appear_in_inventory_never_in_the_join(tmp_path):
     assert "/items/other" in paths_in_linkage
 
 
+def test_join_uses_source_proven_composed_path_without_changing_declared_inventory(tmp_path):
+    routes_dir = tmp_path / "routes"
+    _write_backend_fragment(routes_dir, "api", "api", applicable=True, rows=[
+        {**_row("POST", "", "routes.go:9"), "full_path": "/api/records",
+         "composition_evidence": ["routes.go:3", "routes.go:5"]},
+        {**_row("GET", "/health", "routes.go:10"), "full_path": "/api/health",
+         "composition_evidence": ["routes.go:3"]},
+    ])
+    _write_frontend_fragment(routes_dir, "web", "web", applicable=True, calls=[
+        _call("api", "/api/records", "client.ts:4", method="POST"),
+        _call("api", "/api/health", "client.ts:5", method="GET"),
+    ])
+
+    routes_emit.assemble(tmp_path)
+
+    inventory = json.loads((routes_dir / "route-inventory.json").read_text("utf-8"))
+    assert next(row for row in inventory["rows"] if row["route_evidence"] == "routes.go:9")["path"] == ""
+    linkage = json.loads((routes_dir / "ui-route-linkage.json").read_text("utf-8"))
+    records = next(row for row in linkage["rows"] if row["path"] == "/api/records")
+    assert records["composition_evidence"] == ["routes.go:3", "routes.go:5"]
+
+
 def test_multiple_frontends_are_classified_independently(tmp_path):
     """Adding a second frontend must not change the first frontend's own
     rows or its calls_by_frontend_repository entry — the exact regression

@@ -109,6 +109,34 @@ def test_index_never_applies_overview_bounding_to_complete_route_inventory(tmp_p
     assert len([item for item in document["items"] if item["kind"] == "route"]) == 205
 
 
+def test_index_uses_composed_route_path_and_preserves_its_source_chain(tmp_path):
+    overview, module_run = _run(tmp_path)
+    inventory = json.loads((overview / "routes" / "route-inventory.json").read_text("utf-8"))
+    inventory["rows"][0].update({
+        "path": "", "full_path": "/api/records/0",
+        "composition_evidence": ["src/routes.ts:7"],
+    })
+    _json(overview / "routes" / "route-inventory.json", inventory)
+    linkage = json.loads((overview / "routes" / "ui-route-linkage.json").read_text("utf-8"))
+    linkage["rows"][0].update({
+        "path": "/api/records/0", "composition_evidence": ["src/routes.ts:7"],
+    })
+    _json(overview / "routes" / "ui-route-linkage.json", linkage)
+    # Re-initialize after changing canonical artifacts so their manifest
+    # integrity commitment is intentionally rebuilt for this test snapshot.
+    initialized = initialize_from_overview(
+        overview, output_root=tmp_path / "output-composed", project_key="workspace",
+        selector="record", language="en", run_label="composed")
+
+    document = build(load(initialized.run_dir))
+
+    route = next(item for item in document["items"] if item["kind"] == "route")
+    action = next(item for item in document["items"] if item["kind"] == "ui-action")
+    assert route["data"]["path"] == "/api/records/0"
+    assert route["data"]["declared_path"] == ""
+    assert action["data"]["path"] == "/api/records/0"
+
+
 def test_index_leaves_canonical_jsonl_callgraph_fragments_for_graph_recovery(tmp_path):
     _, module_run = _run(tmp_path, call_edges=[{
         "repository_ref": "service", "caller_symbol": "createRecord",

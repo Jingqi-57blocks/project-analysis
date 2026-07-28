@@ -177,6 +177,41 @@ def test_mounts_are_separate_from_leaf_endpoints(tmp_path):
         ("USE", "/api"), ("GET", "/items")}
 
 
+def test_go_group_composition_recovers_full_paths_and_group_root_endpoint(tmp_path):
+    backend = tmp_path / "svc"
+    _write(backend / "handlers.go", '''package handlers
+func bind(engine Router) {
+    api := engine.Group("/api")
+    records := api.Group("/records")
+    records.POST("", create)
+    records.GET("/:id", get)
+}
+''')
+
+    rows = liveness.compose_go_route_paths(backend)
+
+    assert [(row.method, row.path, row.full_path) for row in rows] == [
+        ("POST", "", "/api/records"),
+        ("GET", "/:id", "/api/records/:id"),
+    ]
+    assert all(row.composition_evidence == ("handlers.go:3", "handlers.go:4") for row in rows)
+
+
+def test_go_group_composition_refuses_duplicate_or_cyclic_receiver_chains(tmp_path):
+    backend = tmp_path / "svc"
+    _write(backend / "handlers.go", '''package handlers
+func bind(engine Router) {
+    first := engine.Group("/one")
+    first := engine.Group("/two")
+    first.GET("/records", list)
+}
+''')
+
+    stats = {}
+    assert liveness.compose_go_route_paths(backend, stats=stats) == ()
+    assert stats["group_chain_ambiguous"] == 1
+
+
 def test_ui_linkage_requires_compatible_http_method(tmp_path):
     frontend = tmp_path / "web"
     _write(frontend / "src" / "api.ts",

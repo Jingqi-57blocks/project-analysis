@@ -55,12 +55,34 @@ _GO_ROUTE = re.compile(
     r"\.\s*(GET|POST|PUT|PATCH|DELETE|Handle|HandleFunc|Group)\s*\(\s*\"([/][^\"]*)\"")
 _VERSION_SEG = re.compile(r"^v\d+$")
 
+# A separate, conservative adapter for router variables produced by Go's
+# ``Group`` pattern. The generic route inventory retains each registration's
+# declared path; this adapter adds a source-proven full path only when the
+# receiver-to-group chain is statically visible in the same file.
+_GO_GROUP_ASSIGN = re.compile(
+    r"\b(?P<child>[A-Za-z_]\w*)\s*(?::=|=)\s*"
+    r"(?P<parent>[A-Za-z_]\w*)\.Group\s*\(\s*\"(?P<path>/[^\"]*)\"")
+_GO_GROUP_ENDPOINT = re.compile(
+    r"\b(?P<receiver>[A-Za-z_]\w*)\."
+    r"(?P<method>GET|POST|PUT|PATCH|DELETE)\s*\(\s*\"(?P<path>[^\"]*)\"")
+
 
 @dataclass
 class RouteHit:
     method: str
     path: str
     evidence: str  # repo-relative file:line
+
+
+@dataclass(frozen=True)
+class ComposedRouteHit:
+    """A Go endpoint whose full path is justified by local group calls."""
+
+    method: str
+    path: str
+    full_path: str
+    evidence: str
+    composition_evidence: tuple[str, ...]
 
 
 @dataclass
@@ -133,6 +155,79 @@ def _read(path: Path, stats: dict | None = None) -> str:
         return path.read_text("utf-8", errors="replace")
     except OSError:
         return ""
+
+
+def _join_route_path(prefix: str, suffix: str) -> str:
+    """Join literal route parts without changing parameter/wildcard syntax."""
+    parts = [part.strip("/") for part in (prefix, suffix) if part.strip("/")]
+    return "/" + "/".join(parts) if parts else "/"
+
+
+def compose_go_route_paths(repo_path: str | Path,
+                           tier2_exclusions: list[str] | None = None,
+                           stats: dict | None = None) -> tuple[ComposedRouteHit, ...]:
+    """Resolve same-file Go ``Group`` receivers into complete endpoint paths.
+
+    Every emitted row needs literal group assignments, a literal endpoint
+    call, and an acyclic receiver chain in one file. Missing, duplicate, or
+    dynamic chains are deliberately left unresolved rather than guessed.
+    """
+    root = Path(repo_path).expanduser().resolve()
+    tier2 = set(tier2_exclusions or [])
+    rows: list[ComposedRouteHit] = []
+    for path in _iter_source(root, stats):
+        relative = path.relative_to(root)
+        if (relative.parts and relative.parts[0] in tier2) or path.suffix != ".go":
+            continue
+        text = _read(path, stats)
+        if not text:
+            continue
+        rel = relative.as_posix()
+        groups: dict[str, tuple[str, str, str]] = {}
+        duplicates: set[str] = set()
+        for match in _GO_GROUP_ASSIGN.finditer(text):
+            child = match.group("child")
+            group = (match.group("parent"), match.group("path"),
+                     f"{rel}:{_line_of(text, match.start())}")
+            if child in groups:
+                duplicates.add(child)
+            else:
+                groups[child] = group
+        for child in duplicates:
+            groups.pop(child, None)
+        if duplicates and stats is not None:
+            stats["group_chain_ambiguous"] = stats.get("group_chain_ambiguous", 0) + len(duplicates)
+
+        def resolve(receiver: str, seen: frozenset[str] = frozenset()) -> tuple[str, tuple[str, ...]] | None:
+            if receiver in seen:
+                return None
+            group = groups.get(receiver)
+            if group is None:
+                return "", ()
+            parent, segment, evidence = group
+            parent_result = resolve(parent, seen | {receiver})
+            if parent_result is None:
+                return None
+            parent_path, parent_evidence = parent_result
+            return _join_route_path(parent_path, segment), parent_evidence + (evidence,)
+
+        for match in _GO_GROUP_ENDPOINT.finditer(text):
+            receiver, raw_path = match.group("receiver"), match.group("path")
+            # An empty literal is a route only when its receiver was visibly
+            # created by Group; arbitrary method calls never become endpoints.
+            if (raw_path and not raw_path.startswith("/")) or receiver not in groups:
+                continue
+            composed = resolve(receiver)
+            if composed is None:
+                continue
+            prefix, evidence_chain = composed
+            rows.append(ComposedRouteHit(
+                method=match.group("method").upper(), path=raw_path,
+                full_path=_join_route_path(prefix, raw_path),
+                evidence=f"{rel}:{_line_of(text, match.start())}",
+                composition_evidence=evidence_chain,
+            ))
+    return tuple(sorted(rows, key=lambda row: (row.evidence, row.method, row.full_path)))
 
 
 def _line_of(text: str, index: int) -> int:
