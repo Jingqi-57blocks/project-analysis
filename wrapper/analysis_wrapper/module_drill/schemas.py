@@ -18,7 +18,7 @@ _REQUIRED_FIELDS = {
     "module-candidate-ranking": {"decision", "candidate_ids", "selected_candidate_id", "reason_code"},
     "module-frontier-expansion": {"dispositions"},
     "module-sync-recovery": {"dispositions", "claims", "flows"},
-    "module-async-recovery": {"claims", "flows"},
+    "module-async-recovery": {"dispositions", "claims", "flows"},
     "module-model-merge": {"module_model"},
     "module-claim-verification": {"verdicts"},
     "module-section-generate": {"sections"},
@@ -116,6 +116,16 @@ _SYNC_OPERATIONS = frozenset({
     "reads", "writes", "validates", "requires", "emits",
 })
 _SUPPORT_ROLES = frozenset({"condition", "effect", "authorization", "persistence", "trigger"})
+_ASYNC_OUTCOMES = _SYNC_OUTCOMES
+_ASYNC_CLAIM_KINDS = frozenset({
+    "async-effect", "scheduler", "event", "queue", "notification", "configuration",
+    "feature-flag", "integration", "external-boundary",
+})
+_ASYNC_OPERATIONS = frozenset({
+    "schedules", "starts", "emits", "consumes", "retries", "notifies", "configures",
+    "guards", "invokes", "reads", "writes",
+})
+_ASYNC_SUPPORT_ROLES = frozenset({"trigger", "condition", "effect", "persistence", "notification", "integration"})
 
 
 def _packet_json(packet_inputs: Mapping[str, str], name: str) -> tuple[Any | None, list[Failure]]:
@@ -254,6 +264,126 @@ def _crosscheck_sync_recovery(output: Any, packet_inputs: Mapping[str, str]) -> 
     return failures
 
 
+def _crosscheck_async_recovery(output: Any, packet_inputs: Mapping[str, str]) -> list[Failure]:
+    """Require exact disposition of all scoped boundary requirements."""
+    requirements_doc, failures = _packet_json(packet_inputs, "async-requirements.json")
+    graph, graph_failures = _packet_json(packet_inputs, "feature-boundary-closure.json")
+    spans, span_failures = _packet_json(packet_inputs, "semantic-spans.json")
+    failures += graph_failures + span_failures
+    if failures:
+        return failures
+    if not isinstance(requirements_doc, dict) or not isinstance(requirements_doc.get("requirements"), list):
+        return _failure("async-requirements", "async requirements packet is invalid", "async-requirements.json")
+    if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list) \
+            or not isinstance(graph.get("edges"), list):
+        return _failure("async-graph", "feature boundary closure packet is invalid", "feature-boundary-closure.json")
+    if not isinstance(spans, dict) or not isinstance(spans.get("spans"), list):
+        return _failure("async-spans", "semantic spans packet is invalid", "semantic-spans.json")
+    required: dict[str, dict[str, Any]] = {}
+    for row in requirements_doc["requirements"]:
+        if not isinstance(row, dict) or not isinstance(row.get("requirement_id"), str):
+            return _failure("async-requirements", "requirement lacks a stable ID", "async-requirements.json")
+        if row["requirement_id"] in required:
+            return _failure("async-requirements", "requirement IDs must be unique", "async-requirements.json")
+        required[row["requirement_id"]] = row
+    node_ids = {row.get("node_id") for row in graph["nodes"] if isinstance(row, dict)}
+    edge_ids = {row.get("edge_id") for row in graph["edges"] if isinstance(row, dict)}
+    allowed_anchors = {value for value in node_ids | edge_ids if isinstance(value, str)}
+    allowed_refs = {
+        ref for row in graph["nodes"] + graph["edges"] if isinstance(row, dict)
+        for ref in row.get("evidence_refs", []) if isinstance(ref, str) and ref
+    }
+    for row in graph.get("boundary_dispositions", []):
+        if isinstance(row, dict):
+            allowed_refs.update(ref for ref in row.get("evidence_refs", []) if isinstance(ref, str) and ref)
+    for row in spans["spans"]:
+        if isinstance(row, dict):
+            allowed_refs.update(ref for ref in (row.get("ref"), row.get("start_ref"), row.get("end_ref"))
+                                if isinstance(ref, str) and ref)
+    dispositions = output.get("dispositions") if isinstance(output, dict) else None
+    if not isinstance(dispositions, list):
+        return _failure("async-dispositions", "dispositions must be a list", "dispositions")
+    seen: set[str] = set()
+    claim_ids: set[str] = set()
+    for index, row in enumerate(output.get("claims", [])):
+        fields = {"claim_id", "kind", "anchor_ids", "support", "subject", "operation", "value"}
+        if not isinstance(row, dict) or set(row) != fields:
+            failures += _failure("async-claim", "claim has an invalid field set", f"claims[{index}]")
+            continue
+        claim_id = row["claim_id"]
+        if not isinstance(claim_id, str) or not claim_id:
+            failures += _failure("async-claim", "claim_id must be a non-empty string", f"claims[{index}].claim_id")
+            continue
+        if claim_id in claim_ids:
+            failures += _failure("async-claim", "claim IDs must be unique", f"claims[{index}].claim_id")
+        claim_ids.add(claim_id)
+        anchors = row["anchor_ids"]
+        if not isinstance(anchors, list) or not anchors or not all(isinstance(anchor, str) for anchor in anchors) \
+                or not set(anchors) <= allowed_anchors:
+            failures += _failure("async-claim-anchor", "claim names an anchor outside the supplied graph", f"claims[{index}]")
+        if row["kind"] not in _ASYNC_CLAIM_KINDS:
+            failures += _failure("async-claim-kind", "claim kind is not recognized", f"claims[{index}].kind")
+        if row["operation"] not in _ASYNC_OPERATIONS:
+            failures += _failure("async-claim-operation", "claim operation is not recognized", f"claims[{index}].operation")
+        if not isinstance(row["subject"], str) or not row["subject"].strip():
+            failures += _failure("async-claim-subject", "claim subject must be non-empty", f"claims[{index}].subject")
+        if not isinstance(row["value"], (str, int, float, bool)) and row["value"] is not None:
+            failures += _failure("async-claim-value", "claim value must be a scalar or null", f"claims[{index}].value")
+        support = row["support"]
+        if not isinstance(support, list) or not support:
+            failures += _failure("async-claim-support", "claim requires support", f"claims[{index}].support")
+        else:
+            for support_index, item in enumerate(support):
+                if not isinstance(item, dict) or set(item) != {"ref", "role"} \
+                        or item.get("role") not in _ASYNC_SUPPORT_ROLES \
+                        or item.get("ref") not in allowed_refs:
+                    failures += _failure("async-claim-support", "claim support is outside the packet or malformed",
+                                         f"claims[{index}].support[{support_index}]")
+    for index, row in enumerate(dispositions):
+        fields = {"requirement_id", "outcome", "claim_ids", "evidence_refs", "reason"}
+        if not isinstance(row, dict) or set(row) != fields:
+            failures += _failure("async-disposition", "disposition has an invalid field set", f"dispositions[{index}]")
+            continue
+        requirement_id, outcome = row["requirement_id"], row["outcome"]
+        if not isinstance(requirement_id, str) or requirement_id not in required:
+            failures += _failure("async-disposition-id", "disposition names an unknown requirement", f"dispositions[{index}].requirement_id")
+            continue
+        if requirement_id in seen:
+            failures += _failure("async-disposition-id", "requirement must be dispositioned exactly once", f"dispositions[{index}].requirement_id")
+        seen.add(requirement_id)
+        if outcome not in _ASYNC_OUTCOMES:
+            failures += _failure("async-disposition-outcome", "outcome is not recognized", f"dispositions[{index}].outcome")
+        refs, disposition_claim_ids = row["evidence_refs"], row["claim_ids"]
+        if not isinstance(refs, list) or not all(isinstance(ref, str) and ref in allowed_refs for ref in refs):
+            failures += _failure("async-disposition-evidence", "disposition cites evidence outside the packet", f"dispositions[{index}].evidence_refs")
+        if not isinstance(disposition_claim_ids, list) or not all(isinstance(value, str) and value in claim_ids for value in disposition_claim_ids):
+            failures += _failure("async-disposition-claims", "disposition names an unknown claim", f"dispositions[{index}].claim_ids")
+        if outcome == "claimed" and not disposition_claim_ids:
+            failures += _failure("async-disposition-claims", "claimed disposition requires a claim", f"dispositions[{index}]")
+        if outcome in {"no-concern-observed", "not-applicable"} and not refs:
+            failures += _failure("async-disposition-evidence", "outcome requires positive evidence", f"dispositions[{index}]")
+        if outcome == "unknown" and (not isinstance(row["reason"], str) or not row["reason"].strip()):
+            failures += _failure("async-disposition-reason", "unknown outcome requires a reason", f"dispositions[{index}].reason")
+        if required[requirement_id].get("boundary_state") == "unresolved" and outcome != "unknown":
+            failures += _failure("async-boundary-unresolved", "an unresolved boundary must remain unknown", f"dispositions[{index}]")
+    missing = sorted(set(required) - seen)
+    if missing:
+        failures += _failure("async-disposition-missing", "missing dispositions: " + ", ".join(missing), "dispositions")
+    flow_ids: set[str] = set()
+    for index, row in enumerate(output.get("flows", [])):
+        try:
+            flow = FeatureFlow.from_dict(row, f"flows[{index}]")
+        except (ContractError, ValueError) as exc:
+            failures += _failure("async-flow", str(exc), f"flows[{index}]")
+            continue
+        if flow.flow_id in flow_ids:
+            failures += _failure("async-flow", "flow IDs must be unique", f"flows[{index}].flow_id")
+        flow_ids.add(flow.flow_id)
+        if not set(flow.edge_ids) <= allowed_anchors or not set(flow.claim_ids) <= claim_ids:
+            failures += _failure("async-flow", "flow references an unknown edge or claim", f"flows[{index}]")
+    return failures
+
+
 def validate_output(task_type: str, output: Any, *,
                     packet_inputs: Mapping[str, str] | None = None) -> list[Failure]:
     """Validate an envelope; phase-specific code validates its inner records."""
@@ -280,4 +410,6 @@ def validate_output(task_type: str, output: Any, *,
                 return _failure("output-field-shape", f"{name} must be a list or object", name)
     if task_type == "module-sync-recovery" and packet_inputs is not None:
         return _crosscheck_sync_recovery(output, packet_inputs)
+    if task_type == "module-async-recovery" and packet_inputs is not None:
+        return _crosscheck_async_recovery(output, packet_inputs)
     return []

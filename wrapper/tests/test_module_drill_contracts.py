@@ -108,7 +108,7 @@ def test_module_task_types_use_the_shared_packet_and_schema_dispatch():
         },
         "module-frontier-expansion": {"dispositions": []},
         "module-sync-recovery": {"dispositions": [], "claims": [], "flows": []},
-        "module-async-recovery": {"claims": [], "flows": []},
+        "module-async-recovery": {"dispositions": [], "claims": [], "flows": []},
         "module-model-merge": {"module_model": {}},
         "module-claim-verification": {"verdicts": []},
         "module-section-generate": {"sections": []},
