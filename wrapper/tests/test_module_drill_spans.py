@@ -62,6 +62,20 @@ const other = 1;
     assert row["start_ref"] == row["end_ref"] == f"{ref}:1"
 
 
+def test_fetches_a_go_style_declaration_line_when_no_statement_delimiter_exists(tmp_path):
+    run, ref = _module_run(tmp_path, """const (
+  leaveTable = \"wcp_leave\"
+)
+""")
+
+    row = json.loads(fetch(run, [_request(ref, 2, kind="declaration")]).read_text(encoding="utf-8"))[0]
+
+    assert row["status"] == "fetched"
+    assert row["boundary"] == "anchored-line"
+    assert row["content"] == '  leaveTable = "wcp_leave"'
+    assert row["start_ref"] == row["end_ref"] == f"{ref}:2"
+
+
 def test_redacts_secret_shaped_source_values_before_persisting_span(tmp_path):
     run, ref = _module_run(tmp_path, """export function create() {
   const API_TOKEN = \"very-secret-value\";

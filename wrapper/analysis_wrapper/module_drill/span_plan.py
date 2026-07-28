@@ -38,6 +38,11 @@ def _node_kind(node: dict[str, Any]) -> str:
     kind = node.get("kind")
     if kind == "route":
         return "handler"
+    if kind == "datastore":
+        # Store declarations are often constants (for example a Go const block)
+        # rather than functions.  They still need a source-checked semantic span
+        # before a recovery task may cite the physical store name.
+        return "declaration"
     if kind == "configuration":
         return "config-block"
     return "function"
