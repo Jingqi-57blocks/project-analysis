@@ -19,7 +19,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .targetspec import RepoTarget
 
@@ -34,6 +34,28 @@ DegradeFn = Callable[[RepoTarget, str, int], str]           # "" = complete
 ValidateFn = Callable[[str, int], str]                      # "" = shape ok
 ArgvFn = Callable[[RepoTarget], list[str]]
 PreflightFn = Callable[[], str]                             # "" = online/ready
+
+
+@dataclass(frozen=True)
+class InvocationPlan:
+    """The exact safe execution context for one target/tool invocation.
+
+    Most tools use ToolDef's historical ``cwd_mode`` + ``argv_builder``.
+    Tools whose target grammar is rooted at a discovered module (not the
+    wrapper's launch directory) may instead supply this plan.  ``manifest_cwd``
+    and ``identity`` intentionally contain logical repository-relative values,
+    never machine-local target paths.
+    """
+
+    argv: list[str]
+    cwd: Path
+    manifest_cwd: str = ""
+    identity: dict[str, Any] = field(default_factory=dict)
+    reads: list[str] = field(default_factory=list)
+    reason: str = ""
+
+
+InvocationFn = Callable[[RepoTarget, Path], InvocationPlan]
 
 
 @dataclass
@@ -78,6 +100,7 @@ class ToolDef:
     annotate: AnnotateFn | None = None       # post-run manifest note (metrics)
     metrics_builder: MetricsFn | None = None # full validated output -> structured metrics
     extra_notes: str = ""                    # standing disclosures for the manifest
+    invocation_builder: InvocationFn | None = None
 
     # ---- executor-facing API --------------------------------------------------
 
@@ -119,6 +142,13 @@ class ToolDef:
 
     def build_argv(self, target: RepoTarget) -> list[str]:
         return self.argv_builder(target)
+
+    def build_invocation(self, target: RepoTarget, out: Path) -> InvocationPlan:
+        """Resolve cwd/argv once, before target snapshotting and invocation."""
+        if self.invocation_builder:
+            return self.invocation_builder(target, out)
+        cwd = Path(target.path) if self.cwd_mode == "target" else out.resolve()
+        return InvocationPlan(argv=self.build_argv(target), cwd=cwd)
 
     def check_guards(self, target: RepoTarget) -> str:
         for g in self.guards:

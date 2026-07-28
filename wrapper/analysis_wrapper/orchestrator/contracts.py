@@ -29,7 +29,7 @@ ORCHESTRATOR_CONTRACT_VERSION = "1.0.0"
 # One task packet per unit of LLM/tool work the orchestrator hands out. Every
 # task type maps to exactly one output schema in ``schemas.py``.
 TASK_TYPES = frozenset({
-    "lens-findings", "formation-proposal", "boundary-resolution", "dedup-rank",
+    "lens-findings", "formation-proposal", "boundary-resolution", "rekey-resolution", "dedup-rank",
     "section-generate", "repair-edit-ops", "coherence-check", "selection-fetch",
 })
 
@@ -271,6 +271,7 @@ def validate_task_packet(value: Any) -> list[dict[str, str]]:
 
 _EXECUTOR_FIELDS = {"kind", "model", "params"}
 _TOKENS_FIELDS = {"input", "output"}
+_TOKENS_FIELDS_WITH_CACHE = {"input", "cached_input", "output"}
 _VALIDATION_FIELDS = {"passed", "failures"}
 _TIMING_FIELDS = {"started_at", "finished_at", "wall_clock_s"}
 _TASK_RESULT_FIELDS = {
@@ -339,18 +340,27 @@ class TaskTiming:
 class TokenUsage:
     input: int
     output: int
+    cached_input: int | None = None
 
     def __post_init__(self) -> None:
         _require_nonneg_int(self.input, "tokens.input")
         _require_nonneg_int(self.output, "tokens.output")
+        if self.cached_input is not None:
+            _require_nonneg_int(self.cached_input, "tokens.cached_input")
 
     def to_dict(self) -> dict[str, int]:
-        return {"input": self.input, "output": self.output}
+        value = {"input": self.input, "output": self.output}
+        if self.cached_input is not None:
+            value["cached_input"] = self.cached_input
+        return value
 
     @classmethod
     def from_dict(cls, value: Any) -> "TokenUsage":
-        row = _strict_object(value, _TOKENS_FIELDS, "tokens")
-        return cls(input=row["input"], output=row["output"])
+        if not isinstance(value, dict) or (set(value) != _TOKENS_FIELDS
+                                           and set(value) != _TOKENS_FIELDS_WITH_CACHE):
+            raise ValueError("tokens must contain input/output and optional cached_input")
+        return cls(input=value["input"], output=value["output"],
+                   cached_input=value.get("cached_input"))
 
 
 @dataclass(frozen=True)

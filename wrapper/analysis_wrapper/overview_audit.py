@@ -45,6 +45,11 @@ _MERMAID_VALIDATOR = Path(__file__).parent / "report_html" / "validate_mermaid.j
 # artifact, so leakage there is out of this check's scope.
 ARTIFACT_ROOTS = ("signals", "callgraph", "imports", "routes",
                   "datastore", "deploy", "access", "integrations")
+FINAL_MARKDOWN = (
+    "overview.md", "project-map.md", "technical-overview.md",
+    "findings-summary.md", "findings-pm-summary.md", "coverage-summary.md",
+    "module-summary.md",
+)
 
 
 def _artifact_files(run: Path) -> list[Path]:
@@ -152,7 +157,7 @@ def _mermaid_integrity_problems(name: str, markdown: str) -> list[str]:
 
 
 def audit(run_dir: str | Path, *, require_module_map: bool = False,
-          require_reports: bool = False) -> dict:
+          require_reports: bool = False, require_final: bool = False) -> dict:
     run = Path(run_dir).expanduser().resolve()
     checks: list[dict] = []
 
@@ -549,6 +554,99 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
               "PM overview contains no source citations/paths/tool identifiers"
               if not pm_leaks else "; ".join(pm_leaks[:20]))
 
+    if require_final:
+        # The expected consumption set is derived afresh from the current
+        # ledger generations; the persisted manifest cannot approve itself.
+        from .orchestrator import consumption, sections, semantic_partitions
+        manifest_path = run / "tasks" / consumption.FILENAME
+        expected_manifest = consumption.build(run)
+        try:
+            observed_manifest = _load(manifest_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            observed_manifest = None
+            manifest_error = str(exc)
+        else:
+            manifest_error = ""
+        check("validated-result-consumption-manifest",
+              not manifest_error and observed_manifest == expected_manifest,
+              "manifest exactly matches current ledger generations and consumers"
+              if not manifest_error and observed_manifest == expected_manifest else
+              manifest_error or "manifest is stale, missing entries, or has unknown entries")
+        entries = expected_manifest["entries"]
+        bad_terminal = [row for row in entries
+                        if row["terminal_disposition"] in {"partial", "failed"}]
+        bad_consumers = [row for row in entries
+                         if not row["consumer"] or not (run / row["consumer"]).is_file()]
+        check("validated-result-terminal-dispositions", not bad_terminal,
+              "every planned task reached a non-blocking finite terminal disposition"
+              if not bad_terminal else
+              "mandatory partial/failed tasks: " + ", ".join(row["task_id"] for row in bad_terminal[:20]))
+        check("validated-result-consumer-artifacts", not bad_consumers,
+              "every consumed task names an existing canonical consumer artifact"
+              if not bad_consumers else
+              "missing consumer artifact for: " + ", ".join(row["task_id"] for row in bad_consumers[:20]))
+
+        semantic_path = run / "tasks" / semantic_partitions.PLAN_FILENAME
+        if semantic_path.is_file():
+            semantic_errors = semantic_partitions.validate_manifest(run)
+            check("semantic-evidence-partitions", not semantic_errors,
+                  "active semantic packets exactly match the planned lossless partition graph"
+                  if not semantic_errors else "; ".join(semantic_errors[:20]))
+
+        missing_markdown = [name for name in FINAL_MARKDOWN if not (run / name).is_file()]
+        check("final-markdown-set", not missing_markdown,
+              "all seven final Markdown artifacts are present" if not missing_markdown else
+              "missing final Markdown artifacts: " + ", ".join(missing_markdown))
+        docs = {name: (run / name).read_text("utf-8", errors="replace")
+                if (run / name).is_file() else "" for name in FINAL_MARKDOWN}
+        missing_sections = [section.section_id for section in sections.CATALOG
+                            if section.heading not in docs.get(section.document, "")]
+        check("report-projection-required-categories", not missing_sections,
+              "every required module, finding, integration, persistence, coupling, and coverage projection is present"
+              if not missing_sections else
+              "missing required report sections: " + ", ".join(missing_sections[:20]))
+
+        # A report must never draw from the historical rekey tail. Exact
+        # model claims are a conservative, auditable topic identity here.
+        tail_path = run / "tasks" / "rekey-tail.json"
+        tail_topics = []
+        if tail_path.is_file():
+            try:
+                terminal_path = run / "finding-terminal-dispositions.json"
+                terminal = (_load(terminal_path).get("dispositions", [])
+                            if terminal_path.is_file() else [])
+                terminal_by_id = {row.get("finding_id"): row.get("disposition")
+                                  for row in terminal if isinstance(row, dict)}
+                tail_topics = [str(row.get("claim", "")).strip()
+                               for row in json.loads(tail_path.read_text("utf-8"))
+                               if isinstance(row, dict)
+                               and terminal_by_id.get(row.get("finding_id")) != "consumed"
+                               and str(row.get("claim", "")).strip()]
+            except (OSError, ValueError, json.JSONDecodeError):
+                tail_topics = ["<unreadable rekey tail>"]
+        tail_leaks = [f"{name}: {topic[:80]}" for topic in tail_topics for name, text in docs.items()
+                      if topic and topic in text]
+        check("report-projection-no-rekey-tail", not tail_leaks,
+              "final Markdown does not reference tail-only finding topics" if not tail_leaks else
+              "; ".join(tail_leaks[:20]))
+
+        # Reverse projection for authored material: an assembled document
+        # must contain the exact current validated section generation, not a
+        # hand-edited/superseded substitute.
+        from .orchestrator.results import validated_outputs
+        section_mismatches = []
+        for output in validated_outputs(run, task_type="section-generate").values():
+            if not isinstance(output, dict):
+                continue
+            section = sections.BY_ID.get(str(output.get("section_id", "")))
+            body = str(output.get("content_md", ""))
+            if section is None or body not in docs.get(section.document, ""):
+                section_mismatches.append(str(output.get("section_id", "unknown")))
+        check("report-projection-validated-authored-content", not section_mismatches,
+              "every authored report section is the current validated generation"
+              if not section_mismatches else
+              "missing/stale authored report sections: " + ", ".join(section_mismatches[:20]))
+
     failed = [row for row in checks if row["status"] == "fail"]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -559,11 +657,11 @@ def audit(run_dir: str | Path, *, require_module_map: bool = False,
 
 
 def write(run_dir: str | Path, *, require_module_map: bool = False,
-          require_reports: bool = False) -> Path:
+          require_reports: bool = False, require_final: bool = False) -> Path:
     run = Path(run_dir).expanduser().resolve()
     out = run / "consistency-audit.json"
     replace_artifact_text(out, sanitize_text(json.dumps(
         audit(run, require_module_map=require_module_map,
-              require_reports=require_reports),
+              require_reports=require_reports, require_final=require_final),
         indent=2, sort_keys=True) + "\n"))
     return out

@@ -30,6 +30,7 @@ actually is — no separate progress file to drift.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -124,6 +125,16 @@ def _phase_judgment(state: RunState) -> bool:
 
     outcome = state.phase("judgment: plan")
     planner.plan_judgment(state.run, context_budget_tokens=state.context_budget_tokens)
+    # A prepared production run has deterministic inputs and a complete first
+    # packet wave at this exact point, before _drain can hand any packet to a
+    # model. Synthetic protocol tests intentionally omit run provenance and
+    # therefore remain outside the acceptance-artifact contract.
+    if (state.run / "run-provenance.json").is_file():
+        from .. import acceptance
+        try:
+            acceptance.freeze(state.run)
+        except ValueError as exc:
+            raise DriverError(f"cannot freeze acceptance inputs: {exc}") from exc
     outcome.finished_at = time.monotonic()
 
     outcome = state.phase("judgment: execute selects and lenses")
@@ -135,17 +146,36 @@ def _phase_judgment(state: RunState) -> bool:
     # Any select task that validated now has evidence to fetch and a real
     # lens task to compose. This is the two-phase pair completing itself.
     outcome = state.phase("judgment: fetch selections and finalize lenses")
+    engine = Engine(state.run)
+    states = engine.task_states()
+    created_select_ids = {
+        record.task_id for record in engine._read_records()
+        if record.event == "created"
+        and record.detail["task"].get("task_type") == "selection-fetch"
+    }
     selects = validated_outputs(state.run, task_type="selection-fetch")
     finalized = 0
+    # Fetch every validated select first, then finalize each parent only once
+    # all of its select shards are terminal.  A permanently failed select is
+    # intentionally still finalized: planner.plan_lens_finalize materializes
+    # the resulting source-coverage gap instead of silently dropping the
+    # lens from the rest of the pipeline.
     for select_task_id in sorted(selects):
-        if not select_task_id.endswith("-select") and "-select-shard-" not in select_task_id:
-            continue
         try:
             selection.fetch(state.run, select_task_id)
         except Exception as exc:  # noqa: BLE001 - disclosed, never silent
             state.log(f"  fetch-selections {select_task_id}: {exc}")
-            continue
-        lens_task_id = select_task_id.split("-select")[0]
+    select_groups: dict[str, list[str]] = {}
+    for select_task_id in created_select_ids:
+        logical_select_id = re.sub(r"-shard-[0-9]+$", "", select_task_id)
+        if logical_select_id.endswith("-select"):
+            select_groups.setdefault(logical_select_id, []).append(select_task_id)
+    lens_task_ids = {
+        logical_select_id[:-len("-select")]
+        for logical_select_id, packet_ids in select_groups.items()
+        if all(states.get(packet_id) in {"validated", "failed"} for packet_id in packet_ids)
+    }
+    for lens_task_id in sorted(lens_task_ids):
         try:
             planner.plan_lens_finalize(
                 state.run, lens_task_id,
@@ -164,11 +194,38 @@ def _phase_judgment(state: RunState) -> bool:
 
 def _phase_module_map(state: RunState) -> bool:
     from .. import module_map
-    outcome = state.phase("module map: write + finalize")
+    from . import planner
+    outcome = state.phase("module map: write + structural finalize")
     formation.write(state.run)
     module_map.expand_candidate_rules(state.run)
     module_map.validate(state.run)
-    outcome.detail = "zero-omission/zero-overlap gate passed"
+    refined = formation.apply_boundary_resolution(state.run)
+    if refined:
+        module_map.validate(state.run)
+    quality_path = formation.write_quality(state.run, refined=refined)
+    quality = json.loads(quality_path.read_text("utf-8"))
+    if quality.get("requires_boundary_resolution") and not refined:
+        boundary = state.phase("module map: resolve structural remainder")
+        planned = planner.plan_boundary_resolution(
+            state.run, context_budget_tokens=state.context_budget_tokens)
+        if planned is not None and not _drain(state, boundary):
+            boundary.finished_at = time.monotonic()
+            return False
+        if not formation.apply_boundary_resolution(state.run):
+            raise DriverError("boundary-resolution did not produce an applicable validated output")
+        module_map.validate(state.run)
+        quality_path = formation.write_quality(state.run, refined=True)
+        quality = json.loads(quality_path.read_text("utf-8"))
+        boundary.detail = "targeted unresolved candidates resolved with structural context"
+        boundary.finished_at = time.monotonic()
+    if quality.get("status") != "passed":
+        raise DriverError("module formation structural gate blocked completion: " +
+                          "; ".join(row.get("reason", "unknown")
+                                    for row in quality.get("blockers", [])[:5]))
+    diagnostics = quality.get("diagnostics", {})
+    outcome.detail = ("zero-omission/zero-overlap and structural gate passed; "
+                      f"partitions={diagnostics.get('partition_count', 0)}, "
+                      f"cross-links={diagnostics.get('cross_link_count', 0)}")
     outcome.finished_at = time.monotonic()
     return True
 
@@ -195,18 +252,35 @@ def _phase_findings(state: RunState) -> bool:
     assembled.write_text(json.dumps(document, ensure_ascii=False, indent=1), "utf-8")
     rekeyed = rekey.rekey(state.run, document)
     tail = rekeyed.get("tail", [])
+    final_findings = rekeyed.get("rekeyed", [])
     if tail:
-        # The tail is a genuine judgment remainder (a finding whose candidate
-        # was dispositioned excluded/unresolved). It is DISCLOSED, never
-        # dropped and never mechanically guessed onto a neighbouring module.
-        outcome.detail = (f"{len(tail)} finding(s) need the nearest-enclosing-module "
-                          "judgment pass before finalize")
+        # A tail is a mandatory finite-disposition repair, not a disclosure
+        # that lets reports proceed without the finding.
+        outcome.detail = f"{len(tail)} finding(s) require a finite rekey disposition"
         state.log(f"  {outcome.detail}")
         (state.run / "tasks" / "rekey-tail.json").write_text(
             json.dumps(tail, ensure_ascii=False, indent=1), "utf-8")
+        planned = planner.plan_rekey_resolution(
+            state.run, tail, context_budget_tokens=state.context_budget_tokens)
+        if planned is not None and not _drain(state, outcome):
+            outcome.finished_at = time.monotonic()
+            return False
+        resolved = rekey.apply_resolution(state.run, rekeyed=rekeyed.get("rekeyed", []), tail=tail)
+        if resolved is None:
+            raise DriverError("rekey-resolution did not produce a validated terminal disposition")
+        (state.run / "finding-terminal-dispositions.json").write_text(
+            json.dumps({"schema_version": document["schema_version"],
+                        "dispositions": resolved["terminal_dispositions"]},
+                       ensure_ascii=False, indent=1), "utf-8")
+        if resolved["blocking"]:
+            outcome.detail = (f"{len(resolved['blocking'])} mandatory rekey disposition(s) "
+                              "are partial/failed; authoritative completion blocked")
+            outcome.finished_at = time.monotonic()
+            return False
+        final_findings = resolved["findings"]
     (state.run / "findings.json").write_text(json.dumps(
         {"schema_version": document["schema_version"],
-         "findings": rekeyed.get("rekeyed", [])}, ensure_ascii=False, indent=1), "utf-8")
+         "findings": final_findings}, ensure_ascii=False, indent=1), "utf-8")
     findings_module.write(state.run)
     outcome.finished_at = time.monotonic()
     return True
@@ -244,14 +318,17 @@ def _phase_reports(state: RunState) -> bool:
 
 def _phase_audit(state: RunState) -> bool:
     from .. import overview_audit
+    from . import consumption
     outcome = state.phase("audit")
-    path = overview_audit.write(state.run, require_module_map=True, require_reports=True)
+    consumption.write(state.run)
+    path = overview_audit.write(state.run, require_module_map=True, require_reports=True,
+                                require_final=True)
     audit = json.loads(Path(path).read_text("utf-8"))
     failed = [check for check in audit.get("checks", []) if check.get("status") == "fail"]
     outcome.detail = (f"{len(failed)} failing check(s)" if failed else "all checks passed")
     state.log(f"  {outcome.detail}")
     outcome.finished_at = time.monotonic()
-    return True
+    return not failed
 
 
 PHASES: tuple[tuple[str, Callable[[RunState], bool]], ...] = (
@@ -270,6 +347,7 @@ PHASES: tuple[tuple[str, Callable[[RunState], bool]], ...] = (
 def run_pipeline(run_dir: str | Path, *, executor: str = "host",
                  adapter: str = "anthropic", model: str = "",
                  base_url: str = "", api_key_env: str = "",
+                 temperature: float = 0.0, effort: str = "",
                  concurrency: int = 4, context_budget_tokens: int = 180_000,
                  stop_after: str | None = None,
                  log: Log = print) -> dict[str, Any]:
@@ -296,7 +374,8 @@ def run_pipeline(run_dir: str | Path, *, executor: str = "host",
     if executor == "api":
         from .executor_api import AdapterConfig, ExecutorError, preflight
         state.executor_config = AdapterConfig(
-            name=adapter, model=model, base_url=base_url, api_key_env=api_key_env)
+            name=adapter, model=model, base_url=base_url, api_key_env=api_key_env,
+            temperature=temperature, effort=effort)
         try:
             preflight(state.executor_config)
         except ExecutorError as exc:
@@ -330,4 +409,6 @@ def run_pipeline(run_dir: str | Path, *, executor: str = "host",
     (run / "tasks" / "pipeline-timing.json").parent.mkdir(parents=True, exist_ok=True)
     (run / "tasks" / "pipeline-timing.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", "utf-8")
+    from .. import acceptance
+    acceptance.write_execution_provenance(run)
     return {"complete": complete, "summary": summary, "state": state}

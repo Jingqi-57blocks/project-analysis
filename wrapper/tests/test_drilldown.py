@@ -16,8 +16,15 @@ def _overview(tmp_path, target, capsys, *, complete=True):
                  "--skill-root", str(skill_root)]) == 0
     run_dir = Path(capsys.readouterr().out.splitlines()[0].split("run: ", 1)[1])
     if complete:
-        for stage in ("signals", "findings", "map", "overview"):
+        for stage in ("signals", "findings", "map"):
             assert main(["mark-stage", "--run", str(run_dir), "--stage", stage]) == 0
+        # Drilldown lifecycle tests need a completed source but deliberately
+        # do not construct a full Overview artifact set.  Mark this fixture
+        # directly; CLI-level final-audit refusal is covered separately.
+        state = RunState.load(run_dir)
+        state.mark("overview")
+        state.save(run_dir)
+        Pointers(skill_root / "state" / state.project_id).set_latest_completed(state.run_id)
         capsys.readouterr()
     return skill_root, run_dir
 

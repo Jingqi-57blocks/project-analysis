@@ -322,6 +322,9 @@ def run_tool(
 
     argv: list[str] | None = None
     cwd = Path(target.path) if tooldef.cwd_mode == "target" else out.resolve()
+    manifest_cwd = ""
+    invocation: dict = {}
+    invocation_reads: list[str] = []
     version: str | None = None
     drift = ""
     prep = PrepareResult()
@@ -337,7 +340,7 @@ def run_tool(
             tool=tooldef.name,
             tool_version=version or "(not installed)",
             argv=argv or [],
-            cwd=str(cwd) if argv else "",
+            cwd=(manifest_cwd or str(cwd)) if argv else "",
             env=dict(tooldef.env),
             repos=[_stamp(item, item_identity)
                    for item, item_identity in zip(targets, identities)],
@@ -352,10 +355,12 @@ def run_tool(
             network=tooldef.network,
             scan_date=scan_date,
             output_files=outputs,
-            declared_reads=list(dict.fromkeys(tooldef.declared_reads(target) + list(prep.reads))),
+            declared_reads=list(dict.fromkeys(
+                tooldef.declared_reads(target) + list(prep.reads) + invocation_reads)),
             version_drift=drift,
             notes="; ".join(x for x in (tooldef.extra_notes, prep.notes, notes) if x),
             structured_metrics=structured_metrics,
+            invocation=invocation,
         )
         manifest_path, _ = manifest.write(out, name)
         return SignalResult(tooldef.name, target.repo_id,
@@ -398,7 +403,22 @@ def run_tool(
         if not prep.ok:
             return finish(Status.SKIPPED, prep.reason or "prepare step declined")
 
-    argv = tooldef.build_argv(target)
+    try:
+        execution = tooldef.build_invocation(target, out.resolve())
+    except Exception as exc:  # never let target-layout inspection crash a run
+        return finish(Status.FAILED,
+                      f"invocation planning failed: {type(exc).__name__}: {exc}")
+    argv = execution.argv
+    cwd = execution.cwd.expanduser().resolve()
+    manifest_cwd = execution.manifest_cwd
+    invocation = dict(execution.identity)
+    invocation_reads = list(execution.reads)
+    target_root = Path(target.path).expanduser().resolve()
+    if tooldef.invocation_builder and (not cwd.is_dir() or not cwd.is_relative_to(target_root)):
+        return finish(Status.FAILED,
+                      "invocation cwd is not a directory inside the target repository")
+    if execution.reason:
+        return finish(Status.PARTIAL, execution.reason)
     if not approved_argv0(tooldef, argv, resolved_binary):
         got = argv[0] if argv else "(empty)"
         return finish(

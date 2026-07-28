@@ -52,10 +52,18 @@ class Manifest:
     version_drift: str = ""               # "" or "validated X, found Y"
     notes: str = ""
     structured_metrics: dict = field(default_factory=dict)
+    invocation: dict = field(default_factory=dict)  # logical execution identity, when specialized
+
+    def _document(self) -> dict:
+        """Serialized manifest, omitting the optional invocation field when
+        a historical/default ToolDef has no specialized execution identity."""
+        document = {"schema_version": CONTRACT_VERSION, **asdict(self)}
+        if not self.invocation:
+            document.pop("invocation", None)
+        return document
 
     def to_json(self) -> str:
-        return json.dumps({"schema_version": CONTRACT_VERSION, **asdict(self)},
-                          indent=2, sort_keys=True) + "\n"
+        return json.dumps(self._document(), indent=2, sort_keys=True) + "\n"
 
     def normalized_json(self) -> str:
         """Deterministic comparison artifact.
@@ -64,8 +72,7 @@ class Manifest:
         reduced to basenames so two equivalent runs in different run directories
         compare byte-for-byte. The full manifest remains the provenance record.
         """
-        data = asdict(self)
-        data["schema_version"] = CONTRACT_VERSION
+        data = self._document()
         data.pop("wall_time_s", None)
         data.pop("scan_date", None)
         cwd = Path(self.cwd).expanduser().resolve() if self.cwd else None
@@ -108,6 +115,10 @@ class Manifest:
             lines.append(
                 "structured_metrics: " + json.dumps(
                     self.structured_metrics, sort_keys=True, separators=(",", ":")))
+        if self.invocation:
+            lines.append(
+                "invocation:      " + json.dumps(
+                    self.invocation, sort_keys=True, separators=(",", ":")))
         return "\n".join(lines) + "\n"
 
     def write(self, directory: str | Path, name: str) -> tuple[Path, Path]:

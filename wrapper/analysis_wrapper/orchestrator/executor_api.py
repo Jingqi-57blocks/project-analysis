@@ -95,6 +95,7 @@ class AdapterConfig:
     base_url: str = ""
     api_key_env: str = ""
     temperature: float = 0.0
+    effort: str = ""
 
 
 def _api_key(env_var: str) -> str:
@@ -161,8 +162,10 @@ def _anthropic_parse(status: int, raw: bytes) -> tuple[object, TokenUsage | None
     text = "".join(block.get("text", "") for block in doc.get("content", [])
                    if isinstance(block, dict))
     usage = doc.get("usage") or {}
+    cached = usage.get("cache_read_input_tokens")
     tokens = (TokenUsage(input=int(usage.get("input_tokens", 0)),
-                         output=int(usage.get("output_tokens", 0)))
+                         output=int(usage.get("output_tokens", 0)),
+                         cached_input=int(cached) if cached is not None else None)
              if usage else None)
     return parse_json_output(text), tokens
 
@@ -189,8 +192,11 @@ def _openai_parse(status: int, raw: bytes) -> tuple[object, TokenUsage | None]:
         raise ValueError(f"openai-compatible API error {status}: {doc}")
     text = doc["choices"][0]["message"]["content"]
     usage = doc.get("usage") or {}
+    details = usage.get("prompt_tokens_details") or {}
+    cached = details.get("cached_tokens") if isinstance(details, dict) else None
     tokens = (TokenUsage(input=int(usage.get("prompt_tokens", 0)),
-                         output=int(usage.get("completion_tokens", 0)))
+                         output=int(usage.get("completion_tokens", 0)),
+                         cached_input=int(cached) if cached is not None else None)
              if usage else None)
     return parse_json_output(text), tokens
 
@@ -203,12 +209,12 @@ _ADAPTERS: dict[str, tuple[Callable, Callable]] = {
 
 def _call_with_retry(transport: Transport, url: str, headers: Mapping[str, str], body: bytes,
                      *, max_retries: int, timeout: float,
-                     sleep: Callable[[float], None]) -> tuple[int, bytes]:
+                     sleep: Callable[[float], None]) -> tuple[int, bytes, int]:
     attempt = 0
     while True:
         status, raw = transport(url, headers, body, timeout)
         if status not in RETRY_STATUS or attempt >= max_retries:
-            return status, raw
+            return status, raw, attempt
         sleep(min(2 ** attempt, 30))
         attempt += 1
 
@@ -225,18 +231,21 @@ def run_one(packet: TaskPacket, config: AdapterConfig, attempt: int, *,
     below would even start)."""
     preflight(config)
     build_request, parse_response = _ADAPTERS[config.name]
-    executor_info = ExecutorInfo(kind=config.name, model=config.model,
-                                 params={"temperature": config.temperature})
     url, headers, body = build_request(packet, config)  # may raise ExecutorError -- let it propagate
 
     started_at = now_iso()
     start = time.monotonic()
     try:
-        status, raw = _call_with_retry(transport, url, headers, body, max_retries=max_retries,
-                                       timeout=timeout, sleep=sleep)
+        status, raw, retries = _call_with_retry(transport, url, headers, body,
+                                                max_retries=max_retries,
+                                                timeout=timeout, sleep=sleep)
         output, tokens = parse_response(status, raw)
     except Exception as exc:  # HTTP error, malformed JSON, anything else -> a FAILED result
         finished_at = now_iso()
+        executor_info = ExecutorInfo(kind=config.name, model=config.model,
+                                     params={"temperature": config.temperature,
+                                             **({"effort": config.effort} if config.effort else {}),
+                                             "request_wall_clock_s": time.monotonic() - start})
         return TaskResult(
             task_id=packet.task_id, status="failed", output=None, executor=executor_info,
             timing=TaskTiming(started_at=started_at, finished_at=finished_at,
@@ -247,6 +256,11 @@ def run_one(packet: TaskPacket, config: AdapterConfig, attempt: int, *,
             attempt=attempt,
         )
     finished_at = now_iso()
+    executor_info = ExecutorInfo(kind=config.name, model=config.model,
+                                 params={"temperature": config.temperature,
+                                         **({"effort": config.effort} if config.effort else {}),
+                                         "request_wall_clock_s": time.monotonic() - start,
+                                         "retry_count": retries})
     return TaskResult(
         task_id=packet.task_id, status="ok", output=output, executor=executor_info,
         timing=TaskTiming(started_at=started_at, finished_at=finished_at,
@@ -275,7 +289,8 @@ def run_executor(run_dir, config: AdapterConfig, *, concurrency: int = 1,
     while True:
         batch: list[ClaimedTask] = engine.claim(
             concurrency, executor_kind=config.name, model=config.model,
-            params={"temperature": config.temperature})
+            params={"temperature": config.temperature,
+                    **({"effort": config.effort} if config.effort else {})})
         if not batch:
             break
         with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:

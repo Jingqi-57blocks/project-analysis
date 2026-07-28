@@ -207,3 +207,170 @@ def test_write_module_map_ignores_a_validated_boundary_resolution_task(tmp_path)
         task_type="boundary-resolution")
     with pytest.raises(formation.FormationWriterError, match="no validated formation-proposal"):
         formation.write(run)
+
+
+def test_partition_plan_has_stable_local_ownership_and_explicit_cross_links(tmp_path):
+    run = _build_run(tmp_path)
+    candidates_path = run / "module-candidates.json"
+    doc = json.loads(candidates_path.read_text("utf-8"))
+    doc["candidates"].extend([
+        {"candidate_id": "mc-api-route", "repository_ref": "api",
+         "signal_kind": "route", "value": "GET /internal/jobs",
+         "evidence": ["api@" + "a" * 40 + ":internal/jobs.go:1"], "node_ids": []},
+        {"candidate_id": "mc-web-route", "repository_ref": "web",
+         "signal_kind": "route", "value": "GET /portal/jobs",
+         "evidence": ["web@NON-GIT:portal/jobs.js:1"], "node_ids": []},
+    ])
+    doc["candidate_count"] = len(doc["candidates"])
+    candidates_path.write_text(json.dumps(doc), "utf-8")
+    (run / "cohesion-bundle.json").write_text(json.dumps({
+        "clusters": [
+            {"kind": "import", "members": ["mc-api-folder", "mc-api-route"],
+             "evidence_refs": ["api@" + "a" * 40 + ":internal/jobs.go:1"]},
+            {"kind": "route-prefix", "members": ["mc-api-route", "mc-web-route"],
+             "evidence_refs": ["signals/routes.view.txt:2"]},
+        ],
+        "kinds": {}, "limits": {},
+    }), "utf-8")
+
+    first = formation.build_partition_plan(run)
+    second = formation.build_partition_plan(run)
+    assert first == second
+    candidate_ids = {row["candidate_id"] for row in doc["candidates"]}
+    assert set(first["candidate_ownership"]) == candidate_ids
+    assert first["merge_order"] == [row["partition_id"] for row in first["partitions"]]
+    assert any(row["cross_repository"] for row in first["cross_links"])
+    assert any({"mc-api-folder", "mc-api-route"} <= set(row["candidate_ids"])
+               for row in first["partitions"])
+
+
+def test_partitioned_formation_merges_a_cross_repository_module_in_plan_order(tmp_path):
+    run = _build_run(tmp_path)
+    (run / "cohesion-bundle.json").write_text(json.dumps({
+        "clusters": [{
+            "kind": "route-prefix", "members": ["mc-api-folder", "mc-web-folder"],
+            "evidence_refs": ["signals/routes.view.txt:2"],
+        }],
+        "kinds": {}, "limits": {},
+    }), "utf-8")
+    plan = formation.build_partition_plan(run)
+    formation.write_partition_plan(run)
+    shared = [{"module_id": "shared-capability", "name": "Shared capability",
+               "classification": "business", "confidence": "medium", "aliases": []}]
+    for partition in plan["partitions"]:
+        _register_and_validate(run, formation.formation_task_id(partition["partition_id"]), {
+            "modules": shared,
+            "candidate_dispositions": [{
+                "candidate_id": candidate_id, "disposition": "merged",
+                "module_ids": ["shared-capability"],
+                "reason": "cross-repository cohesion evidence supports one boundary",
+            } for candidate_id in partition["candidate_ids"]],
+        })
+    formation.write(run)
+    _candidates, document = module_map.validate(run)
+    assert document["modules"] == shared
+    assert {row["module_ids"][0] for row in document["candidate_dispositions"]} == {
+        "shared-capability"}
+
+
+def test_structural_quality_gate_requires_resolution_without_a_fixed_ratio(tmp_path):
+    run = _build_run(tmp_path)
+    _register_and_validate(run, "formation", {
+        "modules": _MODULES,
+        "candidate_dispositions": [
+            {"candidate_id": "mc-api-folder", "disposition": "unresolved",
+             "module_ids": [], "reason": "the first pass cannot justify ownership"},
+            _DISPOSITIONS[1],
+        ],
+    })
+    formation.write(run)
+    module_map.expand_candidate_rules(run)
+    module_map.validate(run)
+
+    initial = formation.formation_quality(run, refined=False)
+    assert initial["status"] == "blocked"
+    assert initial["requires_boundary_resolution"] is True
+    assert "unresolved_ratio" not in initial
+    assert "max_unresolved_ratio" not in initial
+    row = initial["unresolved"][0]
+    assert row["candidate_id"] == "mc-api-folder"
+    assert row["evidence_bearing"] is True
+    assert "immediate_graph" in row and "prior_module_ids" in row
+
+    refined = formation.formation_quality(run, refined=True)
+    assert refined["status"] == "blocked"
+    document = json.loads((run / "module-map.json").read_text("utf-8"))
+    document["candidate_dispositions"][0].update({
+        "evidence_refs": ["discovery-report.json:x"],
+        "coverage_impact": "Coverage cannot claim a complete ownership boundary for this candidate.",
+    })
+    (run / "module-map.json").write_text(json.dumps(document), "utf-8")
+    refined = formation.formation_quality(run, refined=True)
+    assert refined["status"] == "passed"
+    assert refined["authoritative"] is True
+
+
+def test_apply_boundary_resolution_replaces_every_unresolved_candidate_once(tmp_path):
+    run = _build_run(tmp_path)
+    _register_and_validate(run, "formation", {
+        "modules": _MODULES,
+        "candidate_dispositions": [
+            {"candidate_id": "mc-api-folder", "disposition": "unresolved",
+             "module_ids": [], "reason": "first pass needs graph context"},
+            _DISPOSITIONS[1],
+        ],
+    })
+    formation.write(run)
+    module_map.expand_candidate_rules(run)
+    _register_and_validate(run, "boundary-resolution", {
+        "dispositions": [{
+            "candidate_id": "mc-api-folder", "disposition": "merged",
+            "module_ids": ["core"], "reason": "targeted evidence shares the core boundary",
+        }],
+    }, task_type="boundary-resolution")
+    assert formation.apply_boundary_resolution(run) is True
+    _candidates, document = module_map.validate(run)
+    api = next(row for row in document["candidate_dispositions"]
+               if row["candidate_id"] == "mc-api-folder")
+    assert api["disposition"] == "merged"
+    assert api["module_ids"] == ["core"]
+
+
+def test_apply_boundary_resolution_merges_disjoint_shards(tmp_path):
+    run = _build_run(tmp_path)
+    candidates_path = run / "module-candidates.json"
+    candidates = json.loads(candidates_path.read_text("utf-8"))
+    candidates["candidates"].append({
+        "candidate_id": "mc-api-route", "repository_ref": "api",
+        "signal_kind": "route", "value": "GET /internal/jobs",
+        "evidence": ["api@" + "a" * 40 + ":internal/jobs.go:1"], "node_ids": [],
+    })
+    candidates["candidate_count"] = len(candidates["candidates"])
+    candidates_path.write_text(json.dumps(candidates), "utf-8")
+    _register_and_validate(run, "formation", {
+        "modules": _MODULES,
+        "candidate_dispositions": [
+            {"candidate_id": "mc-api-folder", "disposition": "unresolved",
+             "module_ids": [], "reason": "first pass needs graph context"},
+            {"candidate_id": "mc-api-route", "disposition": "unresolved",
+             "module_ids": [], "reason": "first pass needs graph context"},
+            _DISPOSITIONS[1],
+        ],
+    })
+    formation.write(run)
+    module_map.expand_candidate_rules(run)
+    _register_and_validate(run, "boundary-resolution-shard-0000", {
+        "dispositions": [{
+            "candidate_id": "mc-api-folder", "disposition": "merged",
+            "module_ids": ["core"], "reason": "targeted evidence shares the core boundary",
+        }],
+    }, task_type="boundary-resolution")
+    _register_and_validate(run, "boundary-resolution-shard-0001", {
+        "dispositions": [{
+            "candidate_id": "mc-api-route", "disposition": "merged",
+            "module_ids": ["core"], "reason": "targeted evidence shares the core boundary",
+        }],
+    }, task_type="boundary-resolution")
+    assert formation.apply_boundary_resolution(run) is True
+    _candidates, document = module_map.validate(run)
+    assert {row["disposition"] for row in document["candidate_dispositions"]} == {"merged"}

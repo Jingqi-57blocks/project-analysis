@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import parsers
+from . import go_staticcheck, parsers
 from .depcruise_lane import dependency_cruiser
 from .exclusions import (
     NODE_ENV_REMOVALS, TIER1_DIRS, TIER1_FILE_GLOBS, _excluded_dirs,
@@ -325,6 +325,8 @@ def staticcheck(target: RepoTarget) -> ToolDef:
         view_lines=260, applied_exclusions=["generated docs/ findings (view only)"],
         network=False, cwd_mode="target", timeout_s=600,
         extra_notes=_go_notes(go_binary),
+        invocation_builder=lambda planned_target, _out: go_staticcheck.invocation(
+            planned_target, binary),
         # No DNS preflight: the Go lane only conditionally needs network (cold
         # module cache). Attempt-and-classify — offline downloads fail loudly.
     )

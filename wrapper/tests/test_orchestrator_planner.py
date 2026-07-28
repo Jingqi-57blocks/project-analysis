@@ -11,7 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # wrapper/ on path
 
 from analysis_wrapper import identity
-from analysis_wrapper.orchestrator import planner
+from analysis_wrapper.orchestrator import formation, planner
+from analysis_wrapper.orchestrator import schemas
 from analysis_wrapper.orchestrator import templates as tpl
 from analysis_wrapper.orchestrator.contracts import (
     ExecutorInfo, TaskResult, TaskTiming, ValidationOutcome,
@@ -92,6 +93,11 @@ def _build_run(tmp_path, *, repo_ids=("api-11111111", "web-22222222"),
     _view("lizard", "api", lizard_text)
     _view("scc", "api", "Go 10 100\n")
     _view("git-history", "api", "churn: service.go 5\n")
+    # A reduced staticcheck scan is still lens evidence: the limitation must
+    # reach both Go quality consumers instead of disappearing as no findings.
+    _view("staticcheck", "api", "coverage_limitation: staticcheck-no-package-universe: package pattern matched no packages\n")
+    view_rows[-1]["status"] = "partial"
+    view_rows[-1]["reason"] = "staticcheck-no-package-universe: package pattern matched no packages"
     _view("scc", "web", "JavaScript 5 50\n")
     _view("git-history", "web", "churn: index.js 2\n")
     # a cross-repo view, attributed to a single "primary" member (api) --
@@ -150,9 +156,10 @@ def test_plan_judgment_creates_the_expected_task_count_and_shard_fanout(tmp_path
     lens_tasks = [t for t in planned if t.task_type == "lens-findings"]
     select_tasks = [t for t in planned if t.task_type == "selection-fetch"]
     formation_tasks = [t for t in planned if t.task_type == "formation-proposal"]
-    assert len(formation_tasks) == 1
-    assert formation_tasks[0].task_id == "formation"
-    assert formation_tasks[0].shard == ""
+    assert len(formation_tasks) == 2
+    assert {task.task_id for task in formation_tasks} == {
+        "formation-formation-0000", "formation-formation-0001"}
+    assert {task.shard for task in formation_tasks} == {"formation-0000", "formation-0001"}
 
     # DIRECT lens-findings tasks: 3 repo-sharded (complexity, dead-code,
     # hotspots-change-friction) x 2 repos + 2 workspace-sharded (duplication,
@@ -202,11 +209,13 @@ def test_plan_judgment_registers_every_task_in_the_engine_ledger(tmp_path):
 
 def test_formation_task_has_no_depends_on_and_runs_independently(tmp_path):
     run, _ = _build_run(tmp_path)
-    planner.plan_judgment(run)
+    planned = planner.plan_judgment(run)
     engine = Engine(run)
-    # Independent of every lens task -- it must be ready immediately,
-    # alongside every (unclaimed) lens task, with nothing claimed yet.
-    assert "formation" in engine.ready_task_ids()
+    formation_packet_ids = {packet_id for task in planned
+                            if task.task_type == "formation-proposal"
+                            for packet_id in task.packet_ids}
+    # Every partition is independent of the lens tasks and ready immediately.
+    assert formation_packet_ids <= set(engine.ready_task_ids())
 
 
 def test_formation_task_is_formation_proposal_not_boundary_resolution(tmp_path):
@@ -218,6 +227,25 @@ def test_formation_task_is_formation_proposal_not_boundary_resolution(tmp_path):
     task_types = {task.task_type for task in planned}
     assert "formation-proposal" in task_types
     assert "boundary-resolution" not in task_types
+
+
+def test_formation_packet_carries_a_deterministic_partition_plan(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planned = planner.plan_judgment(run)
+    engine = Engine(run)
+    formation_task_ids = {task.task_id for task in planned
+                          if task.task_type == "formation-proposal"}
+    packets = [rec.detail["task"] for rec in engine._read_records()
+               if rec.event == "created" and rec.task_id in formation_task_ids]
+    plan = json.loads((run / "tasks" / formation.PARTITION_PLAN_FILENAME).read_text("utf-8"))
+    assert {packet["task_id"] for packet in packets} == formation_task_ids
+    assert plan["merge_order"] == [row["partition_id"] for row in plan["partitions"]]
+    assert plan["global_identity"]["candidate_universe_digest"] == plan["candidate_universe_digest"]
+    for packet in packets:
+        context = json.loads(packet["inputs"]["formation-partition-context.json"]["content"])
+        candidates = json.loads(packet["inputs"]["module-candidates.json"]["content"])
+        assert {row["candidate_id"] for row in candidates} <= set(context["partition"]["candidate_ids"])
+        assert context["partition"]["partition_id"] in context["merge_order"]
 
 
 # --------------------------------------------------------------------------- #
@@ -251,7 +279,35 @@ def test_select_task_gets_the_exact_same_inputs_the_lens_task_itself_would(tmp_p
     run_summary = _load_json(run / "signals" / "run-summary.json")
     expected_inputs = _lens_inputs(run, lens_templates["dependencies-cycles"], synthesis_doc,
                                    module_candidates_doc, run_summary, None)
-    assert set(select_packet["inputs"]) == set(expected_inputs)
+    assert set(select_packet["inputs"]) == set(expected_inputs) | {"selection-requirements.json"}
+
+
+def test_requirements_packet_names_exact_inputs_scope_limits_and_typed_source_roles(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planner.plan_judgment(run)
+    engine = Engine(run)
+    created = {rec.task_id: rec.detail["task"] for rec in engine._read_records()
+               if rec.event == "created"}
+
+    direct = created["lens-complexity-api-14c2529e"]
+    contract = json.loads(direct["inputs"]["requirements.json"]["content"])
+    assert contract["parent_task_id"] == "lens-complexity-api-14c2529e"
+    assert contract["expected_shard_scope"] == {"shard": "repo", "repository_ref": "api"}
+    assert contract["inherited_limits"]["max_selections"] == 0
+    assert {row["input_id"] for row in contract["input_requirements"]} == {
+        name for name in direct["inputs"] if name != "requirements.json"
+    }
+    assert {row["coverage_id"] for row in contract["coverage_requirements"]} == {
+        name for name in direct["inputs"] if name.startswith("signals/")
+    }
+
+    select = created["lens-safety-net-api-14c2529e-select"]
+    selection_contract = json.loads(select["inputs"]["selection-requirements.json"]["content"])
+    roles = {row["role_id"]: row for row in selection_contract["roles"]}
+    assert {"lens-critical-source", "test-source", "ci-config", "declared-validation-tooling"} <= set(roles)
+    assert roles["test-source"]["inventory_paths"] == ["test_files.paths"]
+    assert roles["ci-config"]["inventory_paths"] == ["ci_configs.path"]
+    assert selection_contract["parent_requirements_digest"]
 
 
 def test_select_task_instructions_request_up_to_its_own_lens_cap_with_empty_quoted_text(tmp_path):
@@ -492,6 +548,34 @@ def test_dead_code_route_evidence_is_trimmed_to_its_own_repo(tmp_path):
     assert json.loads(web_inputs["dead-code-route-inventory-rows.json"]) == []
 
 
+def test_staticcheck_coverage_limitation_reaches_dead_code_and_safety_net(tmp_path):
+    """57B-151: a provider coverage limit must survive into both Go quality
+    lenses, without leaking one repository's result to a sibling packet."""
+    run, _ = _build_run(tmp_path)
+    lens_templates = tpl.load_lens_templates()
+    from analysis_wrapper.orchestrator.planner import _load_json, _lens_inputs
+    synthesis_doc = _load_json(run / "synthesis-input.json")
+    module_candidates_doc = _load_json(run / "module-candidates.json")
+    run_summary = _load_json(run / "signals" / "run-summary.json")
+
+    for lens_id in ("dead-code", "safety-net"):
+        inputs = _lens_inputs(run, lens_templates[lens_id], synthesis_doc,
+                              module_candidates_doc, run_summary, "api")
+        staticcheck_inputs = {
+            name: content for name, content in inputs.items()
+            if name.startswith("signals/staticcheck-")
+        }
+        assert len(staticcheck_inputs) == 1
+        assert "coverage_limitation: staticcheck-no-package-universe" in next(
+            iter(staticcheck_inputs.values()))
+        requirements = json.loads(inputs["requirements.json"])
+        assert {row["coverage_id"] for row in requirements["coverage_requirements"]} >= set(staticcheck_inputs)
+
+    web_inputs = _lens_inputs(run, lens_templates["safety-net"], synthesis_doc,
+                              module_candidates_doc, run_summary, "web")
+    assert not any(name.startswith("signals/staticcheck-") for name in web_inputs)
+
+
 # --------------------------------------------------------------------------- #
 # every list-carrying input is a BARE JSON ARRAY (composer-shardable), never
 # a dict wrapping it -- the exact defect a real prepared WCP run surfaced:
@@ -600,13 +684,76 @@ def test_a_large_extra_section_now_composes_and_shards_instead_of_failing(tmp_pa
     # tight budget (it was a dict, not an array); now it shards cleanly.
     packets = compose(task_id="t", template_id="t", template_version=template.version,
                       task_type="lens-findings", instructions=instructions, inputs=inputs,
-                      output_schema_id="lens-findings.v1", context_budget_tokens=3000)
+                          output_schema_id="lens-findings.v1", context_budget_tokens=6000)
     assert len(packets) > 1
     assert all("-shard-" in packet.task_id for packet in packets)
-    assert all(_packet_tokens(packet) <= 3000 for packet in packets)
+    assert all(_packet_tokens(packet) <= 6000 for packet in packets)
+    for index, packet in enumerate(packets, start=1):
+        contract = json.loads(packet.inputs["requirements.json"].content)
+        assert contract["parent_task_id"] == "t"
+        assert contract["parent_requirements_digest"]
+        assert contract["shard_local_scope"] == {
+            "index": index, "total": len(packets), "split_input_id": "graph-nodes.json",
+        }
     # graph-meta.json (the small sibling) rides on every shard, unsplit.
     for packet in packets:
         assert "graph-meta.json" in packet.inputs
+
+
+def test_normal_budget_large_workspace_uses_semantic_partitions_and_compact_select_indexes(tmp_path):
+    """57B-150: semantic work items precede composer.py's generic fallback.
+
+    The fixture's long api signal makes the workspace open lens genuinely
+    oversized at a normal (not artificial 6k test) budget.  Its source
+    selection packets must receive local compact indexes, while the persisted
+    graph proves every final-evidence input has one deterministic owner.
+    """
+    run, _ = _build_run(tmp_path, inflate_lizard_lines=8000)
+    planned = planner.plan_judgment(run, context_budget_tokens=24_000)
+    assert planned
+
+    from analysis_wrapper.orchestrator import semantic_partitions
+    manifest = json.loads((run / "tasks" / semantic_partitions.PLAN_FILENAME).read_text("utf-8"))
+    by_task = {row["task_id"]: row for row in manifest["plans"]}
+    open_plan = by_task["lens-open-lens"]
+    assert open_plan["active"] is True
+    assert {row["kind"] for row in open_plan["partitions"]} == {
+        "repository", "cross-boundary",
+    }
+    assert all(row["source_input_digests"] for row in open_plan["partitions"])
+    assert semantic_partitions.validate_manifest(run) == []
+
+    engine = Engine(run)
+    created = [record.detail["task"] for record in engine._read_records()
+               if record.event == "created"]
+    open_selects = [packet for packet in created
+                    if packet["task_type"] == "selection-fetch"
+                    and packet["task_id"].startswith("lens-open-lens-sp-")]
+    assert len(open_selects) == len(open_plan["partitions"])
+    for packet in open_selects:
+        # The final lens contract/evidence is intentionally not copied into
+        # selection work.  Typed input names remain, but their contents are
+        # small locator indexes and the actual partition descriptor is exact.
+        assert "requirements.json" not in packet["inputs"]
+        descriptor = json.loads(packet["inputs"]["semantic-partition.json"]["content"])
+        assert descriptor["active"] is True
+        assert descriptor["parent_task_id"] == "lens-open-lens"
+        for input_id, item in packet["inputs"].items():
+            if "lizard-api" in input_id:
+                index = json.loads(item["content"])
+                assert len(index) <= 1 + semantic_partitions.MAX_SELECTION_INDEX_ROWS
+                assert index[0]["index_summary"]["truncated"] is True
+
+
+def test_semantic_source_partitions_finalize_before_dedup(tmp_path):
+    """A semantic select child is a real select/fetch/finalize pair, not an
+    advisory index that later stages can accidentally omit."""
+    run, _ = _build_run(tmp_path, inflate_lizard_lines=8000)
+    planner.plan_judgment(run, context_budget_tokens=24_000)
+    validated_lenses = _drive_dag_to_completion(run, context_budget_tokens=24_000)
+    assert any("-sp-" in task_id for task_id in validated_lenses)
+    dedup = planner.plan_dedup(run, context_budget_tokens=24_000)
+    assert dedup.task_id == "dedup-rank"
 
 
 # --------------------------------------------------------------------------- #
@@ -722,6 +869,70 @@ def _collision_lens_output(task_id):
 
 
 def _submit(engine, item, output, *, status="ok"):
+    if item.packet.task_type == "formation-proposal" and isinstance(output, dict):
+        partition_input = item.packet.inputs.get("formation-partition-context.json")
+        candidates_input = item.packet.inputs.get("module-candidates.json")
+        if partition_input is not None and candidates_input is not None:
+            output = dict(output)
+            output["candidate_dispositions"] = [{
+                "candidate_id": row["candidate_id"], "disposition": "standalone",
+                "module_ids": [output["modules"][0]["module_id"]], "reason": "fixture",
+            } for row in json.loads(candidates_input.content)]
+    if item.packet.task_type == "lens-findings" and isinstance(output, dict) \
+            and isinstance(output.get("findings"), list):
+        raw = item.packet.inputs.get("requirements.json")
+        if raw is not None:
+            contract = json.loads(raw.content)
+            output = dict(output)
+            coverage = contract["coverage_requirements"]
+            output["coverage"] = [{
+                "signal": row["coverage_id"], "status": "complete",
+                "note": "fixture",
+            } for row in coverage]
+            role_results = item.packet.inputs.get("selection-role-results.json")
+            if role_results is not None:
+                for result in json.loads(role_results.content)["roles"]:
+                    for row in output["coverage"]:
+                        if row["signal"] == f"source-selection/{result['role_id']}":
+                            row["status"] = result["coverage_status"]
+            output["input_dispositions"] = [{
+                "input_id": row["input_id"], "status": "examined",
+                "evidence_refs": ["metric:code.analyzed-scope.total"], "note": "fixture",
+            } for row in contract["input_requirements"]]
+            if role_results is not None:
+                results = json.loads(role_results.content)["roles"]
+                if any(row["fetch_status"] in {"partial", "failed"} for row in results):
+                    for row in output["input_dispositions"]:
+                        if row["input_id"] == "fetched-evidence.json":
+                            row["status"] = "failed"
+                            row["evidence_refs"] = []
+            finding_ids = [row["finding_id"] for row in output["findings"]]
+            output["checklist_dispositions"] = [{
+                "dimension_id": row["dimension_id"],
+                "outcome": "finding" if index == 0 else "unknown",
+                "finding_ids": finding_ids if index == 0 else [],
+                "evidence_refs": ["metric:code.analyzed-scope.total"] if index == 0 else [],
+                "limitation": "fixture",
+            } for index, row in enumerate(contract["checklist_requirements"])]
+    if item.packet.task_type == "selection-fetch" and isinstance(output, dict):
+        raw = item.packet.inputs.get("selection-requirements.json")
+        if raw is not None:
+            contract = json.loads(raw.content)
+            output = dict(output)
+            selections = output.get("selections", [])
+            if not isinstance(selections, list):
+                # Deliberately malformed fixtures exercise the engine's
+                # schema-failure/retry path; do not try to decorate them.
+                selection_ids = []
+            else:
+                selection_ids = [row["selection_id"] for row in selections
+                                 if isinstance(row, dict) and "selection_id" in row]
+            output["role_dispositions"] = [{
+                "role_id": row["role_id"],
+                "status": "selected" if selection_ids else "unavailable",
+                "selection_ids": selection_ids if selection_ids else [],
+                "note": "fixture",
+            } for row in contract["roles"]]
     at = now_iso()
     result = TaskResult(
         task_id=item.packet.task_id, status=status, output=output,
@@ -735,7 +946,8 @@ def _submit(engine, item, output, *, status="ok"):
 
 def _drive_dag_to_completion(run, *, hold_back_lens_task_ids=frozenset(),
                             fail_lens_task_ids=frozenset(),
-                            lens_output_fn=_lens_output):
+                            lens_output_fn=_lens_output,
+                            context_budget_tokens=planner.DEFAULT_CONTEXT_BUDGET_TOKENS):
     """Claims and validates every ready task (formation, direct lens-findings,
     and select tasks), running the REAL fetch-selections + plan_lens_finalize
     as soon as a select task validates so its paired lens-findings task
@@ -779,7 +991,11 @@ def _drive_dag_to_completion(run, *, hold_back_lens_task_ids=frozenset(),
                 elif task_type == "formation-proposal":
                     _submit(engine, item, _FORMATION_PLACEHOLDER_OUTPUT)
                 elif task_type == "selection-fetch":
-                    outcome = _submit(engine, item, _SELECT_OUTPUT)
+                    selection_contract = json.loads(
+                        item.packet.inputs["selection-requirements.json"].content)
+                    selection_output = (_SELECT_OUTPUT if selection_contract["roles"]
+                                        else {"selections": []})
+                    outcome = _submit(engine, item, selection_output)
                     assert outcome["status"] == "validated", outcome
                     pending_finalize.add(task_id)
                 else:
@@ -788,7 +1004,8 @@ def _drive_dag_to_completion(run, *, hold_back_lens_task_ids=frozenset(),
         for select_task_id in list(pending_finalize):
             lens_task_id = select_task_id[:-len("-select")]
             selection.fetch(run, select_task_id)
-            planner.plan_lens_finalize(run, lens_task_id)
+            planner.plan_lens_finalize(run, lens_task_id,
+                                       context_budget_tokens=context_budget_tokens)
             pending_finalize.discard(select_task_id)
             progressed = True
 
@@ -1000,6 +1217,74 @@ def test_plan_lens_finalize_composes_the_real_lens_task_with_fetched_evidence(tm
     assert ready and ready[0].packet.task_id == "lens-open-lens"
     outcome = _submit(engine, ready[0], _lens_output("lens-open-lens"))
     assert outcome["status"] == "validated", outcome
+
+
+def test_fetch_failure_becomes_final_lens_coverage_gap_and_rejects_a_clean_projection(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planner.plan_judgment(run)
+    engine = Engine(run)
+    claimed = engine.claim(len(engine.ready_task_ids()), executor_kind="manual", model="test")
+    bad_ref_output = {"selections": [{
+        "selection_id": "missing-source", "purpose": "fixture source",
+        "ref": "api@" + "a" * 40 + ":internal/missing.go:1", "quoted_text": "",
+    }]}
+    for item in claimed:
+        if item.packet.task_id == "lens-open-lens-select":
+            assert _submit(engine, item, bad_ref_output)["status"] == "validated"
+
+    from analysis_wrapper.orchestrator import selection
+    rows = json.loads(selection.fetch(run, "lens-open-lens-select").read_text("utf-8"))
+    assert rows[0]["excerpt"].startswith("NOT FETCHED:")
+    planner.plan_lens_finalize(run, "lens-open-lens")
+    record = next(rec for rec in engine._read_records()
+                  if rec.event == "created" and rec.task_id == "lens-open-lens")
+    packet_inputs = {name: value["content"]
+                     for name, value in record.detail["task"]["inputs"].items()}
+    role_results = json.loads(packet_inputs["selection-role-results.json"])["roles"]
+    assert role_results and all(row["coverage_status"] == "failed" for row in role_results)
+
+    contract = json.loads(packet_inputs["requirements.json"])
+    clean_output = {
+        "findings": [],
+        "coverage": [{"signal": row["coverage_id"], "status": "complete", "note": "clean"}
+                     for row in contract["coverage_requirements"]],
+        "input_dispositions": [{
+            "input_id": row["input_id"], "status": "examined",
+            "evidence_refs": ["metric:code.analyzed-scope.total"], "note": "clean",
+        } for row in contract["input_requirements"]],
+        "checklist_dispositions": [{
+            "dimension_id": row["dimension_id"], "outcome": "no-concern-observed",
+            "finding_ids": [], "evidence_refs": ["metric:code.analyzed-scope.total"],
+            "limitation": "clean",
+        } for row in contract["checklist_requirements"]],
+    }
+    checks = {row["check"] for row in schemas.validate_output(
+        "lens-findings", clean_output, packet_inputs=packet_inputs)}
+    assert {"selection-role-coverage-projection", "fetched-evidence-coverage-gap"} <= checks
+
+
+def test_permanently_failed_selection_is_finalized_as_a_source_coverage_gap(tmp_path):
+    run, _ = _build_run(tmp_path)
+    planner.plan_judgment(run)
+    engine = Engine(run)
+    target = "lens-open-lens-select"
+    claimed = engine.claim(len(engine.ready_task_ids()), executor_kind="manual", model="test")
+    target_item = next(item for item in claimed if item.packet.task_id == target)
+    _submit(engine, target_item, {"selections": "invalid"})
+    while engine.task_states()[target] == "pending":
+        item = engine.claim(1, executor_kind="manual", model="test")[0]
+        assert item.packet.task_id == target
+        _submit(engine, item, {"selections": "invalid"})
+    assert engine.task_states()[target] == "failed"
+
+    finalized = planner.plan_lens_finalize(run, "lens-open-lens")
+    assert finalized.created is True
+    record = next(rec for rec in engine._read_records()
+                  if rec.event == "created" and rec.task_id == "lens-open-lens")
+    role_results = json.loads(record.detail["task"]["inputs"]
+                              ["selection-role-results.json"]["content"])["roles"]
+    assert role_results and all(row["status"] == "unavailable" for row in role_results)
+    assert all(row["coverage_status"] == "failed" for row in role_results)
 
 
 def test_plan_lens_finalize_is_idempotent(tmp_path):
