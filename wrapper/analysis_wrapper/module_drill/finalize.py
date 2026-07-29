@@ -288,9 +288,11 @@ def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc
         for seed_id in candidate.seed_ids
     }
     selected_ui = any(seed.kind == "ui-action" and seed.seed_id in selected_seed_ids for seed in scope.seeds)
-    # Only a UI-visibility claim can complete the UI dimension.  Generic
+    # Only a UI-visibility claim can complete the UI-linkage dimension. Generic
     # effect/trigger support may describe a route, configuration, or data
-    # boundary and must not accidentally certify a UI entry.
+    # boundary and must not accidentally certify a UI relationship. A static
+    # UI-to-route link is deliberately not presented as a human-facing entry
+    # label or navigation path.
     ui_claim_refs = claim_refs(kinds={"ui-visibility"})
     ui_node_refs = node_refs_by_kind.get("ui-action", ())
     if selected_ui and ui_node_refs and ui_claim_refs:
@@ -303,7 +305,7 @@ def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc
     else:
         dimensions["ui-entry"] = CoverageStatus(Coverage(
             "unknown", "unavailable", (),
-            ("no selected source-verified UI entry anchor was observed",)), closure, ())
+            ("no selected source-verified UI action anchor was observed",)), closure, ())
     return dimensions
 
 

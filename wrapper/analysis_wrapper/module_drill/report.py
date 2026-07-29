@@ -53,7 +53,7 @@ _TEXT = {
         "dimensions": {
             "asynchronous-behavior": "asynchronous behavior", "authorization": "authorization",
             "configuration": "configuration", "data": "data", "integration": "integration",
-            "synchronous-behavior": "synchronous behavior", "ui-entry": "UI entry",
+            "synchronous-behavior": "synchronous behavior", "ui-entry": "UI action linkage",
         },
         "node_kinds": {
             "ui-action": "UI action", "route": "route", "handler": "handler", "symbol": "symbol",
@@ -73,6 +73,7 @@ _TEXT = {
             "exact observed UI-to-route graph edge": "exact observed UI-to-route graph edge",
             "exact observed route-to-handler graph edge": "exact observed route-to-handler graph edge",
             "direct observed source anchor is the bounded semantic recovery unit; no exact call edge was observed": "a direct source anchor is the bounded semantic recovery unit; no exact call edge was observed",
+            "no selected source-verified UI action anchor was observed": "no selected source-verified UI action anchor was observed",
         },
         "coverage_applicability": {"applicable": "applicable", "not-applicable": "not applicable", "unknown": "unknown"},
         "coverage_status": {"complete": "complete", "partial": "partial", "unavailable": "unavailable", "skipped": "skipped", "failed": "failed"},
@@ -113,7 +114,7 @@ _TEXT = {
         "dimensions": {
             "asynchronous-behavior": "异步行为", "authorization": "授权", "configuration": "配置",
             "data": "数据", "integration": "外部集成", "synchronous-behavior": "同步行为",
-            "ui-entry": "界面入口",
+            "ui-entry": "界面操作关联",
         },
         "node_kinds": {
             "ui-action": "界面操作", "route": "接口路由", "handler": "处理器", "symbol": "符号",
@@ -133,6 +134,7 @@ _TEXT = {
             "exact observed UI-to-route graph edge": "已观察到精确的界面到路由关系",
             "exact observed route-to-handler graph edge": "已观察到精确的路由到处理器关系",
             "direct observed source anchor is the bounded semantic recovery unit; no exact call edge was observed": "直接观察到的源码锚点是有界语义恢复单元；未观察到精确调用边",
+            "no selected source-verified UI action anchor was observed": "没有观察到经源码验证且被选中的界面操作锚点",
         },
         "coverage_applicability": {"applicable": "适用", "not-applicable": "不适用", "unknown": "未知"},
         "coverage_status": {"complete": "完整", "partial": "部分覆盖", "unavailable": "不可用", "skipped": "已跳过", "failed": "失败"},

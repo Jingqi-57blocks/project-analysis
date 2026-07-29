@@ -74,6 +74,9 @@ _ROUTE_CALL_START = re.compile(
     r"\b(?P<receiver>[A-Za-z_$][\w$]*)\s*\.\s*"
     r"(?P<method>GET|POST|PUT|PATCH|DELETE|get|post|put|patch|delete)\s*\(")
 _IDENTIFIER = re.compile(r"\b[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)?\b")
+_SIMPLE_HANDLER_REFERENCE = re.compile(r"^[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)?$")
+_QUALIFIED_WRAPPED_HANDLER = re.compile(
+    r"^[A-Za-z_$][\w$]*\s*\(\s*([A-Za-z_$][\w$]*\s*\.\s*[A-Za-z_$][\w$]*)\s*\)$")
 _GO_FUNC = re.compile(r"(?m)^\s*func\s+(?P<name>[A-Za-z_]\w*)\s*\(")
 _JS_FUNC = re.compile(
     r"(?m)^\s*(?:export\s+)?(?:async\s+)?function\s+(?P<name>[A-Za-z_$][\w$]*)\s*\(")
@@ -329,7 +332,7 @@ def _call_arguments(text: str, open_paren: int) -> tuple[tuple[int, int], ...] |
 
 
 def _literal_route_path(text: str, span: tuple[int, int]) -> str | None:
-    raw = text[span[0]:span[1]].strip()
+    raw = re.sub(r"/\*.*?\*/|//[^\n]*", "", text[span[0]:span[1]], flags=re.DOTALL).strip()
     if len(raw) < 2 or raw[0] not in {"'", '\"'} or raw[-1] != raw[0]:
         return None
     value = raw[1:-1]
@@ -346,8 +349,42 @@ def _handler_symbols(text: str, span: tuple[int, int]) -> tuple[str, ...]:
     return tuple(sorted(symbols))
 
 
-def _route_calls(text: str, relative: str) -> tuple[tuple[str, str, str, tuple[str, ...]], ...]:
-    rows: list[tuple[str, str, str, tuple[str, ...]]] = []
+def _handler_anchor_symbols(text: str, span: tuple[int, int]) -> tuple[str, ...]:
+    """Return only unambiguous named handler targets from a final route argument.
+
+    ``_handler_symbols`` intentionally retains every identifier-shaped token as
+    an observed reference for a later unresolved frontier.  It must not also
+    promote those tokens to handler nodes: an inline callback contains local
+    variables, services, and errors that are not handler definitions.  A
+    handler anchor is therefore limited to a direct named reference, or a
+    single wrapper around a qualified reference such as ``catch(api.Create)``.
+    Anonymous callbacks and dynamic wrapper expressions remain references
+    without an implementation edge.
+    """
+    raw = re.sub(r"/\*.*?\*/|//[^\n]*", "", text[span[0]:span[1]], flags=re.DOTALL).strip()
+    # An inline arrow/function callback is a local implementation body, not a
+    # separately resolved definition.  Its tokens must remain non-anchors.
+    if "=>" in raw or re.match(r"^(?:async\s+)?function\b", raw):
+        return ()
+    direct = _SIMPLE_HANDLER_REFERENCE.fullmatch(raw)
+    if direct is not None:
+        return (direct.group(0).replace(" ", ""),)
+    wrapped = _QUALIFIED_WRAPPED_HANDLER.fullmatch(raw)
+    if wrapped is not None:
+        return (wrapped.group(1).replace(" ", ""),)
+    return ()
+
+
+def _route_calls(text: str, relative: str) -> tuple[
+        tuple[str, str, str, tuple[str, ...], tuple[int, int]], ...]:
+    """Return each literal registration with the exact final-argument span.
+
+    The broad ``symbols`` list feeds unresolved frontier reporting.  The span is
+    deliberately kept alongside it so handler anchoring is based on the same
+    parsed call rather than an evidence-line lookup (which is ambiguous when a
+    source line contains more than one registration).
+    """
+    rows: list[tuple[str, str, str, tuple[str, ...], tuple[int, int]]] = []
     for match in _ROUTE_CALL_START.finditer(text):
         arguments = _call_arguments(text, match.end() - 1)
         if arguments is None or len(arguments) < 2:
@@ -355,9 +392,10 @@ def _route_calls(text: str, relative: str) -> tuple[tuple[str, str, str, tuple[s
         path = _literal_route_path(text, arguments[0])
         if path is None:
             continue
-        symbols = _handler_symbols(text, arguments[-1])
+        handler_span = arguments[-1]
+        symbols = _handler_symbols(text, handler_span)
         rows.append((match.group("method").upper(), path,
-                     f"{relative}:{_line_of(text, match.start())}", symbols))
+                     f"{relative}:{_line_of(text, match.start())}", symbols, handler_span))
     return tuple(rows)
 
 
@@ -503,9 +541,9 @@ def route_handler_references(repo_path: str | Path,
     rows: list[RouteHandlerReference] = []
     for relative, text in sorted(sources.items()):
         suffix = Path(relative).suffix
-        for method, path, evidence, symbols in _route_calls(text, relative):
+        for method, path, evidence, symbols, handler_span in _route_calls(text, relative):
             anchors: list[tuple[str, str]] = []
-            for symbol in symbols:
+            for symbol in _handler_anchor_symbols(text, handler_span):
                 target = (_resolve_go_symbol(symbol, relative=relative, text=text,
                                              sources=sources, module_path=module_path)
                           if suffix == ".go" else
