@@ -113,6 +113,44 @@ def test_render_localizes_fixed_contract_vocabulary_but_not_source_literals(tmp_
     assert "异步边界" in architecture
 
 
+def test_report_projection_deduplicates_equivalent_claims_but_keeps_distinct_evidence(tmp_path):
+    module_run = _ready(tmp_path)
+    assert finalize(module_run)[1].passed
+    _add_claim_and_flow(module_run)
+    model_path = module_run / "evidence" / "module-model.json"
+    document = json.loads(model_path.read_text())
+    duplicate = {**document["model"]["claims"][0], "claim_id": "claim-record-submit-duplicate"}
+    document["model"]["claims"].append(duplicate)
+    model_path.write_text(json.dumps(document), encoding="utf-8")
+
+    paths = render(module_run)
+
+    behavior = paths["details/behavior.md"].read_text()
+    evidence = paths["details/evidence-and-unknowns.md"].read_text()
+    assert behavior.count("record submission emits `/records`. [`claim-record-submit`]") == 1
+    assert "claim-record-submit-duplicate" not in behavior
+    assert "claim-record-submit-duplicate" not in evidence
+
+
+def test_report_groups_unclaimed_structural_paths_and_keeps_their_evidence(tmp_path):
+    module_run = _ready(tmp_path)
+    assert finalize(module_run)[1].passed
+    model_path = module_run / "evidence" / "module-model.json"
+    document = json.loads(model_path.read_text())
+    edge = document["model"]["edges"][0]
+    document["model"]["flows"] = [
+        {"flow_id": "flow-structural-a", "edge_ids": [edge["edge_id"]], "claim_ids": []},
+        {"flow_id": "flow-structural-b", "edge_ids": [edge["edge_id"]], "claim_ids": []},
+    ]
+    model_path.write_text(json.dumps(document), encoding="utf-8")
+
+    behavior = render(module_run)["details/behavior.md"].read_text()
+
+    assert "2 observed structural paths" in behavior
+    assert "flow-structural-a" not in behavior
+    assert next(iter(edge["evidence_refs"])) in behavior
+
+
 def test_cli_renders_the_complete_catalog(tmp_path, capsys):
     module_run = _ready(tmp_path)
     assert finalize(module_run)[1].passed
