@@ -138,16 +138,24 @@ def _claims(*outputs: dict[str, Any]) -> tuple[FeatureClaim, ...]:
         missing = sorted(set(ids) - consumed)
         orphaned = sorted(consumed - set(ids))
         raise ContractError(f"claim disposition mismatch: missing={missing}; unknown={orphaned}")
-    contradictions: set[tuple[str, str]] = set()
-    by_semantic: dict[tuple[str, str], object] = {}
+    # A feature can legitimately contain several route handlers (or several
+    # persisted entities) that share a human-readable subject and operation
+    # but have distinct values.  Those are distinct observations whenever the
+    # evidence graph anchors differ.  Only competing values for the same
+    # semantic subject *and* anchor set are contradictory.
+    contradictions: set[tuple[str, str, tuple[str, ...]]] = set()
+    by_semantic: dict[tuple[str, str, tuple[str, ...]], object] = {}
     for claim in claims:
-        key = (claim.subject, claim.operation)
+        key = (claim.subject, claim.operation, tuple(sorted(claim.anchor_ids)))
         prior = by_semantic.get(key)
         if prior is not None and prior != claim.value:
             contradictions.add(key)
         by_semantic[key] = claim.value
     if contradictions:
-        raise ContractError("contradictory claim values: " + ", ".join("/".join(key) for key in sorted(contradictions)))
+        raise ContractError(
+            "contradictory claim values: "
+            + ", ".join(f"{subject}/{operation}/{','.join(anchors)}"
+                        for subject, operation, anchors in sorted(contradictions)))
     return tuple(sorted(claims, key=lambda claim: claim.claim_id))
 
 
