@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -155,6 +156,43 @@ def _brace_bounds(lines: list[str], anchor: int,
     return None
 
 
+_CONTROL_HEADER = re.compile(r"^(?:else\s+)?(?:if|for|while|switch|case|catch|try|do)\b")
+_HANDLER_MARKER = re.compile(r"\b(?:func|function)\b|=>|\bwrapAsync\b")
+
+
+def _handler_header(lines: list[str], start: int) -> bool:
+    """Whether a brace line introduces a callable rather than a control block.
+
+    Route and call-graph anchors frequently point at a statement inside an
+    ``if``/``for`` block.  The nearest brace then proves only the control path,
+    not the handler that contains the rule.  This intentionally small lexical
+    recognizer selects the nearest enclosing callable header without trying to
+    infer arbitrary language semantics.
+    """
+    local = lines[start].strip().lstrip("}").strip()
+    if _CONTROL_HEADER.match(local):
+        return False
+    window = " ".join(lines[max(0, start - 8):start + 1])
+    if _HANDLER_MARKER.search(window):
+        return True
+    # A conventional named method can omit both ``function`` and an arrow
+    # marker.  Keep this conservative by requiring a parameter list on the
+    # opening line and by having already excluded control headers above.
+    return "(" in local and ")" in local
+
+
+def _handler_brace_bounds(lines: list[str], anchor: int,
+                          opens: list[int], closes: list[int]) -> tuple[int, int] | None:
+    """Find the nearest enclosing lexical callable block for a handler anchor."""
+    for start in range(anchor, -1, -1):
+        if not opens[start] or not _handler_header(lines, start):
+            continue
+        candidate = _brace_bounds(lines, start, opens, closes)
+        if candidate is not None and candidate[0] == start and candidate[1] >= anchor:
+            return candidate
+    return _brace_bounds(lines, anchor, opens, closes)
+
+
 def _statement_bounds(lines: list[str], anchor: int,
                       semicolons: list[int]) -> tuple[int, int] | None:
     """Find a complete simple statement when the anchor has no brace block.
@@ -182,7 +220,8 @@ def _statement_bounds(lines: list[str], anchor: int,
 def _bounds(lines: list[str], anchor: int, *, kind: str) -> tuple[tuple[int, int], str] | None:
     """Return one complete lexical construct around an already-evidenced line."""
     opens, closes, semicolons = _syntax_tokens(lines)
-    brace = _brace_bounds(lines, anchor, opens, closes)
+    brace = (_handler_brace_bounds(lines, anchor, opens, closes)
+             if kind == "handler" else _brace_bounds(lines, anchor, opens, closes))
     if brace is not None:
         return brace, "brace-block"
     statement = _statement_bounds(lines, anchor, semicolons)

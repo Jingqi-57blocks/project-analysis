@@ -48,6 +48,43 @@ const unrelated = true;
     assert len(rows[0]["content_sha256"]) == 64
 
 
+def test_handler_anchor_inside_a_control_block_reads_the_enclosing_callback(tmp_path):
+    run, ref = _module_run(tmp_path, """router.post('/records', wrapAsync(async (request, response) => {
+  if (request.body.hours !== 8) {
+    throw new Error('invalid duration');
+  }
+  response.json({ok: true});
+}));
+""")
+
+    row = json.loads(fetch(run, [_request(ref, 3)]).read_text(encoding="utf-8"))[0]
+
+    assert row["status"] == "fetched"
+    assert row["start_ref"] == f"{ref}:1"
+    assert row["end_ref"] == f"{ref}:6"
+    assert "router.post" in row["content"]
+    assert "hours !== 8" in row["content"]
+    assert "response.json" in row["content"]
+
+
+def test_handler_anchor_inside_go_control_block_reads_the_enclosing_function(tmp_path):
+    run, ref = _module_run(tmp_path, """func updateRecord(hours int) error {
+  if hours != 8 {
+    return errors.New("invalid duration")
+  }
+  return nil
+}
+""")
+
+    row = json.loads(fetch(run, [_request(ref, 3)]).read_text(encoding="utf-8"))[0]
+
+    assert row["status"] == "fetched"
+    assert row["start_ref"] == f"{ref}:1"
+    assert row["end_ref"] == f"{ref}:6"
+    assert "func updateRecord" in row["content"]
+    assert "hours != 8" in row["content"]
+
+
 def test_fetches_complete_unbraced_declaration_as_statement(tmp_path):
     run, ref = _module_run(tmp_path, """const handler = () => send(\"created\");
 const other = 1;
