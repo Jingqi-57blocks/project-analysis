@@ -9,6 +9,7 @@ from analysis_wrapper import (capabilities, coverage_render, findings, identity,
                               module_render, overview_audit, synthesis_input,
                               workspace_metrics)
 from analysis_wrapper.cli import main
+from analysis_wrapper.orchestrator import renders
 from analysis_wrapper.system_model import assemble as sm
 from analysis_wrapper.targetspec import TargetSpec, stable_repo_id
 from system_model_fixtures import write_run
@@ -723,6 +724,18 @@ def test_pm_abstraction_path_labels_do_not_treat_package_words_as_paths():
         assert not overview_audit._is_source_path_label(label)
     for label in ("src/client.ts", "internal/handler", "app.js", "Dockerfile"):
         assert overview_audit._is_source_path_label(label)
+
+
+def test_technical_scope_uses_public_repository_identity_and_relative_path(tmp_path):
+    run = _prepared(write_run(tmp_path / "run", with_imports=True))
+    scope = renders.analysis_scope(run)
+    mapping = identity.load(run)
+
+    for repository in mapping.repositories:
+        assert repository.reference in scope
+        assert repository.workspace_relative_path in scope
+        assert repository.internal_id not in scope
+        assert repository.canonical_path not in scope
 
 
 def test_final_audit_rejects_html_entity_obfuscation(tmp_path):
