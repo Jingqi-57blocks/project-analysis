@@ -293,6 +293,20 @@ def _crosscheck_sync_recovery(output: Any, packet_inputs: Mapping[str, str]) -> 
         if row.get("kind") == "ui-route"
         and row.get("source_node_id") in required_anchor_ids
     ]
+    context_ui_route_edge_ids = {
+        edge_id for edge_id, row in edges_by_id.items()
+        if row.get("kind") == "ui-route"
+        and row.get("source_node_id") not in required_anchor_ids
+    }
+    for flow in flows:
+        context_edges = sorted(set(flow.edge_ids) & context_ui_route_edge_ids)
+        if context_edges:
+            failures += _failure(
+                "sync-flow-ui-route-ownership",
+                "a flow may include a ui-route edge only when this packet owns its source UI requirement: "
+                + ", ".join(context_edges),
+                flow.flow_id,
+            )
     for ui_edge in ui_route_edges:
         ui_edge_id = ui_edge["edge_id"]
         covering = [flow for flow in flows if ui_edge_id in flow.edge_ids]

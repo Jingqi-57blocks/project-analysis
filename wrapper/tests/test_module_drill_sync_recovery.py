@@ -299,6 +299,13 @@ def test_sync_output_allows_a_context_only_ui_route_without_a_flow():
     }
     assert validate_output("module-sync-recovery", output, packet_inputs=inputs) == []
 
+    output["flows"] = [{
+        "flow_id": "flow-context-edge", "edge_ids": ["edge-ui-route", "edge-route-handler"],
+        "claim_ids": [],
+    }]
+    failures = validate_output("module-sync-recovery", output, packet_inputs=inputs)
+    assert any(failure["check"] == "sync-flow-ui-route-ownership" for failure in failures)
+
 
 def test_sync_output_requires_flow_when_the_packet_owns_the_ui_source():
     ui_ref = "web@NON-GIT:src/page.tsx:10"
