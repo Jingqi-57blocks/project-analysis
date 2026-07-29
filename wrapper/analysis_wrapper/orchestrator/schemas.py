@@ -288,6 +288,7 @@ _RULE_SELECTOR_FIELDS = {
 _RULE_FIELDS = {"rule_id", "selectors", "remaining", "disposition", "module_ids", "reason"}
 _DISPOSITION_FIELDS = {"candidate_id", "disposition", "module_ids", "reason"}
 _ADDED_CANDIDATE_FIELDS = {"candidate_id", "repository_ref", "value", "evidence", "node_ids"}
+_PLACEHOLDER_MODULE_ID_TOKENS = {"unknown", "unresolved", "placeholder", "tbd", "todo"}
 
 
 def _validate_module_row(row: Any, location: str, failures: _Failures) -> None:
@@ -298,6 +299,11 @@ def _validate_module_row(row: Any, location: str, failures: _Failures) -> None:
                       and bool(SLUG.fullmatch(row["module_id"])),
                       "module-id", "module_id must be a stable kebab-case slug",
                       f"{location}.module_id")
+    module_id = row.get("module_id")
+    if isinstance(module_id, str) and set(module_id.split("-")) & _PLACEHOLDER_MODULE_ID_TOKENS:
+        failures.add("module-placeholder-id",
+                     "module_id must name a supported responsibility, not an unresolved placeholder",
+                     f"{location}.module_id")
     failures.require(_one_line_str(row.get("name")), "module-name",
                       "name must be one non-empty line", f"{location}.name")
     failures.require(row.get("classification") in module_map.CLASSIFICATIONS,
@@ -1183,14 +1189,6 @@ def _crosscheck_formation_partitions(obj: Any,
         failures.add("formation-explicit-dispositions",
                      "partitioned formation packets must use explicit candidate_dispositions",
                      "candidate_rules")
-    if isinstance(rows, list) and len(candidate_ids) >= 2:
-        assigned_rows = [row for row in rows if isinstance(row, dict)
-                         and row.get("candidate_id") in candidate_ids]
-        if len(assigned_rows) == len(candidate_ids) and all(
-                row.get("disposition") == "unresolved" for row in assigned_rows):
-            failures.add("formation-all-unresolved-partition",
-                         "a multi-candidate formation partition cannot defer every candidate",
-                         "candidate_dispositions")
     modules = obj.get("modules") if isinstance(obj, dict) else None
     if isinstance(modules, list):
         repository_ref = str(partition.get("repository_ref", "")) \

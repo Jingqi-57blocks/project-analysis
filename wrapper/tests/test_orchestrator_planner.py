@@ -918,7 +918,7 @@ def test_a_tiny_context_budget_forces_composer_sharding(tmp_path):
 # fully-validated DAG.
 
 _FORMATION_PLACEHOLDER_OUTPUT = {"modules": [
-    {"module_id": "placeholder", "name": "Placeholder", "classification": "unresolved",
+    {"module_id": "fixture-capability", "name": "Fixture capability", "classification": "unresolved",
      "confidence": "low", "aliases": []},
 ]}
 

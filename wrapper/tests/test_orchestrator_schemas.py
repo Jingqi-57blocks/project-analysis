@@ -293,7 +293,7 @@ def test_partitioned_formation_allows_empty_modules_only_for_unresolved_or_exclu
         schemas.validate_output("formation-proposal", output, packet_inputs=packet_inputs))
 
 
-def test_partitioned_formation_rejects_blanket_unresolved_multi_candidate_output():
+def test_partitioned_formation_allows_multi_candidate_structural_remainder():
     packet_inputs = {
         "module-candidates.json": json.dumps([{"candidate_id": "mc-a"}, {"candidate_id": "mc-b"}]),
         "formation-partition-context.json": json.dumps({
@@ -310,8 +310,14 @@ def test_partitioned_formation_rejects_blanket_unresolved_multi_candidate_output
              "reason": "insufficient boundary evidence"},
         ],
     }
-    assert "formation-all-unresolved-partition" in _checks(
-        schemas.validate_output("formation-proposal", output, packet_inputs=packet_inputs))
+    assert schemas.validate_output("formation-proposal", output, packet_inputs=packet_inputs) == []
+
+
+def test_formation_proposal_rejects_unresolved_placeholder_module_id():
+    doc = {"modules": [{"module_id": "unresolved-local-boundary", "name": "Temporary boundary",
+                        "classification": "business", "confidence": "low", "aliases": []}]}
+    assert "module-placeholder-id" in _checks(
+        schemas.validate_output("formation-proposal", doc))
 
 
 def test_formation_proposal_validates_candidate_rules_and_dispositions():
