@@ -929,6 +929,10 @@ def _crosscheck_lens_requirements(obj: Any, packet_inputs: Mapping[str, str]) ->
     failures = _Failures()
     input_ids = _unique_requirement_ids(contract.get("input_requirements"), "input_id",
                                         filename="requirements.input_requirements", failures=failures)
+    input_kinds = {
+        row.get("input_id"): row.get("kind") for row in contract.get("input_requirements", [])
+        if isinstance(row, dict) and isinstance(row.get("input_id"), str)
+    }
     dimension_ids = _unique_requirement_ids(contract.get("checklist_requirements"), "dimension_id",
                                             filename="requirements.checklist_requirements", failures=failures)
     coverage_ids = _unique_requirement_ids(contract.get("coverage_requirements"), "coverage_id",
@@ -1014,7 +1018,11 @@ def _crosscheck_lens_requirements(obj: Any, packet_inputs: Mapping[str, str]) ->
     for input_id, row in inputs.items():
         status = row.get("status")
         refs = row.get("evidence_refs")
-        if status in {"examined", "not-applicable"} and not refs:
+        citationless_metadata = input_kinds.get(input_id) in {
+            "bounded-evidence-metadata", "partition-metadata",
+        }
+        if status in {"examined", "not-applicable"} and not refs \
+                and not citationless_metadata:
             failures.add("input-disposition-evidence",
                          "examined/not-applicable requires evidence_refs",
                          f"input_dispositions[{input_id}]")

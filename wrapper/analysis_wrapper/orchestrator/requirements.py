@@ -32,6 +32,11 @@ def _kind(input_id: str) -> str:
         return "fetched-source"
     if input_id == "selection-role-results.json":
         return "source-selection-result"
+    if input_id == "semantic-partition.json":
+        # This is an internal packet-accounting descriptor, not a source or
+        # signal location a model can cite. Its disposition must be recorded,
+        # but asking for an external citation would force fabrication.
+        return "partition-metadata"
     if input_id == "test-ci-evidence.json":
         return "typed-test-ci-inventory"
     if input_id.endswith("-meta.json"):

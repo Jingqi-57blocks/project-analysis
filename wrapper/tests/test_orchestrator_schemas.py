@@ -166,6 +166,44 @@ def test_lens_findings_rejects_bad_coverage_status():
     assert "coverage-status" in _checks(failures)
 
 
+def test_lens_requirements_allow_honest_citationless_metadata_accounting():
+    contract = {
+        "schema_version": 2,
+        "input_requirements": [
+            {"input_id": "inventory-meta.json", "kind": "bounded-evidence-metadata"},
+            {"input_id": "semantic-partition.json", "kind": "partition-metadata"},
+        ],
+        "checklist_requirements": [
+            {"dimension_id": "evidence-accounting"},
+            {"dimension_id": "finding-or-negative-result"},
+        ],
+        "coverage_requirements": [],
+        "selection_role_requirements": [],
+    }
+    output = {
+        "findings": [], "coverage": [],
+        "input_dispositions": [
+            {"input_id": "inventory-meta.json", "status": "examined",
+             "evidence_refs": [], "note": "metadata counted without a source location"},
+            {"input_id": "semantic-partition.json", "status": "examined",
+             "evidence_refs": [], "note": "partition descriptor accounted for"},
+        ],
+        "checklist_dispositions": [
+            {"dimension_id": "evidence-accounting", "outcome": "unknown",
+             "finding_ids": [], "evidence_refs": [],
+             "limitation": "only citationless metadata was supplied"},
+            {"dimension_id": "finding-or-negative-result", "outcome": "unknown",
+             "finding_ids": [], "evidence_refs": [],
+             "limitation": "no citable finding evidence was supplied"},
+        ],
+    }
+    assert schemas.validate_output("lens-findings", output, packet_inputs={
+        "requirements.json": json.dumps(contract),
+        "inventory-meta.json": "{}",
+        "semantic-partition.json": "{}",
+    }) == []
+
+
 def test_lens_findings_accepts_every_changeability_question_value():
     for value in schemas.CHANGEABILITY_QUESTIONS:
         finding = _valid_finding(changeability_question=value)

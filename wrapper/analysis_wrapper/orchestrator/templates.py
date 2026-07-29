@@ -88,7 +88,14 @@ LENS_OUTPUT_CONTRACT_PREAMBLE = (
     "finding_ids, evidence_refs, and limitation. A no-concern or "
     "not-applicable conclusion still needs evidence_refs. coverage must name "
     "every coverage_requirements[].coverage_id exactly once; source-selection "
-    "coverage is not complete when its supplied role result reports a gap."
+    "coverage is not complete when its supplied role result reports a gap.\n"
+    "\n"
+    "A requirements input with kind `bounded-evidence-metadata` or "
+    "`partition-metadata` has no citable source location. For that input "
+    "only, record status `examined`, evidence_refs `[]`, and a note describing "
+    "what metadata was accounted for; never fabricate a citation. For a "
+    "checklist item that has only such metadata, use outcome `unknown` with "
+    "empty finding_ids/evidence_refs and state the limitation."
 )
 
 # Appended (57B-116) ONLY to a source_reads lens's FINAL lens-findings
