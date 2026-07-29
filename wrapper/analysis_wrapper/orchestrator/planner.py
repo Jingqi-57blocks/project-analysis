@@ -758,11 +758,11 @@ FORMATION_PREAMBLE = (
     "boundary-resolution pass. Low confidence is valid when the supplied "
     "candidate values and evidence support a meaningful boundary; the "
     "two-independent-signal rule applies to high confidence, not as a reason "
-    "to leave an entire evidence-bearing partition unresolved. A partition "
-    "with two or more candidates must not return every candidate unresolved: "
-    "form the supported low-confidence module or modules where the local "
-    "evidence permits, and retain only genuinely indivisible structural "
-    "remainders unresolved. Follow the project-agnostic granularity contract below (ported verbatim from "
+    "to leave an evidence-supported responsibility unresolved. A partition "
+    "containing only structural candidates may return every candidate "
+    "unresolved, but each reason must be candidate-specific; never invent a "
+    "placeholder or 'unresolved' module merely to avoid that outcome. Follow "
+    "the project-agnostic granularity contract below (ported verbatim from "
     "synthesis.md). A module_id must describe an actual product capability, "
     "platform responsibility, or named integration from the candidate values. "
     "Never use a repository name plus an ordinal (for example `service-0001`) "
@@ -971,9 +971,12 @@ state the exact limitation plus a non-empty coverage_impact describing the
 Overview Coverage degradation. A new module_id must name an actual product
 capability, platform responsibility, or named integration supported by this
 packet. Never mint a repository-name-plus-ordinal placeholder (for example
-`service-0001`); retain the candidate as unresolved when the packet cannot
-support a meaningful module boundary. Do not use a blanket remaining rule and
-do not rewrite candidates outside this packet.\n"""
+`service-0001`) or an `unknown`/`unresolved`/`placeholder` module identifier;
+retain the candidate as unresolved when the packet cannot support a meaningful
+module boundary. Do not simply repeat a first-pass blanket unresolved outcome:
+form a low-confidence module when this packet supports an actual capability,
+platform responsibility, or named integration. Do not use a blanket remaining
+rule and do not rewrite candidates outside this packet.\n"""
 
 
 def _boundary_resolution_task_id(partition_id: str) -> str:

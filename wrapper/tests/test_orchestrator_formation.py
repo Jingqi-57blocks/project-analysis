@@ -444,6 +444,33 @@ def test_structural_quality_gate_requires_resolution_without_a_fixed_ratio(tmp_p
     assert refined["authoritative"] is True
 
 
+def test_structural_quality_gate_rejects_a_module_map_with_no_meaningful_modules(tmp_path):
+    run = _build_run(tmp_path)
+    _register_and_validate(run, "formation", {
+        "modules": [],
+        "candidate_dispositions": [
+            {"candidate_id": "mc-api-folder", "disposition": "unresolved",
+             "module_ids": [], "reason": "structural folder needs a targeted pass"},
+            {"candidate_id": "mc-web-folder", "disposition": "unresolved",
+             "module_ids": [], "reason": "structural folder needs a targeted pass"},
+        ],
+    })
+    formation.write(run)
+    module_map.expand_candidate_rules(run)
+    document = json.loads((run / "module-map.json").read_text("utf-8"))
+    for row in document["candidate_dispositions"]:
+        row["evidence_refs"] = ["discovery-report.json:x"]
+        row["coverage_impact"] = "Coverage cannot claim a complete ownership boundary."
+    (run / "module-map.json").write_text(json.dumps(document), "utf-8")
+
+    quality = formation.formation_quality(run, refined=True)
+
+    assert quality["status"] == "blocked"
+    assert quality["diagnostics"]["module_count"] == 0
+    assert any(row["reason"] == "module formation produced no meaningful modules"
+               for row in quality["blockers"])
+
+
 def test_apply_boundary_resolution_replaces_every_unresolved_candidate_once(tmp_path):
     run = _build_run(tmp_path)
     _register_and_validate(run, "formation", {

@@ -622,6 +622,10 @@ def formation_quality(run_dir: str | Path, *, refined: bool) -> dict:
     unresolved = unresolved_rows(run)
     plan = build_partition_plan(run)
     blockers = []
+    modules = [row for row in document.get("modules", []) if isinstance(row, dict)]
+    if not modules:
+        blockers.append({"candidate_id": "", "reason":
+                         "module formation produced no meaningful modules"})
     evidence_mass = 0
     downstream_references = 0
     for row in unresolved:
@@ -665,7 +669,7 @@ def formation_quality(run_dir: str | Path, *, refined: bool) -> dict:
             "partition_count": len(plan["partitions"]),
             "cross_link_count": len(plan["cross_links"]),
             "downstream_reference_count": downstream_references,
-            "module_count": len(document.get("modules", [])),
+            "module_count": len(modules),
         },
         "unresolved": unresolved,
         "blockers": blockers,
