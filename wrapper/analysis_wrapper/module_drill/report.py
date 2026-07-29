@@ -42,6 +42,7 @@ _TEXT = {
         "representative": "Representative source-backed observations", "evidence_index": "See the evidence index for the complete source list.",
         "permissions": "Access and authorization", "rules": "Rules and state", "no_claims": "No finalized claims were recovered for this category.",
         "no_flows": "No end-to-end flow was finalized from the available evidence.",
+        "structural_flows": "observed structural paths",
         "no_data": "No finalized persistence claim was recovered from the available evidence.",
         "repositories": "Repositories and observed responsibilities", "relationships": "Recovered relationships",
         "dispositions": "Frontier disposition", "limitations": "Coverage limits", "claim_index": "Claim index",
@@ -102,6 +103,7 @@ _TEXT = {
         "representative": "具有源码证据的代表性观察", "evidence_index": "完整源码列表请参见证据索引。",
         "permissions": "访问与授权", "rules": "规则与状态", "no_claims": "该类别没有已最终确认的声明。",
         "no_flows": "现有证据没有形成已最终确认的端到端流程。",
+        "structural_flows": "条已观察的结构路径",
         "no_data": "现有证据没有形成已最终确认的持久化声明。", "repositories": "仓库与观察到的职责",
         "relationships": "已恢复的关系", "dispositions": "前沿处置", "limitations": "覆盖限制",
         "claim_index": "声明索引", "unresolved": "未解决或受阻的前沿", "none": "无", "closed": "已闭合",
@@ -237,6 +239,32 @@ def _claim_line(claim: FeatureClaim, text: dict[str, Any]) -> str:
     return f"- {_claim_phrase(claim, text)}. [`{claim.claim_id}`] {_brief_refs(claim.evidence_refs, text)}\n"
 
 
+def _claim_identity(claim: FeatureClaim) -> tuple[object, ...]:
+    """Reader-facing identity for equivalent independently-recovered facts.
+
+    Semantic packets can legitimately overlap at a source span: an anchor
+    requirement owns graph closure while a span requirement owns the source
+    read.  Both outputs remain in the canonical artifact for task lineage, but
+    repeating an otherwise identical fact in every Markdown section adds no
+    information.  This projection groups only facts with identical semantics
+    and identical source support; facts with a different literal or evidence
+    remain separate.
+    """
+    return (
+        claim.kind, claim.subject, claim.operation,
+        json.dumps(claim.value, ensure_ascii=False, sort_keys=True),
+        claim.evidence_refs, claim.support_roles,
+    )
+
+
+def _display_claims(claims: Iterable[FeatureClaim]) -> tuple[FeatureClaim, ...]:
+    """Select one stable display representative for each equivalent fact."""
+    representatives: dict[tuple[object, ...], FeatureClaim] = {}
+    for claim in sorted(claims, key=lambda item: item.claim_id):
+        representatives.setdefault(_claim_identity(claim), claim)
+    return tuple(sorted(representatives.values(), key=lambda item: item.claim_id))
+
+
 def _claim_section(title: str, claims: Iterable[FeatureClaim], text: dict[str, Any]) -> str:
     rows = tuple(claims)
     rendered = _heading(2, title)
@@ -245,7 +273,7 @@ def _claim_section(title: str, claims: Iterable[FeatureClaim], text: dict[str, A
 
 def _claim_groups(model: ModuleModel) -> dict[str, tuple[FeatureClaim, ...]]:
     buckets: dict[str, list[FeatureClaim]] = defaultdict(list)
-    for claim in model.claims:
+    for claim in _display_claims(model.claims):
         if claim.kind in _PERMISSION_KINDS or "authorization" in claim.support_roles:
             buckets["permissions"].append(claim)
         elif claim.kind in _RULE_KINDS:
@@ -336,6 +364,7 @@ def _flow_rows(model: ModuleModel, text: dict[str, Any]) -> list[list[str]]:
     claims_by_id = {claim.claim_id: claim for claim in model.claims}
     claims_by_anchor = _claims_by_anchor(model)
     rows: list[list[str]] = []
+    structural: dict[tuple[str, ...], list[tuple[FeatureFlow, tuple[str, ...]]]] = defaultdict(list)
     for flow in model.flows:
         steps = []
         refs: list[str] = []
@@ -347,11 +376,19 @@ def _flow_rows(model: ModuleModel, text: dict[str, Any]) -> list[list[str]]:
                 f"({_structured_label(text, 'edge_kinds', edge.kind)})")
             if step not in steps:
                 steps.append(step)
+            refs.extend(edge.evidence_refs)
         related_claims = [claims_by_id[claim_id] for claim_id in flow.claim_ids if claim_id in claims_by_id]
         refs.extend(ref for claim in related_claims for ref in claim.evidence_refs)
         claim_refs = [f"`{claim.claim_id}`" for claim in related_claims]
-        title = _claim_phrase(related_claims[0], text) if related_claims else flow.flow_id
-        rows.append([title, "<br>".join(steps), "; ".join(claim_refs) or "—", _brief_refs(refs, text)])
+        if related_claims:
+            title = _claim_phrase(related_claims[0], text)
+            rows.append([title, "<br>".join(steps), "; ".join(claim_refs), _brief_refs(refs, text)])
+        else:
+            structural[tuple(steps)].append((flow, tuple(refs)))
+    for steps, group in sorted(structural.items()):
+        refs = tuple(ref for _, values in group for ref in values)
+        title = f"{len(group)} {text['structural_flows']}"
+        rows.append([title, "<br>".join(steps), "—", _brief_refs(refs, text)])
     return rows
 
 
@@ -493,7 +530,7 @@ def _report_evidence(model: ModuleModel, provenance: dict[str, Any], text: dict[
         claim.claim_id,
         _claim_phrase(claim, text),
         _refs(claim.evidence_refs),
-    ] for claim in model.claims])
+    ] for claim in _display_claims(model.claims)])
     body += "\n" + _heading(2, text["unresolved"])
     unresolved = [item for item in model.dispositions if item.state in {"unresolved", "blocked"}]
     if unresolved:
