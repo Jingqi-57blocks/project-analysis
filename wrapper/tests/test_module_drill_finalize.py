@@ -5,19 +5,22 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from analysis_wrapper.cli import main
 from analysis_wrapper.module_drill.async_recovery import build_packet as async_packet
 from analysis_wrapper.module_drill.async_recovery import finalize as finalize_async, register as register_async
 from analysis_wrapper.module_drill.boundary_closure import write as write_boundary_closure
 from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.driver import ModuleDriver
-from analysis_wrapper.module_drill.finalize import _coverage, finalize
+from analysis_wrapper.module_drill.finalize import _claims, _coverage, finalize
 from analysis_wrapper.module_drill.frontier_candidates import write as write_candidates
 from analysis_wrapper.module_drill.model import FeatureClaim
 from analysis_wrapper.module_drill.graph_closure import write as write_graph_closure
 from analysis_wrapper.module_drill.span_fetch import write as write_spans
 from analysis_wrapper.module_drill.span_plan import write as write_plan
 from analysis_wrapper.module_drill.sync_recovery import build_packets as sync_packets
+from analysis_wrapper.module_drill.validation import ContractError
 from analysis_wrapper.module_drill.sync_recovery import finalize as finalize_sync, register as register_sync
 from analysis_wrapper.orchestrator.contracts import ExecutorInfo, TaskResult, TaskTiming, ValidationOutcome
 from analysis_wrapper.orchestrator.engine import now_iso
@@ -240,6 +243,44 @@ def test_verified_authorization_claim_is_feature_coverage_without_access_node():
     assert authorization["applicability"] == "applicable"
     assert authorization["status"] == "complete"
     assert authorization["positive_evidence_refs"] == ["service@NON-GIT:routes/access.ts:10"]
+
+
+def test_claims_with_distinct_anchors_are_not_false_contradictions():
+    claims = _claims({
+        "dispositions": [
+            {"outcome": "claimed", "claim_ids": ["claim-one"], "requirement_id": "one"},
+            {"outcome": "claimed", "claim_ids": ["claim-two"], "requirement_id": "two"},
+        ],
+        "claims": [
+            {"claim_id": "claim-one", "kind": "authorization", "anchor_ids": ["node-one"],
+             "support": [{"ref": "service@NON-GIT:routes.ts:10", "role": "authorization"}],
+             "subject": "route handler", "operation": "requires", "value": "auth.one"},
+            {"claim_id": "claim-two", "kind": "authorization", "anchor_ids": ["node-two"],
+             "support": [{"ref": "service@NON-GIT:routes.ts:20", "role": "authorization"}],
+             "subject": "route handler", "operation": "requires", "value": "auth.two"},
+        ], "flows": [],
+    })
+
+    assert [claim.claim_id for claim in claims] == ["claim-one", "claim-two"]
+
+
+def test_claims_with_same_anchor_and_subject_reject_competing_values():
+    output = {
+        "dispositions": [
+            {"outcome": "claimed", "claim_ids": ["claim-one", "claim-two"], "requirement_id": "one"},
+        ],
+        "claims": [
+            {"claim_id": "claim-one", "kind": "authorization", "anchor_ids": ["node-one"],
+             "support": [{"ref": "service@NON-GIT:routes.ts:10", "role": "authorization"}],
+             "subject": "route handler", "operation": "requires", "value": "auth.one"},
+            {"claim_id": "claim-two", "kind": "authorization", "anchor_ids": ["node-one"],
+             "support": [{"ref": "service@NON-GIT:routes.ts:11", "role": "authorization"}],
+             "subject": "route handler", "operation": "requires", "value": "auth.two"},
+        ], "flows": [],
+    }
+
+    with pytest.raises(ContractError, match="contradictory claim values"):
+        _claims(output)
 
 
 def test_non_async_boundary_does_not_mark_async_coverage_complete(tmp_path):
