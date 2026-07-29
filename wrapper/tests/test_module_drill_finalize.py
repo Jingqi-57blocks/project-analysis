@@ -15,7 +15,7 @@ from analysis_wrapper.module_drill.context import load
 from analysis_wrapper.module_drill.driver import ModuleDriver
 from analysis_wrapper.module_drill.finalize import _claims, _coverage, finalize
 from analysis_wrapper.module_drill.frontier_candidates import write as write_candidates
-from analysis_wrapper.module_drill.model import FeatureClaim
+from analysis_wrapper.module_drill.model import FeatureClaim, FeatureNode
 from analysis_wrapper.module_drill.graph_closure import write as write_graph_closure
 from analysis_wrapper.module_drill.span_fetch import write as write_spans
 from analysis_wrapper.module_drill.span_plan import write as write_plan
@@ -243,6 +243,29 @@ def test_verified_authorization_claim_is_feature_coverage_without_access_node():
     assert authorization["applicability"] == "applicable"
     assert authorization["status"] == "complete"
     assert authorization["positive_evidence_refs"] == ["service@NON-GIT:routes/access.ts:10"]
+
+
+def test_source_verified_configuration_anchor_is_not_reported_unknown():
+    """Synchronous configuration guards are not async-boundary-only facts."""
+    async_doc = {"requirements": {"requirements": []}, "output": {"dispositions": [], "claims": [], "flows": []}}
+    node = FeatureNode(
+        "node-config", "configuration", "service", "observed",
+        ("service@NON-GIT:config.ts:10",), "FEATURE_LIMIT",
+    )
+    claim = FeatureClaim(
+        "claim-config", "validation", ("node-config",),
+        ("service@NON-GIT:config.ts:10",), ("condition",),
+        "configured limit", "validates", "observed",
+    )
+    dimensions = _coverage(
+        SimpleNamespace(candidates=(), seeds=()),
+        ({"dispositions": [{"outcome": "claimed"}]},),
+        async_doc, "closed", nodes=(node,), claims=(claim,),
+    )
+    configuration = dimensions["configuration"].coverage.to_dict()
+    assert configuration["applicability"] == "applicable"
+    assert configuration["status"] == "complete"
+    assert configuration["positive_evidence_refs"] == ["service@NON-GIT:config.ts:10"]
 
 
 def test_claims_with_distinct_anchors_are_not_false_contradictions():
