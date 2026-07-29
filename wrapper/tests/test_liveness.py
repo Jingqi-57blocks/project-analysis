@@ -267,6 +267,37 @@ func bind(router Router) {
     assert rows[0].anchors == (("handlers.Create", "handlers/create.go:2"),)
 
 
+def test_route_handler_references_do_not_anchor_identifiers_inside_inline_callback(tmp_path):
+    backend = tmp_path / "svc"
+    _write(backend / "app.js", '''
+const leaveRecord = () => true;
+router.post("/records", wrapAsync(async (req, res) => {
+    const leaveRecord = await service.create(req.body);
+    return leaveRecord;
+}));
+''')
+
+    rows = liveness.route_handler_references(backend)
+
+    assert len(rows) == 1
+    assert "leaveRecord" in rows[0].symbols
+    assert rows[0].anchors == ()
+
+
+def test_route_handler_references_do_not_anchor_dynamic_wrapper_argument(tmp_path):
+    backend = tmp_path / "svc"
+    _write(backend / "app.js", '''
+const handler = () => true;
+router.post("/records", factory(handler));
+''')
+
+    rows = liveness.route_handler_references(backend)
+
+    assert len(rows) == 1
+    assert rows[0].symbols == ("factory", "handler")
+    assert rows[0].anchors == ()
+
+
 def test_ui_linkage_requires_compatible_http_method(tmp_path):
     frontend = tmp_path / "web"
     _write(frontend / "src" / "api.ts",

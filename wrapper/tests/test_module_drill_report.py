@@ -108,7 +108,7 @@ def test_render_localizes_fixed_contract_vocabulary_but_not_source_literals(tmp_
 
     overview = paths["module.md"].read_text()
     architecture = paths["details/architecture.md"].read_text()
-    assert "| 界面入口 |" in overview
+    assert "| 界面操作关联 |" in overview
     assert "接口路由" in architecture
     assert "异步边界" in architecture
 
