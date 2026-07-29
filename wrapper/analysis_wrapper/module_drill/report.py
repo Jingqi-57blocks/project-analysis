@@ -235,8 +235,22 @@ def _claim_phrase(claim: FeatureClaim, text: dict[str, Any]) -> str:
     return f"{claim.subject} {operation} {value}"
 
 
-def _claim_line(claim: FeatureClaim, text: dict[str, Any]) -> str:
-    return f"- {_claim_phrase(claim, text)}. [`{claim.claim_id}`] {_brief_refs(claim.evidence_refs, text)}\n"
+def _claim_context(claim: FeatureClaim, model: ModuleModel | None, text: dict[str, Any]) -> str:
+    """Make a generic semantic subject readable by naming its exact anchor."""
+    if model is None:
+        return ""
+    nodes = {node.node_id: node for node in model.nodes}
+    labels = sorted({
+        _node_label(nodes[anchor], None, text)
+        for anchor in claim.anchor_ids if anchor in nodes
+    })
+    return " · ".join(labels)
+
+
+def _claim_line(claim: FeatureClaim, text: dict[str, Any], model: ModuleModel | None = None) -> str:
+    context = _claim_context(claim, model, text)
+    prefix = f"{context} — " if context else ""
+    return f"- {prefix}{_claim_phrase(claim, text)}. [`{claim.claim_id}`] {_brief_refs(claim.evidence_refs, text)}\n"
 
 
 def _claim_identity(claim: FeatureClaim) -> tuple[object, ...]:
@@ -265,10 +279,11 @@ def _display_claims(claims: Iterable[FeatureClaim]) -> tuple[FeatureClaim, ...]:
     return tuple(sorted(representatives.values(), key=lambda item: item.claim_id))
 
 
-def _claim_section(title: str, claims: Iterable[FeatureClaim], text: dict[str, Any]) -> str:
+def _claim_section(title: str, claims: Iterable[FeatureClaim], text: dict[str, Any],
+                   model: ModuleModel | None = None) -> str:
     rows = tuple(claims)
     rendered = _heading(2, title)
-    return rendered + ("".join(_claim_line(claim, text) for claim in rows) if rows else text["no_claims"] + "\n")
+    return rendered + ("".join(_claim_line(claim, text, model) for claim in rows) if rows else text["no_claims"] + "\n")
 
 
 def _claim_groups(model: ModuleModel) -> dict[str, tuple[FeatureClaim, ...]]:
@@ -289,16 +304,16 @@ def _claim_groups(model: ModuleModel) -> dict[str, tuple[FeatureClaim, ...]]:
 
 def _node_label(node: FeatureNode, claims_by_anchor: dict[str, tuple[FeatureClaim, ...]] | None = None,
                 text: dict[str, Any] | None = None) -> str:
-    """Prefer a finalized source-backed claim over an opaque graph identifier."""
+    """Use canonical source-derived labels before a semantic claim fallback."""
+    kind = _structured_label(text, "node_kinds", node.kind) if text is not None else node.kind
+    if node.label:
+        return f"{kind}: {node.label}"[:120]
     if claims_by_anchor:
         claims = claims_by_anchor.get(node.node_id, ())
         if claims:
             claim = claims[0]
             value = "" if claim.value is None else f" {claim.value}"
             return f"{claim.subject}{value}"[:120]
-    # A node label is presentation text, while claim subject/value remain the
-    # only route for source-derived literals into a diagram or prose.
-    kind = _structured_label(text, "node_kinds", node.kind) if text is not None else node.kind
     return f"{node.repository_ref} · {kind}"
 
 
@@ -423,7 +438,7 @@ def _report_overview(model: ModuleModel, provenance: dict[str, Any], text: dict[
     body += f"**{text['status']}:** {text.get(model.closure_status, model.closure_status)}\n\n"
     body += _heading(2, text["representative"])
     if highlights:
-        body += "".join(_claim_line(claim, text) for claim in highlights)
+        body += "".join(_claim_line(claim, text, model) for claim in highlights)
     else:
         body += text["no_claims"] + "\n"
     body += "\n" + _heading(2, text["contents"])
@@ -437,16 +452,16 @@ def _report_overview(model: ModuleModel, provenance: dict[str, Any], text: dict[
     # Preserve a deterministic summary even when no particular claim category is present.
     if groups.get("data"):
         body += "\n" + _heading(2, text["data"])
-        body += "".join(_claim_line(claim, text) for claim in groups["data"])
+        body += "".join(_claim_line(claim, text, model) for claim in groups["data"])
     return body
 
 
 def _report_behavior(model: ModuleModel, text: dict[str, Any]) -> str:
     groups = _claim_groups(model)
     body = _heading(1, text["behavior"])
-    body += _claim_section(text["purpose"], (*groups.get("behavior", ()), *groups.get("other", ())), text)
-    body += _claim_section(text["permissions"], groups.get("permissions", ()), text)
-    body += _claim_section(text["rules"], groups.get("rules", ()), text)
+    body += _claim_section(text["purpose"], (*groups.get("behavior", ()), *groups.get("other", ())), text, model)
+    body += _claim_section(text["permissions"], groups.get("permissions", ()), text, model)
+    body += _claim_section(text["rules"], groups.get("rules", ()), text, model)
     body += _heading(2, text["flows"])
     if model.flows:
         body += _table(_headers(text, "flow", "path", "related_claims", "evidence"), _flow_rows(model, text))
@@ -487,7 +502,7 @@ def _report_data(model: ModuleModel, text: dict[str, Any]) -> str:
     groups = _claim_groups(model)
     data_nodes = [node for node in model.nodes if node.kind == "datastore"]
     body = _heading(1, text["data"])
-    body += _claim_section(text["claims"], groups.get("data", ()), text)
+    body += _claim_section(text["claims"], groups.get("data", ()), text, model)
     body += _heading(2, text["nodes"])
     if data_nodes:
         body += _table(_headers(text, "repository", "boundary", "evidence"), [
