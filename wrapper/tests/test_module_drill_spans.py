@@ -67,6 +67,32 @@ def test_handler_anchor_inside_a_control_block_reads_the_enclosing_callback(tmp_
     assert "response.json" in row["content"]
 
 
+def test_route_registration_reads_its_following_inline_callback_not_a_prior_callback(tmp_path):
+    run, ref = _module_run(tmp_path, """router.get('/previous', wrapAsync(async (request, response) => {
+  response.json({previous: true});
+}));
+
+router.post(
+  '/records',
+  validate(request => request.body),
+  wrapAsync(async (request, response) => {
+    if (request.body.hours !== 8) {
+      throw new Error('invalid duration');
+    }
+    response.json({created: true});
+  })
+);
+""")
+
+    row = json.loads(fetch(run, [_request(ref, 5)]).read_text(encoding="utf-8"))[0]
+
+    assert row["status"] == "fetched"
+    assert row["start_ref"] == f"{ref}:8"
+    assert row["end_ref"] == f"{ref}:13"
+    assert "hours !== 8" in row["content"]
+    assert "previous" not in row["content"]
+
+
 def test_handler_anchor_inside_go_control_block_reads_the_enclosing_function(tmp_path):
     run, ref = _module_run(tmp_path, """func updateRecord(hours int) error {
   if hours != 8 {

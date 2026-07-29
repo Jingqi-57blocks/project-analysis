@@ -134,30 +134,45 @@ def _syntax_tokens(lines: list[str]) -> tuple[list[int], list[int], list[int]]:
     return opens, closes, semicolons
 
 
+def _brace_pairs(lines: list[str], opens: list[int], closes: list[int]) -> tuple[tuple[int, int], ...]:
+    """Return balanced lexical block pairs without guessing across closures.
+
+    The previous backwards scan could cross a close brace that appeared before
+    the requested anchor, then select the preceding block.  A route
+    registration immediately after another inline callback therefore inherited
+    the *previous* callback's body.  Matching pairs forward first makes
+    containment explicit: only ``start <= anchor <= end`` is a valid enclosing
+    block.
+    """
+    stack: list[int] = []
+    pairs: list[tuple[int, int]] = []
+    for index in range(len(lines)):
+        # Counts are produced by the conservative lexer.  Treating opens
+        # before closes preserves same-line constructs such as ``{}`` while
+        # still refusing unmatched closures as enclosing evidence.
+        stack.extend([index] * opens[index])
+        for _ in range(closes[index]):
+            if not stack:
+                continue
+            start = stack.pop()
+            if index - start + 1 <= MAX_SPAN_LINES:
+                pairs.append((start, index))
+    return tuple(pairs)
+
+
 def _brace_bounds(lines: list[str], anchor: int,
                   opens: list[int], closes: list[int]) -> tuple[int, int] | None:
-    """Find the innermost lexical brace block containing an anchor."""
-    start = None
-    depth = 0
-    for index in range(anchor, -1, -1):
-        depth += closes[index] - opens[index]
-        if opens[index] and depth <= 0:
-            start = index
-            break
-    if start is None:
-        return None
-    depth = 0
-    for index in range(start, len(lines)):
-        depth += opens[index] - closes[index]
-        if index - start + 1 > MAX_SPAN_LINES:
-            return None
-        if depth == 0:
-            return start, index
-    return None
+    """Find the innermost lexical brace block that actually contains an anchor."""
+    candidates = [pair for pair in _brace_pairs(lines, opens, closes)
+                  if pair[0] <= anchor <= pair[1]]
+    return min(candidates, key=lambda pair: (pair[1] - pair[0], -pair[0])) if candidates else None
 
 
 _CONTROL_HEADER = re.compile(r"^(?:else\s+)?(?:if|for|while|switch|case|catch|try|do)\b")
 _HANDLER_MARKER = re.compile(r"\b(?:func|function)\b|=>|\bwrapAsync\b")
+_ROUTE_REGISTRATION = re.compile(
+    r"\b[A-Za-z_$][\w$]*\s*\.\s*(?:GET|POST|PUT|PATCH|DELETE|get|post|put|patch|delete)\s*\(")
+_MAX_FORWARD_HANDLER_HEADER_LINES = 128
 
 
 def _handler_header(lines: list[str], start: int) -> bool:
@@ -183,14 +198,35 @@ def _handler_header(lines: list[str], start: int) -> bool:
 
 def _handler_brace_bounds(lines: list[str], anchor: int,
                           opens: list[int], closes: list[int]) -> tuple[int, int] | None:
-    """Find the nearest enclosing lexical callable block for a handler anchor."""
-    for start in range(anchor, -1, -1):
-        if not opens[start] or not _handler_header(lines, start):
+    """Find a callable block containing an anchor or its exact route callback.
+
+    A route registration usually anchors the line before its inline callback.
+    If no callable block contains that registration, scan only its bounded
+    header for the next callback brace.  The scan is allowed only for a route
+    registration or a directly callable declaration; an arbitrary source line
+    never borrows a later function as its semantic scope.
+    """
+    pairs = _brace_pairs(lines, opens, closes)
+    enclosing = [pair for pair in pairs if pair[0] <= anchor <= pair[1]
+                 and _handler_header(lines, pair[0])]
+    if enclosing:
+        return min(enclosing, key=lambda pair: (pair[1] - pair[0], -pair[0]))
+
+    header_end = min(len(lines), anchor + _MAX_FORWARD_HANDLER_HEADER_LINES + 1)
+    if not (_HANDLER_MARKER.search(lines[anchor]) or
+            _ROUTE_REGISTRATION.search(lines[anchor]) or
+            re.match(r"^\s*(?:async\s+)?(?:function|func)\b", lines[anchor])):
+        return None
+    for start in range(anchor, header_end):
+        if not opens[start]:
             continue
-        candidate = _brace_bounds(lines, start, opens, closes)
-        if candidate is not None and candidate[0] == start and candidate[1] >= anchor:
+        prefix = "\n".join(lines[anchor:start + 1])
+        if not _HANDLER_MARKER.search(prefix):
+            continue
+        candidate = next((pair for pair in pairs if pair[0] == start), None)
+        if candidate is not None:
             return candidate
-    return _brace_bounds(lines, anchor, opens, closes)
+    return None
 
 
 def _statement_bounds(lines: list[str], anchor: int,
