@@ -270,6 +270,45 @@ def test_partition_plan_bounds_oversized_cohesion_components_for_task_transport(
     }
 
 
+def test_partition_context_keeps_cross_boundary_evidence_bounded(tmp_path):
+    run = _build_run(tmp_path)
+    candidates_path = run / "module-candidates.json"
+    doc = json.loads(candidates_path.read_text("utf-8"))
+    added = [f"mc-api-internal-{index:03d}" for index in range(70)]
+    doc["candidates"].extend([
+        {"candidate_id": candidate_id, "repository_ref": "api",
+         "signal_kind": "folder", "value": "internal",
+         "evidence": ["api@" + "a" * 40 + ":internal/service.go:1"], "node_ids": []}
+        for candidate_id in added
+    ])
+    doc["candidate_count"] = len(doc["candidates"])
+    candidates_path.write_text(json.dumps(doc), "utf-8")
+    # One large cohesion set becomes an explicit link across the bounded
+    # chunks.  Its full remote membership must stay in the persisted plan,
+    # not be copied into each model packet.
+    (run / "cohesion-bundle.json").write_text(json.dumps({
+        "clusters": [{"kind": "import", "members": ["mc-api-folder", *added],
+                      "evidence_refs": ["signals/imports.view.txt:1"]}],
+        "kinds": {}, "limits": {},
+    }), "utf-8")
+
+    plan = formation.build_partition_plan(run)
+    first_api_partition = next(row for row in plan["partitions"]
+                               if row["repository_ref"] == "api")
+    context = formation.partition_context(plan, first_api_partition["partition_id"])
+    encoded = json.dumps(context, sort_keys=True)
+
+    assert len(encoded.encode("utf-8")) < 12_000
+    assert "boundary_candidates" not in context
+    assert context["cross_links"]
+    for link in context["cross_links"]:
+        assert "candidate_ids" not in link
+        assert set(link["local_candidate_ids"]) <= set(first_api_partition["candidate_ids"])
+    for cluster in context["cohesion_clusters"]:
+        assert "candidate_ids" not in cluster
+        assert set(cluster["local_candidate_ids"]) <= set(first_api_partition["candidate_ids"])
+
+
 def test_partitioned_formation_merges_a_cross_repository_module_in_plan_order(tmp_path):
     run = _build_run(tmp_path)
     (run / "cohesion-bundle.json").write_text(json.dumps({
