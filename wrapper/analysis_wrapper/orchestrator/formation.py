@@ -40,6 +40,12 @@ PARTITION_PLAN_SCHEMA_VERSION = 1
 PARTITION_PLAN_FILENAME = "formation-partitions.json"
 QUALITY_FILENAME = "module-formation-quality.json"
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+# A formation proposal must emit one explicit disposition for every supplied
+# candidate.  Above this size, a valid JSON result itself exceeds the host
+# task-transport limit even though the packet remains within its context
+# budget.  Split oversized cohesion components deterministically and preserve
+# their cohesion as an explicit cross-partition boundary link instead.
+MAX_CANDIDATES_PER_PARTITION = 32
 
 
 class FormationWriterError(ValueError):
@@ -400,23 +406,25 @@ def build_partition_plan(run_dir: str | Path) -> dict:
 
     partitions: list[dict] = []
     ownership: dict[str, str] = {}
-    for index, ((repository_ref, component_root), members) in enumerate(sorted(components.items())):
+    for (repository_ref, component_root), members in sorted(components.items()):
         ordered_members = sorted(members)
-        partition_id = f"formation-{index:04d}"
-        for candidate_id in ordered_members:
-            ownership[candidate_id] = partition_id
-        kinds: dict[str, int] = defaultdict(int)
-        for candidate_id in ordered_members:
-            kinds[str(by_id[candidate_id].get("signal_kind", ""))] += 1
-        partitions.append({
-            "partition_id": partition_id,
-            "repository_ref": repository_ref,
-            "component_root_candidate_id": component_root,
-            "candidate_ids": ordered_members,
-            "roots": sorted({roots[candidate_id] for candidate_id in ordered_members}),
-            "candidate_kinds": dict(sorted(kinds.items())),
-            "cohesion_cluster_ids": [],
-        })
+        for start in range(0, len(ordered_members), MAX_CANDIDATES_PER_PARTITION):
+            chunk = ordered_members[start:start + MAX_CANDIDATES_PER_PARTITION]
+            partition_id = f"formation-{len(partitions):04d}"
+            for candidate_id in chunk:
+                ownership[candidate_id] = partition_id
+            kinds: dict[str, int] = defaultdict(int)
+            for candidate_id in chunk:
+                kinds[str(by_id[candidate_id].get("signal_kind", ""))] += 1
+            partitions.append({
+                "partition_id": partition_id,
+                "repository_ref": repository_ref,
+                "component_root_candidate_id": component_root,
+                "candidate_ids": chunk,
+                "roots": sorted({roots[candidate_id] for candidate_id in chunk}),
+                "candidate_kinds": dict(sorted(kinds.items())),
+                "cohesion_cluster_ids": [],
+            })
 
     by_partition = {row["partition_id"]: row for row in partitions}
     cross_links: list[dict] = []
