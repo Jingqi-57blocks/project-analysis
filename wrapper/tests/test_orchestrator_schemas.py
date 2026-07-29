@@ -214,8 +214,8 @@ def test_partitioned_formation_rejects_repository_ordinal_placeholder_module_id(
     packet_inputs = {
         "module-candidates.json": json.dumps([{"candidate_id": "mc-a"}]),
         "formation-partition-context.json": json.dumps({
-            "global_identity": {"candidate_universe_digest": "digest"},
-            "merge_order": ["formation-0000"],
+                "global_identity": {"candidate_universe_digest": "digest",
+                                    "partition_count": 1},
             "partition": {
                 "partition_id": "formation-0000", "repository_ref": "wcp_review_service",
                 "candidate_ids": ["mc-a"],

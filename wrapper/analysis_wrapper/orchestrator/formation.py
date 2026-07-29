@@ -45,7 +45,10 @@ _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 # task-transport limit even though the packet remains within its context
 # budget.  Split oversized cohesion components deterministically and preserve
 # their cohesion as an explicit cross-partition boundary link instead.
-MAX_CANDIDATES_PER_PARTITION = 32
+MAX_CANDIDATES_PER_PARTITION = 16
+MAX_BOUNDARY_EVIDENCE_REFS = 3
+MAX_ADJACENT_PARTITION_SUMMARIES = 8
+MAX_REMOTE_PARTITION_IDS = 8
 
 
 class FormationWriterError(ValueError):
@@ -106,72 +109,75 @@ def partition_context(plan: Mapping[str, Any], partition_id: str) -> dict:
         return {
             "partition_id": row.get("partition_id", ""),
             "repository_ref": row.get("repository_ref", ""),
-            "roots": row.get("roots", []),
+            "root_count": len(row.get("roots", [])),
             "candidate_count": len(row.get("candidate_ids", [])),
             "candidate_kinds": row.get("candidate_kinds", {}),
         }
     partition_id_value = partition.get("partition_id", "")
     ownership = plan.get("candidate_ownership", {})
 
-    def link_summary(link: Mapping[str, Any]) -> dict:
-        candidate_ids = sorted({str(candidate_id) for candidate_id in link.get("candidate_ids", [])
-                                if isinstance(candidate_id, str)})
-        local_ids = [candidate_id for candidate_id in candidate_ids
-                     if ownership.get(candidate_id) == partition_id_value]
-        remote_partitions = sorted({str(ownership.get(candidate_id, ""))
-                                    for candidate_id in candidate_ids
-                                    if ownership.get(candidate_id) not in {"", partition_id_value}})
-        # Do not copy the remote candidate universe into every packet.  The
-        # task owns only `local_candidate_ids`; counts, adjacent partitions,
-        # relation kind, and cited evidence are enough to preserve the
-        # cross-boundary condition without exceeding host transport limits.
-        return {
-            "link_id": link.get("link_id", ""),
-            "kind": link.get("kind", ""),
-            "partition_ids": link.get("partition_ids", []),
-            "candidate_count": len(candidate_ids),
-            "local_candidate_ids": local_ids,
-            "remote_partition_ids": remote_partitions,
-            "evidence_refs": link.get("evidence_refs", []),
-            "cross_repository": link.get("cross_repository", False),
-        }
+    def relation_summaries(rows: list[Mapping[str, Any]]) -> list[dict]:
+        """Collapse many overlapping relations into one bounded row per kind.
 
-    def cluster_summary(cluster: Mapping[str, Any]) -> dict:
-        candidate_ids = sorted({str(candidate_id) for candidate_id in cluster.get("candidate_ids", [])
-                                if isinstance(candidate_id, str)})
-        local_ids = [candidate_id for candidate_id in candidate_ids
-                     if ownership.get(candidate_id) == partition_id_value]
-        remote_partitions = sorted({str(ownership.get(candidate_id, ""))
-                                    for candidate_id in candidate_ids
-                                    if ownership.get(candidate_id) not in {"", partition_id_value}})
-        return {
-            "cluster_id": cluster.get("cluster_id", ""),
-            "kind": cluster.get("kind", ""),
-            "candidate_count": len(candidate_ids),
-            "local_candidate_ids": local_ids,
-            "remote_partition_ids": remote_partitions,
-            "repository_refs": cluster.get("repository_refs", []),
-            "evidence_refs": cluster.get("evidence_refs", []),
-            "cross_repository": cluster.get("cross_repository", False),
-        }
+        The persisted plan retains every exact candidate membership.  A model
+        packet only needs to know that its local candidates participate in a
+        relation type, how broad that relation is, and a bounded evidence
+        sample; repeating hundreds of membership rows makes a task impossible
+        to retrieve through the host protocol.
+        """
+        grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+        for row in rows:
+            grouped[str(row.get("kind", ""))].append(row)
+        summaries: list[dict] = []
+        for kind, grouped_rows in sorted(grouped.items()):
+            candidate_ids = sorted({str(candidate_id) for row in grouped_rows
+                                    for candidate_id in row.get("candidate_ids", [])
+                                    if isinstance(candidate_id, str)})
+            local_ids = [candidate_id for candidate_id in candidate_ids
+                         if ownership.get(candidate_id) == partition_id_value]
+            remote_partitions = sorted({str(ownership.get(candidate_id, ""))
+                                        for candidate_id in candidate_ids
+                                        if ownership.get(candidate_id)
+                                        not in {"", partition_id_value}})
+            refs = sorted({str(ref) for row in grouped_rows
+                           for ref in row.get("evidence_refs", []) if ref})
+            summaries.append({
+                "kind": kind,
+                "relation_count": len(grouped_rows),
+                "candidate_count": len(candidate_ids),
+                "local_candidate_count": len(local_ids),
+                "remote_partition_count": len(remote_partitions),
+                "remote_partition_ids": remote_partitions[:MAX_REMOTE_PARTITION_IDS],
+                "evidence_ref_count": len(refs),
+                "evidence_refs": refs[:MAX_BOUNDARY_EVIDENCE_REFS],
+                "cross_repository": any(bool(row.get("cross_repository"))
+                                        for row in grouped_rows),
+            })
+        return summaries
+
+    cluster_rows = [row for row in plan.get("cohesion_clusters", [])
+                    if isinstance(row, dict) and partition_id_value in {
+                        ownership.get(candidate_id) for candidate_id in row.get("candidate_ids", [])
+                    }]
 
     return {
         "schema_version": PARTITION_PLAN_SCHEMA_VERSION,
-        "global_identity": plan.get("global_identity", {}),
-        "merge_order": plan.get("merge_order", []),
+        "global_identity": {
+            "repository_refs": plan.get("global_identity", {}).get("repository_refs", []),
+            "candidate_universe_digest": plan.get("global_identity", {}).get(
+                "candidate_universe_digest", ""),
+            "partition_count": len(partitions),
+        },
         "partition": summary(partition) | {
             "candidate_ids": partition.get("candidate_ids", []),
-            "cohesion_cluster_ids": partition.get("cohesion_cluster_ids", []),
-            "boundary_link_ids": partition.get("boundary_link_ids", []),
+            "cohesion_cluster_count": len(partition.get("cohesion_cluster_ids", [])),
+            "boundary_link_count": len(partition.get("boundary_link_ids", [])),
         },
-        "adjacent_partitions": [summary(by_id[item]) for item in adjacent_ids],
-        "cross_links": [link_summary(link) for link in links],
-        "cohesion_clusters": [
-            cluster_summary(row) for row in plan.get("cohesion_clusters", [])
-            if isinstance(row, dict) and partition_id_value in {
-                ownership.get(candidate_id) for candidate_id in row.get("candidate_ids", [])
-            }
-        ],
+        "adjacent_partition_count": len(adjacent_ids),
+        "adjacent_partitions": [summary(by_id[item])
+                                for item in adjacent_ids[:MAX_ADJACENT_PARTITION_SUMMARIES]],
+        "cross_links": relation_summaries(links),
+        "cohesion_clusters": relation_summaries(cluster_rows),
     }
 
 
