@@ -277,9 +277,21 @@ def _crosscheck_sync_recovery(output: Any, packet_inputs: Mapping[str, str]) -> 
         row.get("node_id"): row for row in graph["nodes"]
         if isinstance(row, dict) and isinstance(row.get("node_id"), str)
     }
+    # Packets may include a UI -> route edge as bounded bridge context for a
+    # neighbouring requirement.  Only the packet that owns a requirement
+    # anchored on that UI action is responsible for recovering the flow.  This
+    # preserves every source-backed path once while avoiding duplicate flow
+    # IDs when the same bridge is supplied to a route or handler partition.
+    required_anchor_ids = {
+        anchor_id
+        for requirement in required.values()
+        for anchor_id in requirement.get("anchor_ids", [])
+        if isinstance(anchor_id, str)
+    }
     ui_route_edges = [
         row for row in edges_by_id.values()
         if row.get("kind") == "ui-route"
+        and row.get("source_node_id") in required_anchor_ids
     ]
     for ui_edge in ui_route_edges:
         ui_edge_id = ui_edge["edge_id"]
