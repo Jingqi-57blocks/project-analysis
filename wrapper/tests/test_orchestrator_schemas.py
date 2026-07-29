@@ -293,6 +293,27 @@ def test_partitioned_formation_allows_empty_modules_only_for_unresolved_or_exclu
         schemas.validate_output("formation-proposal", output, packet_inputs=packet_inputs))
 
 
+def test_partitioned_formation_rejects_blanket_unresolved_multi_candidate_output():
+    packet_inputs = {
+        "module-candidates.json": json.dumps([{"candidate_id": "mc-a"}, {"candidate_id": "mc-b"}]),
+        "formation-partition-context.json": json.dumps({
+            "global_identity": {"candidate_universe_digest": "digest", "partition_count": 1},
+            "partition": {"partition_id": "formation-0000", "candidate_ids": ["mc-a", "mc-b"]},
+        }),
+    }
+    output = {
+        "modules": [],
+        "candidate_dispositions": [
+            {"candidate_id": "mc-a", "disposition": "unresolved", "module_ids": [],
+             "reason": "insufficient boundary evidence"},
+            {"candidate_id": "mc-b", "disposition": "unresolved", "module_ids": [],
+             "reason": "insufficient boundary evidence"},
+        ],
+    }
+    assert "formation-all-unresolved-partition" in _checks(
+        schemas.validate_output("formation-proposal", output, packet_inputs=packet_inputs))
+
+
 def test_formation_proposal_validates_candidate_rules_and_dispositions():
     doc = {
         "modules": [{"module_id": "sample-capability", "name": "Sample",

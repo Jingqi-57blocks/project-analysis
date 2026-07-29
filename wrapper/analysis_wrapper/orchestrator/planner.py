@@ -752,10 +752,17 @@ FORMATION_PREAMBLE = (
     "the first four map to exactly one module_id, the last two to none. An "
     "evidence-backed boundary not surfaced mechanically may be added only "
     "through additional_candidates (a stable mc-added-<slug> id, "
-    "repository_ref, value, and at least one citation). Follow the "
+    "repository_ref, value, and at least one citation). "
     "An unresolved disposition is allowed only when its reason is bounded by "
     "the supplied immediate evidence and it will be handed to the targeted "
-    "boundary-resolution pass. Follow the project-agnostic granularity contract below (ported verbatim from "
+    "boundary-resolution pass. Low confidence is valid when the supplied "
+    "candidate values and evidence support a meaningful boundary; the "
+    "two-independent-signal rule applies to high confidence, not as a reason "
+    "to leave an entire evidence-bearing partition unresolved. A partition "
+    "with two or more candidates must not return every candidate unresolved: "
+    "form the supported low-confidence module or modules where the local "
+    "evidence permits, and retain only genuinely indivisible structural "
+    "remainders unresolved. Follow the project-agnostic granularity contract below (ported verbatim from "
     "synthesis.md). A module_id must describe an actual product capability, "
     "platform responsibility, or named integration from the candidate values. "
     "Never use a repository name plus an ordinal (for example `service-0001`) "
@@ -969,13 +976,23 @@ support a meaningful module boundary. Do not use a blanket remaining rule and
 do not rewrite candidates outside this packet.\n"""
 
 
+def _boundary_resolution_task_id(partition_id: str) -> str:
+    """Stable parent task id for one formation partition's unresolved rows."""
+    return f"boundary-resolution-{partition_id}"
+
+
 def plan_boundary_resolution(run_dir: str | Path, *,
                              context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS) \
         -> PlannedTask | None:
-    """Plan the one evidence-contextual pass required for unresolved modules."""
+    """Plan bounded evidence-contextual passes for unresolved modules.
+
+    Formation already partitions the candidate universe for transport. Keep
+    the repair path on that same bounded topology: a single global unresolved
+    array reintroduced the fixed-cost/shard explosion the formation plan
+    avoids. Every candidate remains in exactly one partition packet and the
+    persisted formation plan remains the complete audit record.
+    """
     run = Path(run_dir).expanduser().resolve()
-    if validated_outputs(run, task_type="boundary-resolution"):
-        return None
     unresolved = formation.unresolved_rows(run)
     if not unresolved:
         return None
@@ -990,31 +1007,69 @@ def plan_boundary_resolution(run_dir: str | Path, *,
     if not formation_dependencies:
         raise PlannerError(
             "boundary resolution requires validated formation-proposal output")
-    involved_partitions = sorted({row.get("partition_id") for row in unresolved
-                                  if isinstance(row.get("partition_id"), str)})
-    inputs = {
-        "unresolved-candidates.json": json.dumps(unresolved, sort_keys=True),
-        "existing-modules.json": json.dumps({
-            "modules": document.get("modules", []),
-        }, sort_keys=True),
-        "boundary-context.json": json.dumps({
-            "partition_ids": involved_partitions,
-            "global_identity": partition_plan.get("global_identity", {}),
-            "diagnostics": quality.get("diagnostics", {}),
-        }, sort_keys=True),
+    partitions = {
+        row.get("partition_id"): row for row in partition_plan.get("partitions", [])
+        if isinstance(row, dict) and isinstance(row.get("partition_id"), str)
     }
-    built = compose(
-        task_id="boundary-resolution", template_id="boundary-resolution",
-        template_version=tpl.content_digest(_BOUNDARY_RESOLUTION_INSTRUCTIONS),
-        task_type="boundary-resolution", instructions=_BOUNDARY_RESOLUTION_INSTRUCTIONS,
-        inputs=inputs, output_schema_id="boundary-resolution.v1",
-        context_budget_tokens=context_budget_tokens, depends_on=formation_dependencies)
-    created_ids = set(Engine(run).create_tasks(built))
+    unresolved_by_partition: dict[str, list[dict[str, Any]]] = {}
+    for row in unresolved:
+        partition_id = row.get("partition_id")
+        if not isinstance(partition_id, str) or partition_id not in partitions:
+            raise PlannerError(
+                f"unresolved candidate {row.get('candidate_id')!r} has no persisted formation partition")
+        unresolved_by_partition.setdefault(partition_id, []).append(row)
+
+    modules = [row for row in document.get("modules", []) if isinstance(row, dict)]
+    modules_by_id = {row.get("module_id"): row for row in modules
+                     if isinstance(row.get("module_id"), str)}
+    packets: list[TaskPacket] = []
+    for partition_id in partition_plan.get("merge_order", []):
+        if not isinstance(partition_id, str) or partition_id not in unresolved_by_partition:
+            continue
+        local_unresolved = sorted(unresolved_by_partition[partition_id],
+                                  key=lambda row: str(row.get("candidate_id", "")))
+        formation_parent = formation.formation_task_id(partition_id)
+        local_dependencies = tuple(task_id for task_id in formation_dependencies
+                                   if task_id == formation_parent
+                                   or task_id.startswith(formation_parent + "-shard-"))
+        if not local_dependencies:
+            raise PlannerError(
+                f"boundary resolution partition {partition_id!r} has no validated formation output")
+        prior_module_ids = sorted({module_id for row in local_unresolved
+                                   for module_id in row.get("prior_module_ids", [])
+                                   if isinstance(module_id, str) and module_id in modules_by_id})
+        context = formation.partition_context(partition_plan, partition_id)
+        context["boundary_resolution"] = {
+            "unresolved_candidate_count": len(local_unresolved),
+            "existing_module_ids": prior_module_ids,
+            "run_diagnostics": {
+                "candidate_count": quality.get("diagnostics", {}).get("candidate_count", 0),
+                "partition_count": quality.get("diagnostics", {}).get("partition_count", 0),
+            },
+        }
+        inputs = {
+            "unresolved-candidates.json": json.dumps(local_unresolved, sort_keys=True),
+            "existing-modules.json": json.dumps({
+                "modules": [modules_by_id[module_id] for module_id in prior_module_ids],
+            }, sort_keys=True),
+            "boundary-context.json": json.dumps(context, sort_keys=True),
+        }
+        packets.extend(compose(
+            task_id=_boundary_resolution_task_id(partition_id),
+            template_id="boundary-resolution",
+            template_version=tpl.content_digest(_BOUNDARY_RESOLUTION_INSTRUCTIONS),
+            task_type="boundary-resolution", instructions=_BOUNDARY_RESOLUTION_INSTRUCTIONS,
+            inputs=inputs, output_schema_id="boundary-resolution.v1",
+            context_budget_tokens=context_budget_tokens, depends_on=local_dependencies))
+
+    if not packets:
+        raise PlannerError("boundary resolution found unresolved candidates without planned packets")
+    created_ids = set(Engine(run).create_tasks(packets))
     return PlannedTask(
         task_id="boundary-resolution", task_type="boundary-resolution", lens_id="",
-        shard="", repository_ref="", packet_ids=tuple(packet.task_id for packet in built),
-        estimated_tokens=sum(_packet_tokens(packet) for packet in built),
-        created=any(packet.task_id in created_ids for packet in built))
+        shard="partitioned", repository_ref="", packet_ids=tuple(packet.task_id for packet in packets),
+        estimated_tokens=sum(_packet_tokens(packet) for packet in packets),
+        created=any(packet.task_id in created_ids for packet in packets))
 
 
 _REKEY_RESOLUTION_INSTRUCTIONS = """\

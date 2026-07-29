@@ -1183,6 +1183,14 @@ def _crosscheck_formation_partitions(obj: Any,
         failures.add("formation-explicit-dispositions",
                      "partitioned formation packets must use explicit candidate_dispositions",
                      "candidate_rules")
+    if isinstance(rows, list) and len(candidate_ids) >= 2:
+        assigned_rows = [row for row in rows if isinstance(row, dict)
+                         and row.get("candidate_id") in candidate_ids]
+        if len(assigned_rows) == len(candidate_ids) and all(
+                row.get("disposition") == "unresolved" for row in assigned_rows):
+            failures.add("formation-all-unresolved-partition",
+                         "a multi-candidate formation partition cannot defer every candidate",
+                         "candidate_dispositions")
     modules = obj.get("modules") if isinstance(obj, dict) else None
     if isinstance(modules, list):
         repository_ref = str(partition.get("repository_ref", "")) \
