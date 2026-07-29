@@ -260,6 +260,82 @@ def test_sync_output_cannot_drop_a_supplied_ui_route_flow(tmp_path):
     assert any(failure["check"] == "sync-flow-ui-route" for failure in failures)
 
 
+def test_sync_output_allows_a_context_only_ui_route_without_a_flow():
+    """A bridge edge is context; its owning UI requirement emits the flow."""
+    ui_ref = "web@NON-GIT:src/page.tsx:10"
+    route_ref = "api@NON-GIT:routes/items.ts:20"
+    handler_ref = "api@NON-GIT:handlers/items.ts:30"
+    inputs = {
+        "sync-requirements.json": json.dumps({
+            "requirements": [{
+                "requirement_id": "requirement-anchor-route",
+                "kind": "graph-anchor",
+                "anchor_ids": ["node-route"],
+                "evidence_refs": [route_ref],
+            }],
+        }),
+        "feature-graph.json": json.dumps({
+            "nodes": [
+                {"node_id": "node-ui", "kind": "ui-action", "evidence_refs": [ui_ref]},
+                {"node_id": "node-route", "kind": "route", "evidence_refs": [route_ref]},
+                {"node_id": "node-handler", "kind": "handler", "evidence_refs": [handler_ref]},
+            ],
+            "edges": [
+                {"edge_id": "edge-ui-route", "kind": "ui-route", "source_node_id": "node-ui",
+                 "target_node_id": "node-route", "evidence_refs": [ui_ref, route_ref]},
+                {"edge_id": "edge-route-handler", "kind": "routes-to", "source_node_id": "node-route",
+                 "target_node_id": "node-handler", "evidence_refs": [route_ref, handler_ref]},
+            ],
+        }),
+        "semantic-spans.json": json.dumps({"spans": []}),
+    }
+    output = {
+        "dispositions": [{
+            "requirement_id": "requirement-anchor-route", "outcome": "no-concern-observed",
+            "claim_ids": [], "evidence_refs": [route_ref], "reason": "",
+        }],
+        "claims": [],
+        "flows": [],
+    }
+    assert validate_output("module-sync-recovery", output, packet_inputs=inputs) == []
+
+
+def test_sync_output_requires_flow_when_the_packet_owns_the_ui_source():
+    ui_ref = "web@NON-GIT:src/page.tsx:10"
+    route_ref = "api@NON-GIT:routes/items.ts:20"
+    inputs = {
+        "sync-requirements.json": json.dumps({
+            "requirements": [{
+                "requirement_id": "requirement-anchor-ui",
+                "kind": "graph-anchor",
+                "anchor_ids": ["node-ui"],
+                "evidence_refs": [ui_ref],
+            }],
+        }),
+        "feature-graph.json": json.dumps({
+            "nodes": [
+                {"node_id": "node-ui", "kind": "ui-action", "evidence_refs": [ui_ref]},
+                {"node_id": "node-route", "kind": "route", "evidence_refs": [route_ref]},
+            ],
+            "edges": [{
+                "edge_id": "edge-ui-route", "kind": "ui-route", "source_node_id": "node-ui",
+                "target_node_id": "node-route", "evidence_refs": [ui_ref, route_ref],
+            }],
+        }),
+        "semantic-spans.json": json.dumps({"spans": []}),
+    }
+    output = {
+        "dispositions": [{
+            "requirement_id": "requirement-anchor-ui", "outcome": "no-concern-observed",
+            "claim_ids": [], "evidence_refs": [ui_ref], "reason": "",
+        }],
+        "claims": [],
+        "flows": [],
+    }
+    failures = validate_output("module-sync-recovery", output, packet_inputs=inputs)
+    assert any(failure["check"] == "sync-flow-ui-route" for failure in failures)
+
+
 def test_sync_output_rejects_invented_claim_evidence_and_unknown_requirement(tmp_path):
     _, packet = _packet(tmp_path)
     inputs = {name: item.content for name, item in packet.inputs.items()}

@@ -34,11 +34,14 @@ merge, or rename a requirement, graph anchor, edge, or evidence reference.
 Claims may use only supplied graph anchors and source references. Distinguish
 UI visibility from backend authorization. Do not infer runtime activation,
 asynchronous behaviour, configuration, notifications, or external-service
-semantics. For every supplied observed ``ui-route`` edge, emit one flow that
-contains that edge. If the packet also contains a ``routes-to`` edge from that
-route to a handler or symbol, include one such edge in the same flow. A flow
-may have no semantic claim when the observed structural path is the only
-verified fact. A no-concern or not-applicable result needs cited evidence;
+semantics. For every supplied observed ``ui-route`` edge whose source UI action
+is an anchor of a requirement in this packet, emit one flow that contains that
+edge. A UI-to-route edge supplied only as bridge context belongs to the packet
+whose requirement owns its UI source; do not duplicate that flow here. If the
+packet also contains a ``routes-to`` edge from that route to a handler or
+symbol, include one such edge in the same flow. A flow may have no semantic
+claim when the observed structural path is the only verified fact. A
+no-concern or not-applicable result needs cited evidence;
 unknown must name the missing semantic evidence. Do not write report prose or
 Mermaid.
 """
