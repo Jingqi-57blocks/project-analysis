@@ -313,7 +313,7 @@ def test_sync_output_requires_flow_when_the_packet_owns_the_ui_source():
     inputs = {
         "sync-requirements.json": json.dumps({
             "requirements": [{
-                "requirement_id": "requirement-anchor-ui",
+                "requirement_id": "requirement-anchor-node-ui",
                 "kind": "graph-anchor",
                 "anchor_ids": ["node-ui"],
                 "evidence_refs": [ui_ref],
@@ -333,7 +333,7 @@ def test_sync_output_requires_flow_when_the_packet_owns_the_ui_source():
     }
     output = {
         "dispositions": [{
-            "requirement_id": "requirement-anchor-ui", "outcome": "no-concern-observed",
+            "requirement_id": "requirement-anchor-node-ui", "outcome": "no-concern-observed",
             "claim_ids": [], "evidence_refs": [ui_ref], "reason": "",
         }],
         "claims": [],
@@ -341,6 +341,39 @@ def test_sync_output_requires_flow_when_the_packet_owns_the_ui_source():
     }
     failures = validate_output("module-sync-recovery", output, packet_inputs=inputs)
     assert any(failure["check"] == "sync-flow-ui-route" for failure in failures)
+
+
+def test_sync_output_does_not_treat_a_semantic_span_as_ui_flow_ownership():
+    ui_ref = "web@NON-GIT:src/page.tsx:10"
+    route_ref = "api@NON-GIT:routes/items.ts:20"
+    inputs = {
+        "sync-requirements.json": json.dumps({
+            "requirements": [{
+                "requirement_id": "requirement-span-ui", "kind": "semantic-span",
+                "anchor_ids": ["node-ui"], "evidence_refs": [ui_ref], "span_status": "fetched",
+            }],
+        }),
+        "feature-graph.json": json.dumps({
+            "nodes": [
+                {"node_id": "node-ui", "kind": "ui-action", "evidence_refs": [ui_ref]},
+                {"node_id": "node-route", "kind": "route", "evidence_refs": [route_ref]},
+            ],
+            "edges": [{
+                "edge_id": "edge-ui-route", "kind": "ui-route", "source_node_id": "node-ui",
+                "target_node_id": "node-route", "evidence_refs": [ui_ref, route_ref],
+            }],
+        }),
+        "semantic-spans.json": json.dumps({"spans": []}),
+    }
+    output = {
+        "dispositions": [{
+            "requirement_id": "requirement-span-ui", "outcome": "no-concern-observed",
+            "claim_ids": [], "evidence_refs": [ui_ref], "reason": "",
+        }],
+        "claims": [],
+        "flows": [],
+    }
+    assert validate_output("module-sync-recovery", output, packet_inputs=inputs) == []
 
 
 def test_sync_output_rejects_invented_claim_evidence_and_unknown_requirement(tmp_path):

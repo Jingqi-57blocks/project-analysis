@@ -278,15 +278,15 @@ def _crosscheck_sync_recovery(output: Any, packet_inputs: Mapping[str, str]) -> 
         if isinstance(row, dict) and isinstance(row.get("node_id"), str)
     }
     # Packets may include a UI -> route edge as bounded bridge context for a
-    # neighbouring requirement.  Only the packet that owns a requirement
-    # anchored on that UI action is responsible for recovering the flow.  This
-    # preserves every source-backed path once while avoiding duplicate flow
-    # IDs when the same bridge is supplied to a route or handler partition.
+    # neighbouring requirement.  A node's dedicated graph-anchor requirement
+    # is its unique flow owner.  A semantic span may cite or even anchor that
+    # same node, but is a source-reading responsibility rather than another
+    # graph owner.  This preserves every source-backed path once while avoiding
+    # duplicate flow IDs across semantic partitions.
     required_anchor_ids = {
-        anchor_id
-        for requirement in required.values()
-        for anchor_id in requirement.get("anchor_ids", [])
-        if isinstance(anchor_id, str)
+        requirement_id.removeprefix("requirement-anchor-")
+        for requirement_id in required
+        if requirement_id.startswith("requirement-anchor-")
     }
     ui_route_edges = [
         row for row in edges_by_id.values()
