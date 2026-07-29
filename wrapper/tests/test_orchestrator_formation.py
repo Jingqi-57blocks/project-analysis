@@ -244,6 +244,32 @@ def test_partition_plan_has_stable_local_ownership_and_explicit_cross_links(tmp_
                for row in first["partitions"])
 
 
+def test_partition_plan_bounds_oversized_cohesion_components_for_task_transport(tmp_path):
+    run = _build_run(tmp_path)
+    candidates_path = run / "module-candidates.json"
+    doc = json.loads(candidates_path.read_text("utf-8"))
+    # Folder candidates with the same repository/root deliberately form one
+    # baseline component.  The plan must split it before a formation task
+    # would need to return an untransportably large explicit disposition set.
+    doc["candidates"].extend([
+        {"candidate_id": f"mc-api-internal-{index:03d}", "repository_ref": "api",
+         "signal_kind": "folder", "value": "internal",
+         "evidence": ["discovery-report.json:x"], "node_ids": []}
+        for index in range(70)
+    ])
+    doc["candidate_count"] = len(doc["candidates"])
+    candidates_path.write_text(json.dumps(doc), "utf-8")
+
+    plan = formation.build_partition_plan(run)
+    api_partitions = [row for row in plan["partitions"] if row["repository_ref"] == "api"]
+    assert len(api_partitions) == 3
+    assert all(len(row["candidate_ids"]) <= formation.MAX_CANDIDATES_PER_PARTITION
+               for row in api_partitions)
+    assert {candidate_id for row in api_partitions for candidate_id in row["candidate_ids"]} == {
+        row["candidate_id"] for row in doc["candidates"] if row["repository_ref"] == "api"
+    }
+
+
 def test_partitioned_formation_merges_a_cross_repository_module_in_plan_order(tmp_path):
     run = _build_run(tmp_path)
     (run / "cohesion-bundle.json").write_text(json.dumps({
