@@ -87,6 +87,34 @@ def _selected_items(context: SourceContext, scope: ModuleScope,
     return tuple(items[evidence_id] for evidence_id in evidence_ids)
 
 
+def _label(item: dict[str, Any]) -> str:
+    """Return a stable source-derived node label without interpreting intent."""
+    data = item.get("data")
+    if not isinstance(data, dict):
+        return ""
+    kind = item.get("kind")
+    if kind in {"route", "ui-action"}:
+        method, path = data.get("method"), data.get("path")
+        if isinstance(method, str) and method and isinstance(path, str):
+            return f"{method} {path}".strip()
+    if kind == "datastore":
+        name = data.get("physical_name", data.get("name"))
+        return name if isinstance(name, str) else ""
+    if kind in {"access-check", "access-role", "configuration"}:
+        name = data.get("name", data.get("category"))
+        return name if isinstance(name, str) else ""
+    if kind == "async-boundary":
+        operation = data.get("operation")
+        return operation if isinstance(operation, str) else ""
+    if kind == "integration-host":
+        value = data.get("value")
+        return value if isinstance(value, str) else ""
+    if kind == "integration-package":
+        package = data.get("package")
+        return package if isinstance(package, str) else ""
+    return ""
+
+
 def _node(item: dict[str, Any]) -> FeatureNode:
     evidence_id = item["evidence_id"]
     local_refs = item["source_refs"]
@@ -102,6 +130,7 @@ def _node(item: dict[str, Any]) -> FeatureNode:
         repository_ref=item["repository_refs"][0],
         observation="observed",
         evidence_refs=tuple(local_refs),
+        label=_label(item),
     )
 
 
@@ -174,7 +203,7 @@ def _route_handler_edges(items: tuple[dict[str, Any], ...],
             target_id = "node-handler-" + _token(repository_ref, symbol, *sorted(refs))
             nodes.setdefault(target_id, FeatureNode(
                 node_id=target_id, kind="handler", repository_ref=repository_ref,
-                observation="observed", evidence_refs=tuple(sorted(set(refs))),
+                observation="observed", evidence_refs=tuple(sorted(set(refs))), label=symbol,
             ))
             edges.append(FeatureEdge(
                 edge_id="edge-" + _token(source_id, target_id, "routes-to"),

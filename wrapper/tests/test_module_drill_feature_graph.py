@@ -59,6 +59,20 @@ def test_ui_action_node_retains_frontend_local_evidence_not_backend_link_evidenc
     })
     assert node.repository_ref == "web"
     assert node.evidence_refs == ("web@NON-GIT:src/submit.ts:4",)
+    assert node.label == ""
+
+
+def test_graph_retains_source_derived_labels_for_reader_facing_projection(tmp_path):
+    module_run = _prepared_scope(tmp_path, route_handler_anchors=[{
+        "symbol": "createRecord", "evidence": "src/service.ts:15",
+    }])
+
+    graph = build(load(module_run))
+
+    labels = {(row["kind"], row.get("label")) for row in graph["nodes"]}
+    assert ("route", "POST /records/0") in labels
+    assert ("ui-action", "POST /records/0") in labels
+    assert ("handler", "createRecord") in labels
 
 
 def test_graph_adds_a_route_to_exact_source_resolved_handler_only(tmp_path):

@@ -151,6 +151,34 @@ def test_report_groups_unclaimed_structural_paths_and_keeps_their_evidence(tmp_p
     assert next(iter(edge["evidence_refs"])) in behavior
 
 
+def test_report_prefers_canonical_source_labels_over_generic_claim_subjects(tmp_path):
+    module_run = _ready(tmp_path)
+    assert finalize(module_run)[1].passed
+    model_path = module_run / "evidence" / "module-model.json"
+    document = json.loads(model_path.read_text())
+    route = next(row for row in document["model"]["nodes"] if row["kind"] == "route")
+    edge = next(row for row in document["model"]["edges"]
+                if route["node_id"] in {row["source_node_id"], row["target_node_id"]})
+    route["label"] = "POST /records"
+    document["model"]["claims"] = [{
+        "claim_id": "claim-route-auth", "kind": "authorization",
+        "anchor_ids": [route["node_id"]],
+        "evidence_refs": list(route["evidence_refs"]),
+        "support_roles": ["authorization"], "subject": "route handler",
+        "operation": "requires", "value": "auth.required",
+    }]
+    document["model"]["flows"] = [{
+        "flow_id": "flow-record-route", "edge_ids": [edge["edge_id"]],
+        "claim_ids": ["claim-route-auth"],
+    }]
+    model_path.write_text(json.dumps(document), encoding="utf-8")
+
+    architecture = render(module_run)["details/architecture.md"].read_text()
+
+    assert "route: POST /records" in architecture
+    assert "route handler auth.required" not in architecture
+
+
 def test_cli_renders_the_complete_catalog(tmp_path, capsys):
     module_run = _ready(tmp_path)
     assert finalize(module_run)[1].passed

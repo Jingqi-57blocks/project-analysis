@@ -20,26 +20,40 @@ class FeatureNode:
     repository_ref: str
     observation: str
     evidence_refs: tuple[str, ...]
+    # A short, source-derived identifier retained from canonical evidence
+    # (for example an HTTP method/path, resolved handler symbol, table name,
+    # or integration host). It is presentation metadata, not an inferred
+    # business claim. Empty keeps small hand-built test graphs valid.
+    label: str = ""
 
     def __post_init__(self) -> None:
         slug(self.node_id, "node_id")
         slug(self.kind, "node kind")
         text(self.repository_ref, "node repository_ref")
         enum(self.observation, OBSERVATION_STATES, "node observation")
+        if self.label:
+            text(self.label, "node label")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"node_id": self.node_id, "kind": self.kind,
+        result = {"node_id": self.node_id, "kind": self.kind,
                 "repository_ref": self.repository_ref, "observation": self.observation,
                 "evidence_refs": list(self.evidence_refs)}
+        if self.label:
+            result["label"] = self.label
+        return result
 
     @classmethod
     def from_dict(cls, value: Any, label: str) -> "FeatureNode":
-        row = exact_object(value, {"node_id", "kind", "repository_ref", "observation", "evidence_refs"}, label)
+        required = {"node_id", "kind", "repository_ref", "observation", "evidence_refs"}
+        if not isinstance(value, dict) or frozenset(value) not in {frozenset(required), frozenset(required | {"label"})}:
+            raise ContractError(f"{label} must contain exactly {sorted(required)} with optional label")
+        row = value
         return cls(slug(row["node_id"], f"{label}.node_id"),
                    slug(row["kind"], f"{label}.kind"),
                    text(row["repository_ref"], f"{label}.repository_ref"),
                    enum(row["observation"], OBSERVATION_STATES, f"{label}.observation"),
-                   ref_list(row["evidence_refs"], f"{label}.evidence_refs"))
+                   ref_list(row["evidence_refs"], f"{label}.evidence_refs"),
+                   text(row["label"], f"{label}.label") if "label" in row else "")
 
 
 @dataclass(frozen=True)
