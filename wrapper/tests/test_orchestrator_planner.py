@@ -245,7 +245,9 @@ def test_formation_packet_carries_a_deterministic_partition_plan(tmp_path):
         context = json.loads(packet["inputs"]["formation-partition-context.json"]["content"])
         candidates = json.loads(packet["inputs"]["module-candidates.json"]["content"])
         assert {row["candidate_id"] for row in candidates} <= set(context["partition"]["candidate_ids"])
-        assert context["partition"]["partition_id"] in context["merge_order"]
+        assert context["global_identity"]["candidate_universe_digest"] \
+            == plan["candidate_universe_digest"]
+        assert context["global_identity"]["partition_count"] == len(plan["partitions"])
 
 
 def test_boundary_resolution_depends_on_validated_formation_partitions(tmp_path):

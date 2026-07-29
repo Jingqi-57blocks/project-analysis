@@ -1128,8 +1128,8 @@ def _crosscheck_formation_partitions(obj: Any,
                  "location": "formation-partition-context.json"}]
     candidate_ids = {row.get("candidate_id") for row in candidates if isinstance(row, dict)}
     partition = context.get("partition")
-    merge_order = context.get("merge_order")
     global_identity = context.get("global_identity")
+    legacy_merge_order = context.get("merge_order")
     partition_id = partition.get("partition_id") if isinstance(partition, dict) else None
     if not isinstance(partition, dict) or not _one_line_str(partition_id) \
             or not _string_list(partition.get("candidate_ids"), allow_empty=False):
@@ -1143,10 +1143,18 @@ def _crosscheck_formation_partitions(obj: Any,
             failures.add("formation-partition-context-ownership",
                          "packet candidates must belong to its assigned partition",
                          "module-candidates.json")
-    if not isinstance(global_identity, dict) or not isinstance(merge_order, list) \
-            or partition_id not in merge_order:
+    has_compact_identity = isinstance(global_identity, dict) \
+        and _one_line_str(global_identity.get("candidate_universe_digest")) \
+        and type(global_identity.get("partition_count")) is int \
+        and global_identity["partition_count"] >= 1
+    # Read-only validation of historic packets retains the former merge-order
+    # shape. New packets use the bounded identity form above so the full
+    # order is not copied into every transport-limited task.
+    has_legacy_identity = isinstance(global_identity, dict) \
+        and isinstance(legacy_merge_order, list) and partition_id in legacy_merge_order
+    if not (has_compact_identity or has_legacy_identity):
         failures.add("formation-partition-context-global",
-                     "context needs global identity and a merge order containing this partition",
+                     "context needs global identity with a candidate digest and partition count",
                      "formation-partition-context.json")
 
     rows = obj.get("candidate_dispositions") if isinstance(obj, dict) else None

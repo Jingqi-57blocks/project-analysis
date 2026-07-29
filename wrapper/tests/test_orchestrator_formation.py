@@ -262,7 +262,7 @@ def test_partition_plan_bounds_oversized_cohesion_components_for_task_transport(
 
     plan = formation.build_partition_plan(run)
     api_partitions = [row for row in plan["partitions"] if row["repository_ref"] == "api"]
-    assert len(api_partitions) == 3
+    assert len(api_partitions) == 5
     assert all(len(row["candidate_ids"]) <= formation.MAX_CANDIDATES_PER_PARTITION
                for row in api_partitions)
     assert {candidate_id for row in api_partitions for candidate_id in row["candidate_ids"]} == {
@@ -298,15 +298,19 @@ def test_partition_context_keeps_cross_boundary_evidence_bounded(tmp_path):
     context = formation.partition_context(plan, first_api_partition["partition_id"])
     encoded = json.dumps(context, sort_keys=True)
 
-    assert len(encoded.encode("utf-8")) < 12_000
+    assert len(encoded.encode("utf-8")) < 5_000
     assert "boundary_candidates" not in context
     assert context["cross_links"]
     for link in context["cross_links"]:
         assert "candidate_ids" not in link
-        assert set(link["local_candidate_ids"]) <= set(first_api_partition["candidate_ids"])
+        assert "link_id" not in link
+        assert link["local_candidate_count"] <= len(first_api_partition["candidate_ids"])
+        assert len(link["evidence_refs"]) <= formation.MAX_BOUNDARY_EVIDENCE_REFS
     for cluster in context["cohesion_clusters"]:
         assert "candidate_ids" not in cluster
-        assert set(cluster["local_candidate_ids"]) <= set(first_api_partition["candidate_ids"])
+        assert "cluster_id" not in cluster
+        assert cluster["local_candidate_count"] <= len(first_api_partition["candidate_ids"])
+        assert len(cluster["evidence_refs"]) <= formation.MAX_BOUNDARY_EVIDENCE_REFS
 
 
 def test_partitioned_formation_merges_a_cross_repository_module_in_plan_order(tmp_path):
