@@ -470,6 +470,32 @@ def test_section_generate_rejects_an_internal_repository_identifier():
     assert "section-internal-identity-leak" in failures
 
 
+def test_section_generate_rejects_pm_implementation_labels_and_tool_identifiers():
+    source_content = "The Dockerfile defines the production capability boundary."
+    source_doc = {"section_id": "overview.s3", "content_md": source_content,
+                  "word_count": len(source_content.split())}
+    failures = _checks(schemas.validate_output("section-generate", source_doc, packet_inputs={
+        "floor.json": json.dumps({"min_words": 3}),
+        "pm-abstraction-boundary.json": json.dumps({
+            "forbidden_source_labels": ["Dockerfile"],
+            "forbidden_tool_identifiers": ["lizard"],
+        }),
+    }))
+    assert "section-pm-source-path-leak" in failures
+
+    tool_content = "The `lizard` signal reports a product-level concern."
+    tool_doc = {"section_id": "overview.s3", "content_md": tool_content,
+                "word_count": len(tool_content.split())}
+    failures = _checks(schemas.validate_output("section-generate", tool_doc, packet_inputs={
+        "floor.json": json.dumps({"min_words": 3}),
+        "pm-abstraction-boundary.json": json.dumps({
+            "forbidden_source_labels": ["Dockerfile"],
+            "forbidden_tool_identifiers": ["lizard"],
+        }),
+    }))
+    assert "section-pm-tool-identifier-leak" in failures
+
+
 # --------------------------------------------------------------------------- #
 # repair-edit-ops / coherence-check
 # --------------------------------------------------------------------------- #

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .. import findings as findings_module
+from .. import identity
 from .. import module_render
 from .schemas import CHANGEABILITY_QUESTIONS
 
@@ -414,8 +415,24 @@ def run_provenance(run: Path) -> str:
 def analysis_scope(run: Path) -> str:
     spec = _load(run, "targets.json")
     discovery = _load(run, "discovery-report.json", required=False) or {}
-    rows = [[repo.get("repository_ref") or repo.get("repo_id"), repo.get("path", "—")]
-            for repo in spec.get("repos", []) if isinstance(repo, dict)]
+    identities = identity.load(run)
+    rows = []
+    for repo in spec.get("repos", []):
+        if not isinstance(repo, dict):
+            continue
+        internal_id = repo.get("repo_id")
+        if not isinstance(internal_id, str) or not internal_id:
+            raise RenderError("targets.json repository is missing its internal identity")
+        try:
+            repository = identities.repository(internal_id)
+        except KeyError as exc:
+            raise RenderError(
+                f"targets.json repository identity is absent from identity-map.json: "
+                f"{internal_id!r}") from exc
+        # Final reports must expose only the stable public reference and a
+        # workspace-relative label.  The raw target spec intentionally keeps
+        # internal join ids and absolute paths for execution, never prose.
+        rows.append([repository.reference, repository.workspace_relative_path])
     not_targeted = discovery.get("not_targeted") or []
     lines = [_table(("analyzed repository", "path (workspace-relative label)"), rows)]
     if not_targeted:

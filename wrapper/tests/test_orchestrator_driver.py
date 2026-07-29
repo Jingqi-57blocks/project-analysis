@@ -95,6 +95,20 @@ def test_judgment_freezes_only_the_initial_packet_wave(tmp_path, monkeypatch):
     assert calls == [tmp_path]
 
 
+def test_judgment_resume_does_not_replan_existing_immutable_ledger(tmp_path, monkeypatch):
+    """A resumed pipeline must retain the original judgment packet inputs."""
+    Engine(tmp_path).create_tasks([_packet()])
+    from analysis_wrapper.orchestrator import planner
+
+    monkeypatch.setattr(planner, "plan_judgment", lambda *_args, **_kwargs:
+                        pytest.fail("resume must not re-plan existing judgment tasks"))
+    monkeypatch.setattr(driver, "_drain", lambda *_args, **_kwargs: True)
+    state = driver.RunState(run=tmp_path, executor="host", context_budget_tokens=1000,
+                            log=lambda _line: None)
+
+    assert driver._phase_judgment(state) is True
+
+
 def test_module_phase_rebuilds_module_derivatives_after_finalization(tmp_path, monkeypatch):
     """The model created during prepare has no final module nodes yet."""
     quality = tmp_path / "tasks" / "formation-quality.json"

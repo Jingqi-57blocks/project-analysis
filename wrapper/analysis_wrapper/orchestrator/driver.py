@@ -124,7 +124,16 @@ def _phase_judgment(state: RunState) -> bool:
     from . import planner, selection
 
     outcome = state.phase("judgment: plan")
-    planner.plan_judgment(state.run, context_budget_tokens=state.context_budget_tokens)
+    # A run's initial judgment packets are immutable evidence contracts.  The
+    # module-map phase later rebuilds derived model artifacts after formation;
+    # re-planning on a resumed pipeline invocation would otherwise append a
+    # second generation of the same logical lenses, based on those newer
+    # artifacts, to the same ledger.  Resume from the existing ledger instead.
+    engine = Engine(state.run)
+    if not engine.ledger_exists():
+        planner.plan_judgment(state.run, context_budget_tokens=state.context_budget_tokens)
+    else:
+        state.log("  judgment plan: reusing immutable ledger packets")
     # A prepared production run has deterministic inputs and a complete first
     # packet wave at this exact point, before _drain can hand any packet to a
     # model. Freeze that pre-model wave exactly once: source-read lenses add

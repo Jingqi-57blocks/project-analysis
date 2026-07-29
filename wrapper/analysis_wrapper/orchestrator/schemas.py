@@ -1419,6 +1419,35 @@ def _crosscheck_section_generate(obj: Any, packet_inputs: Mapping[str, str]) -> 
                     "detail": ("section exposes forbidden internal repository identifier(s): "
                                + ", ".join(leaked)),
                 }]
+    raw_pm_boundary = packet_inputs.get("pm-abstraction-boundary.json")
+    if raw_pm_boundary is not None:
+        try:
+            pm_boundary = json.loads(raw_pm_boundary)
+        except ValueError:
+            pm_boundary = {}
+        if isinstance(pm_boundary, dict):
+            labels = pm_boundary.get("forbidden_source_labels", [])
+            if isinstance(labels, list):
+                leaked_labels = sorted({label for label in labels
+                                        if isinstance(label, str) and label
+                                        and label in content})
+                if leaked_labels:
+                    return [{
+                        "check": "section-pm-source-path-leak", "location": "content_md",
+                        "detail": ("PM section exposes forbidden source label(s): "
+                                   + ", ".join(leaked_labels)),
+                    }]
+            tools = pm_boundary.get("forbidden_tool_identifiers", [])
+            if isinstance(tools, list):
+                leaked_tools = sorted({tool for tool in tools
+                                       if isinstance(tool, str) and tool
+                                       and f"`{tool}`" in content})
+                if leaked_tools:
+                    return [{
+                        "check": "section-pm-tool-identifier-leak", "location": "content_md",
+                        "detail": ("PM section exposes forbidden tool identifier(s): "
+                                   + ", ".join(leaked_tools)),
+                    }]
     if len(content.split()) >= min_words:
         return []
     lowered = content.lower()

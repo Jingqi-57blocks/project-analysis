@@ -192,6 +192,27 @@ def _section_inputs(run: Path, section: catalog.Section,
             "forbidden_internal_ids": sorted(item.internal_id for item in restricted),
             "repository_references": sorted(item.reference for item in mapping.repositories),
         }, sort_keys=True)
+    if section.document == catalog.OVERVIEW:
+        # The primary PM overview may describe observed capabilities, but must
+        # not expose implementation filenames, source paths, source citations,
+        # or code-style signal-tool identifiers.  Compute the exact labels the
+        # final audit uses and make a leak retryable at task submission rather
+        # than discoverable only after all report waves have completed.
+        from .. import overview_audit
+        model = _load(run, "system-model.json") or {}
+        file_labels = sorted({str(node.get("label", ""))
+                              for node in model.get("nodes", [])
+                              if isinstance(node, dict) and node.get("kind") == "file"
+                              and overview_audit._is_source_path_label(
+                                  str(node.get("label", "")))})
+        summary = _load(run, "signals/run-summary.json") or {}
+        tool_identifiers = sorted({str(row.get("tool"))
+                                   for row in summary.get("signals", [])
+                                   if isinstance(row, dict) and row.get("tool")})
+        inputs["pm-abstraction-boundary.json"] = json.dumps({
+            "forbidden_source_labels": file_labels,
+            "forbidden_tool_identifiers": tool_identifiers,
+        }, sort_keys=True)
     return {name: sanitize_text(content) for name, content in inputs.items()}
 
 
@@ -206,6 +227,11 @@ def _instructions(section: catalog.Section, budget_words: int) -> str:
              "unavailable in this analysis."]
     if section.note:
         lines += ["", f"What this section is for: {section.note}"]
+    if section.document == catalog.OVERVIEW:
+        lines += ["", "PM abstraction boundary: describe product capabilities and "
+                  "operational consequences only. Do not use source paths, source "
+                  "citations, implementation filenames, or backticked signal-tool "
+                  "identifiers; pm-abstraction-boundary.json lists the forbidden values."]
     return "\n".join(lines) + "\n"
 
 
