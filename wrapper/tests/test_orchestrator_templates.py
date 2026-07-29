@@ -121,6 +121,13 @@ def test_output_contract_preamble_states_the_exact_coverage_row_shape():
     assert "never a prose sentence" in preamble
 
 
+def test_output_contract_preamble_requires_exact_source_role_coverage_projection():
+    preamble = tpl.LENS_OUTPUT_CONTRACT_PREAMBLE
+    assert "selection-role-results.json" in preamble
+    assert "copy roles[].coverage_status EXACTLY" in preamble
+    assert "source-selection/<role_id>" in preamble
+
+
 def test_output_contract_preamble_gives_all_three_citation_grammars_with_examples():
     preamble = tpl.LENS_OUTPUT_CONTRACT_PREAMBLE
     assert "repo@revision:path:line" in preamble

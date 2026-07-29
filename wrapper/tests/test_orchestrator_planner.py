@@ -271,11 +271,70 @@ def test_boundary_resolution_depends_on_validated_formation_partitions(tmp_path)
     task = planner.plan_boundary_resolution(run)
 
     assert task is not None
+    assert task.packet_ids == ("boundary-resolution-formation-0000",)
     created = next(record for record in engine._read_records()
-                   if record.event == "created" and record.task_id == "boundary-resolution")
+                   if record.event == "created" and record.task_id == task.packet_ids[0])
     assert set(created.detail["task"]["depends_on"]) == {
-        "formation-formation-0000", "formation-formation-0001",
+        "formation-formation-0000",
     }
+
+
+def test_boundary_resolution_scales_by_formation_partition_not_generic_shards(tmp_path):
+    """A large all-unresolved map stays in local, auditable packets.
+
+    More than 32 formation partitions prove the repair path cannot fall back
+    to one global unresolved-candidates array and silently depend on the
+    generic composer's shard-count limit.
+    """
+    run, _ = _build_run(tmp_path)
+    candidates_path = run / "module-candidates.json"
+    candidates_doc = json.loads(candidates_path.read_text("utf-8"))
+    candidates_doc["candidates"].extend([
+        {"candidate_id": f"mc-api-internal-{index:03d}", "repository_ref": "api",
+         "signal_kind": "folder", "value": "internal",
+         "evidence": ["discovery-report.json:x"], "node_ids": []}
+        for index in range(528)
+    ])
+    candidates_doc["candidate_count"] = len(candidates_doc["candidates"])
+    candidates_path.write_text(json.dumps(candidates_doc), "utf-8")
+
+    planner.plan_judgment(run)
+    plan = formation.build_partition_plan(run)
+    api_partitions = [row for row in plan["partitions"] if row["repository_ref"] == "api"]
+    assert len(api_partitions) > 32
+    engine = Engine(run)
+    claimed = engine.claim(len(plan["partitions"]), executor_kind="manual", model="test")
+    assert {item.packet.task_type for item in claimed} == {"formation-proposal"}
+    for item in claimed:
+        _submit(engine, item, _FORMATION_PLACEHOLDER_OUTPUT)
+    formation.write(run)
+    module_map.expand_candidate_rules(run)
+
+    api_ids = {row["candidate_id"] for row in candidates_doc["candidates"]
+               if row["repository_ref"] == "api"}
+    document = json.loads((run / "module-map.json").read_text("utf-8"))
+    for row in document["candidate_dispositions"]:
+        if row["candidate_id"] in api_ids:
+            row.update({"disposition": "unresolved", "module_ids": [],
+                        "reason": "fixture requires local boundary resolution"})
+    (run / "module-map.json").write_text(json.dumps(document), "utf-8")
+
+    task = planner.plan_boundary_resolution(run, context_budget_tokens=180_000)
+
+    assert task is not None
+    assert len(task.packet_ids) == len(api_partitions)
+    assert all("-shard-" not in task_id for task_id in task.packet_ids)
+    created = {record.task_id: record.detail["task"] for record in engine._read_records()
+               if record.event == "created" and record.task_id in task.packet_ids}
+    assert set(created) == set(task.packet_ids)
+    packet_candidate_ids = set()
+    for task_id, packet in created.items():
+        local_rows = json.loads(packet["inputs"]["unresolved-candidates.json"]["content"])
+        assert 1 <= len(local_rows) <= formation.MAX_CANDIDATES_PER_PARTITION
+        packet_candidate_ids.update(row["candidate_id"] for row in local_rows)
+        partition_id = task_id.removeprefix("boundary-resolution-")
+        assert packet["depends_on"] == [formation.formation_task_id(partition_id)]
+    assert packet_candidate_ids == api_ids
 
 
 # --------------------------------------------------------------------------- #
