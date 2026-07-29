@@ -208,22 +208,30 @@ def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc
                              and (not async_only or row.get("async_role") != "not-applicable")
                              for ref in row.get("evidence_refs", []) if isinstance(ref, str) and ref}))
     node_refs_by_kind: dict[str, tuple[str, ...]] = {}
+    node_kind_by_id: dict[str, str] = {}
     for node in nodes:
         node_refs_by_kind.setdefault(node.kind, tuple())
         node_refs_by_kind[node.kind] = tuple(sorted(set(node_refs_by_kind[node.kind]) | set(node.evidence_refs)))
+        node_kind_by_id[node.node_id] = node.kind
 
     def claim_refs(*, kinds: set[str] = set(), roles: set[str] = set(),
-                   operations: set[str] = set()) -> tuple[str, ...]:
+                   operations: set[str] = set(), anchor_node_kinds: set[str] = set()) -> tuple[str, ...]:
         return tuple(sorted({ref for claim in claims
                              if claim.kind in kinds or bool(set(claim.support_roles) & roles)
                              or claim.operation in operations
+                             or bool({node_kind_by_id.get(anchor) for anchor in claim.anchor_ids}
+                                     & anchor_node_kinds)
                              for ref in claim.evidence_refs}))
 
     def dimension(*, node_kinds: set[str], claim_kinds: set[str] = set(),
                   claim_roles: set[str] = set(), claim_operations: set[str] = set(),
+                  claim_anchor_node_kinds: set[str] = set(),
                   lane_status: str) -> CoverageStatus:
         provider_refs = tuple(sorted({ref for kind in node_kinds for ref in node_refs_by_kind.get(kind, ())}))
-        semantic_refs = claim_refs(kinds=claim_kinds, roles=claim_roles, operations=claim_operations)
+        semantic_refs = claim_refs(
+            kinds=claim_kinds, roles=claim_roles, operations=claim_operations,
+            anchor_node_kinds=claim_anchor_node_kinds,
+        )
         if not provider_refs and not semantic_refs:
             return CoverageStatus(Coverage(
                 "unknown", "unavailable", (),
@@ -268,8 +276,14 @@ def _coverage(scope: ModuleScope, sync_outputs: tuple[dict[str, Any]], async_doc
         return CoverageStatus(Coverage(
             "applicable", async_status, tuple(sorted(set(refs) | set(semantic_refs))), ()), closure, ())
 
-    dimensions["configuration"] = boundary_dimension(
-        kinds={"configuration"}, claim_kinds={"configuration"},
+    # Configuration is often a synchronous code guard rather than an async
+    # boundary.  A source-verified claim anchored to an observed configuration
+    # node is therefore enough to establish this dimension; restricting it to
+    # async boundary receipts would incorrectly report that same claim as
+    # "unknown" in the final coverage table.
+    dimensions["configuration"] = dimension(
+        node_kinds={"configuration"}, claim_kinds={"configuration"},
+        claim_anchor_node_kinds={"configuration"}, lane_status=sync_status,
     )
     dimensions["integration"] = boundary_dimension(
         kinds={"integration-host", "integration-package"}, claim_kinds={"integration"},
